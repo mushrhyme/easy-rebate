@@ -1,0 +1,513 @@
+/* 과거 이력 조회 컴포넌트 스타일 - 검토 탭과 동일한 레이아웃 */
+.history-query {
+  padding: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 왼쪽 사이드바: 파일 트리 */
+.file-tree-sidebar {
+  width: 280px;
+  background-color: #ffffff;
+  border-right: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.tree-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e5e7eb;
+  background-color: #ffffff;
+  border-radius: 12px 12px 0 0;
+}
+
+.tree-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.tree-content {
+  flex: 1;
+  padding: 0.5rem;
+  overflow-y: auto;
+}
+
+.no-data {
+  padding: 2rem;
+  text-align: center;
+  color: #6b7280;
+  font-style: italic;
+}
+
+/* 년도 그룹 */
+.year-group {
+  margin-bottom: 0.25rem;
+}
+
+.year-row {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background-color: #ffffff;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid #e5e7eb;
+}
+
+.year-row:hover {
+  background-color: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.expand-icon {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-right: 0.5rem;
+  width: 16px;
+  text-align: center;
+}
+
+.year-label {
+  font-weight: 600;
+  color: #374151;
+  flex: 1;
+}
+
+.year-stats {
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+/* 월별 목록 */
+.month-list {
+  margin-left: 1rem;
+  margin-top: 0.5rem;
+}
+
+.month-row {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  margin-bottom: 0.25rem;
+  background-color: #ffffff;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid #e5e7eb;
+}
+
+.month-row:hover {
+  background-color: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.month-row.selected {
+  background-color: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.month-row.selected .month-label {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.month-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  flex: 1;
+}
+
+.month-stats {
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+/* 메인 영역: 검토 탭과 동일한 레이아웃 */
+.main-content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background-color: #f5f5f5;
+}
+
+/* 선택된 페이지 콘텐츠 */
+.history-query .selected-page-content {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 페이지 이미지 뷰어 (과거 이력 전용) */
+.history-query .page-image-viewer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 1000px;
+}
+
+/* 이미지 컨테이너 (과거 이력 전용) */
+.history-query .image-container {
+  max-height: 950px;
+  overflow: auto;
+  border: none;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0;
+  background-color: #fff;
+}
+
+.image-container img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.image-loading {
+  padding: 2rem;
+  text-align: center;
+  color: #666;
+}
+
+.image-error {
+  padding: 2rem;
+  text-align: center;
+  color: #764ba2;
+  background-color: #ede9fe;
+  border-radius: 4px;
+}
+
+/* 페이지 내비게이션 섹션 */
+.page-navigation-section {
+  margin: 0;
+  padding: 0.5rem;
+  flex-shrink: 0;
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.page-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.nav-buttons-group {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.nav-button {
+  padding: 0.5rem 1rem;
+  background-color: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #374151;
+  transition: all 0.2s ease;
+}
+
+.nav-button:hover:not(:disabled) {
+  background-color: #e5e7eb;
+  border-color: #9ca3af;
+}
+
+.nav-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page-number-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  background-color: #f3f4f6;
+  border-radius: 6px;
+  font-size: 0.875rem;
+}
+
+.current-page-number {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.total-pages-text {
+  color: #6b7280;
+}
+
+.page-filename-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.page-filename {
+  font-size: 0.875rem;
+  color: #374151;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-number-in-file {
+  font-size: 0.75rem;
+  color: #6b7280;
+  padding: 0.25rem 0.5rem;
+  background-color: #f3f4f6;
+  border-radius: 4px;
+}
+
+.page-role-badge {
+  padding: 0.3rem 0.8rem;
+  color: white;
+  font-size: 0.8em;
+  font-weight: bold;
+  border-radius: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-block;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.review-rate-badges {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.review-rate-badge {
+  padding: 0.2rem 0.5rem;
+  color: white;
+  font-size: 0.75em;
+  font-weight: bold;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* 검색창 */
+.page-search-input {
+  padding: 0.5rem 1rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  min-width: 200px;
+  flex: 0 1 auto;
+}
+
+.page-search-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.search-button {
+  padding: 0.5rem 1rem;
+  background-color: #667eea;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.search-button:hover {
+  background-color: #5568d3;
+}
+
+.search-button:active {
+  background-color: #4a5bc4;
+}
+
+/* 검토 상태 배지 */
+.review-status-badges {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto; /* 오른쪽 정렬 */
+  flex-shrink: 0;
+}
+
+.review-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem 0.6rem;
+  border: 2px solid;
+  border-radius: 16px;
+  font-size: 0.8em;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: white;
+}
+
+.badge-label {
+  font-size: 0.9em;
+}
+
+.badge-icon {
+  font-size: 0.9em;
+}
+
+.badge-count {
+  min-width: 16px;
+  text-align: center;
+}
+
+/* 1次 검토 완료 */
+.review-badge.first-reviewed {
+  border-color: #4CAF50;
+  color: #4CAF50;
+}
+
+.review-badge.first-reviewed:hover,
+.review-badge.first-reviewed.active {
+  background-color: #4CAF50;
+  color: white;
+}
+
+/* 1次 미검토 */
+.review-badge.first-not-reviewed {
+  border-color: #9E9E9E;
+  color: #9E9E9E;
+}
+
+.review-badge.first-not-reviewed:hover,
+.review-badge.first-not-reviewed.active {
+  background-color: #9E9E9E;
+  color: white;
+}
+
+/* 2次 검토 완료 */
+.review-badge.second-reviewed {
+  border-color: #2196F3;
+  color: #2196F3;
+}
+
+.review-badge.second-reviewed:hover,
+.review-badge.second-reviewed.active {
+  background-color: #2196F3;
+  color: white;
+}
+
+/* 2次 미검토 */
+.review-badge.second-not-reviewed {
+  border-color: #FF9800;
+  color: #FF9800;
+}
+
+.review-badge.second-not-reviewed:hover,
+.review-badge.second-not-reviewed.active {
+  background-color: #FF9800;
+  color: white;
+}
+
+/* 선택되지 않은 상태 */
+.no-selection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  text-align: center;
+}
+
+.no-selection-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.no-selection-text {
+  font-size: 1rem;
+  color: #6b7280;
+}
+
+/* 로딩 및 에러 상태 */
+.loading,
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  font-size: 1rem;
+  color: #6b7280;
+}
+
+.error {
+  color: #ef4444;
+}
+
+/* 반응형 디자인 */
+@media (max-width: 768px) {
+  .query-content-wrapper {
+    flex-direction: column;
+  }
+
+  .file-tree-sidebar {
+    width: 100%;
+    max-height: 300px;
+    border-right: none;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .page-nav-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-search-input {
+    width: 100%;
+  }
+
+  .page-filename-container {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  
+  .page-filename {
+    max-width: 100%;
+  }
+  
+  .page-number-badge {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .review-status-badges {
+    width: 100%;
+    justify-content: center;
+    margin-left: 0;
+  }
+}

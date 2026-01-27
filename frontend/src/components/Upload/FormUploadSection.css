@@ -1,0 +1,495 @@
+.form-upload-section {
+  padding: 1.5rem 1.75rem;
+  border-radius: 12px;
+  background-color: #ffffff;
+  margin-bottom: 0;
+  border-top: 4px solid;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem; /* 섹션 간 여백 */
+  height: auto; /* 기본적으로 자동 높이 */
+  max-height: fit-content; /* 기본적으로 내용에 맞는 높이 */
+  min-height: 0; /* flex 스크롤 활성화 */
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.3s ease, transform 0.2s ease, max-height 0.3s ease;
+  border: 1px solid #e5e7eb;
+  overflow: visible; /* 툴팁이 섹션 밖으로 나갈 수 있도록 설정 */
+  align-self: start; /* 기본적으로 위쪽 정렬 */
+}
+
+/* 파일이 업로드되었을 때 높이 확장 */
+.form-upload-section.has-files {
+  max-height: none; /* 높이 제한 해제 */
+  height: 100%; /* 그리드 셀의 전체 높이 사용 */
+  align-self: stretch; /* 그리드에서 전체 높이 차지 */
+}
+
+.form-upload-section:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+.form-header {
+  text-align: left;
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 0.25rem;
+  flex-shrink: 0; /* 고정 크기 */
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  overflow: visible; /* 툴팁이 헤더 밖으로 나갈 수 있도록 설정 */
+  position: relative; /* stacking context 생성 */
+  z-index: 1; /* 기본 z-index 설정 */
+}
+
+.hover-info-container {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.hover-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background-color: #3b82f6;
+  color: white;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: help;
+  transition: background-color 0.2s ease;
+}
+
+.hover-info:hover {
+  background-color: #2563eb;
+}
+
+/* 호버링 툴팁 스타일 - Portal로 body에 렌더링되므로 fixed positioning 사용 */
+.hover-tooltip {
+  position: fixed;
+  z-index: 999999; /* 최상단 표시를 위한 매우 높은 z-index */
+  pointer-events: none;
+  animation: tooltipFadeIn 0.25s ease;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.hover-tooltip-image {
+  max-width: 500px;
+  max-height: 600px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25), 0 6px 16px rgba(0, 0, 0, 0.2);
+  border: 3px solid #ffffff;
+  background-color: #ffffff;
+  display: block;
+  object-fit: contain;
+}
+
+/* 툴팁 화살표 */
+.hover-tooltip::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 8px solid transparent;
+  border-bottom-color: #ffffff;
+  filter: drop-shadow(0 -2px 4px rgba(0, 0, 0, 0.1));
+}
+
+.file-input-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2.2rem 1.75rem;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0; /* 고정 크기 */
+  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.file-input-label::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(147, 51, 234, 0.05) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.file-input-label:hover {
+  border-color: #3b82f6;
+  background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15), 0 0 0 3px rgba(59, 130, 246, 0.1);
+  transform: translateY(-2px);
+}
+
+.file-input-label:hover::before {
+  opacity: 1;
+}
+
+.file-input-label.drag-over {
+  border-color: #3b82f6;
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.25), 0 0 0 4px rgba(59, 130, 246, 0.15);
+  transform: scale(1.02);
+}
+
+.file-upload-icon {
+  color: #3b82f6;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-input-label:hover .file-upload-icon {
+  color: #2563eb;
+  transform: translateY(-2px);
+}
+
+.file-input-label.drag-over .file-upload-icon {
+  color: #2563eb;
+  transform: scale(1.1) translateY(-2px);
+}
+
+/* 완료 후 파일 입력 영역 강조 */
+.file-input-label.completed-state {
+  border-color: #10b981;
+  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+.file-input-label.completed-state:hover {
+  border-color: #059669;
+  background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2), 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+@keyframes pulse-border {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0);
+  }
+}
+
+.file-upload-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.file-upload-main-text {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1f2937;
+  letter-spacing: 0.3px;
+  transition: color 0.3s ease;
+}
+
+.file-input-label:hover .file-upload-main-text {
+  color: #111827;
+}
+
+.file-upload-sub-text {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: #6b7280;
+  letter-spacing: 0.2px;
+  transition: color 0.3s ease;
+}
+
+.file-input-label:hover .file-upload-sub-text {
+  color: #4b5563;
+}
+
+.file-list {
+  margin: 0.75rem 0 0 0;
+  flex: 1; /* 남은 공간을 모두 사용 */
+  overflow-y: auto;
+  min-height: 0; /* flex 스크롤 활성화 */
+  max-height: 300px; /* 최대 높이 제한하여 파일 입력 영역이 보이도록 */
+}
+
+.file-item {
+  padding: 0.75rem;
+  background-color: #ffffff;
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.2s ease;
+}
+
+.file-item:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.file-item-name {
+  font-weight: 500;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
+  color: #1f2937;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+  min-height: 1.4em; /* 최소 1줄 높이 보장 */
+}
+
+
+.file-item-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.file-item-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1em;
+  padding: 0.25rem 0.5rem;
+  opacity: 0.5;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+
+.file-item-delete:hover {
+  opacity: 1;
+  background-color: #fef2f2;
+}
+
+.file-item-status {
+  font-size: 0.8125rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 6px;
+  font-weight: 500;
+  flex: 1;
+}
+
+.status-pending {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+.status-processing {
+  color: #1e40af;
+  background-color: #dbeafe;
+}
+
+.status-completed {
+  color: #166534;
+  background-color: #d1fae5;
+}
+
+.status-error {
+  color: #991b1b;
+  background-color: #fee2e2;
+}
+
+.file-progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: rgba(59, 130, 246, 0.2);
+  border-radius: 3px;
+  margin-top: 0.5rem;
+  overflow: hidden;
+}
+
+.file-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+  transition: width 0.3s ease;
+  border-radius: 3px;
+}
+
+.button-group {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0.25rem 0 1.25rem;
+  flex-shrink: 0; /* 고정 크기 */
+  justify-content: center;
+}
+
+.btn-primary {
+  flex: 0 0 auto;
+  min-width: 200px;
+  padding: 0.75rem 1.25rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+  letter-spacing: 0.3px;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  padding: 0.75rem 1.25rem;
+  background-color: #ffffff;
+  color: #4b5563;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  letter-spacing: 0.3px;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: #f9fafb;
+  border-color: #d1d5db;
+  color: #374151;
+  transform: translateY(-1px);
+}
+
+.btn-secondary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 년월 선택 섹션 */
+.year-month-selector {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  padding: 0.9rem 1rem;
+  background-color: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.selector-group {
+  display: flex;
+  align-items: center;
+  justify-content: center; /* 가운데 정렬 */
+  gap: 0.75rem;
+}
+
+.selector-label {
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.year-selector,
+.month-selector {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background-color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 80px;
+}
+
+.year-selector:focus,
+.month-selector:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.year-selector:hover,
+.month-selector:hover {
+  border-color: #9ca3af;
+}
+
+/* 새 파일 업로드 버튼 */
+.new-upload-button-container {
+  margin: 1rem 0;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.btn-new-upload {
+  padding: 0.75rem 1.5rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+  letter-spacing: 0.3px;
+}
+
+.btn-new-upload:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-new-upload:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+}

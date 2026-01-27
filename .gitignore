@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 환경 변수 (API 키 등)
+.env
+.env.local
+.env.*.local
+
+# 프로젝트 런타임
+uploads/
+temp/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Frontend (Vite/React)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.local
+
+# 디버그/임시
+debug2/
+
+# DB (로컬 SQLite 등)
+*.db
+*.sqlite3

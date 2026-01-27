@@ -1,0 +1,223 @@
+.rag-admin-tab {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rag-admin-header {
+  padding: 1.25rem 1.5rem 1rem 1.5rem;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.rag-admin-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.12) 0%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  pointer-events: none;
+}
+
+.rag-admin-title-container {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  position: relative;
+  z-index: 1;
+}
+
+.rag-admin-title-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  color: white;
+  flex-shrink: 0;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.rag-admin-title-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.rag-admin-title-main {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+  margin: 0;
+  line-height: 1.2;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.rag-admin-title-sub {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+.rag-admin-content {
+  padding: 1.5rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  align-items: flex-start;
+}
+
+.rag-admin-card {
+  background-color: #ffffff;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  padding: 1.1rem 1.2rem;
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.04);
+}
+
+.rag-admin-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 0.75rem 0;
+}
+
+.rag-admin-total {
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+}
+
+.rag-admin-status-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.rag-admin-status-table th,
+.rag-admin-status-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.rag-admin-status-table th {
+  text-align: left;
+  font-weight: 600;
+  color: #4b5563;
+  border-bottom-color: #cbd5f5;
+}
+
+.rag-admin-col-right {
+  text-align: right;
+}
+
+.rag-admin-field {
+  margin-bottom: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rag-admin-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #4b5563;
+}
+
+.rag-admin-textarea {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border-radius: 0.5rem;
+  border: 1px solid #cbd5f5;
+  font-size: 0.85rem;
+  resize: vertical;
+  min-height: 2.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.rag-admin-textarea:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 1px rgba(102, 126, 234, 0.3);
+}
+
+.rag-admin-button {
+  padding: 0.5rem 0.9rem;
+  border-radius: 0.5rem;
+  border: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+}
+
+.rag-admin-button.primary {
+  background-color: #3182ce;
+  color: #ffffff;
+}
+
+.rag-admin-button.primary:hover {
+  background-color: #2563eb;
+  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.35);
+}
+
+.rag-admin-button.success {
+  background-color: #38a169;
+  color: #ffffff;
+}
+
+.rag-admin-button.success:hover {
+  background-color: #2f855a;
+  box-shadow: 0 4px 10px rgba(47, 133, 90, 0.35);
+}
+
+.rag-admin-button.secondary {
+  background-color: #805ad5;
+  color: #ffffff;
+}
+
+.rag-admin-button.secondary:hover {
+  background-color: #6b46c1;
+  box-shadow: 0 4px 10px rgba(107, 70, 193, 0.35);
+}
+
+.rag-admin-button:disabled {
+  background-color: #a0aec0;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.rag-admin-helper {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.rag-admin-file-input {
+  margin-bottom: 0.5rem;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 768px) {
+  .rag-admin-content {
+    grid-template-columns: 1fr;
+  }
+}
+
