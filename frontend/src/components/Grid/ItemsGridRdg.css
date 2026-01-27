@@ -1,0 +1,545 @@
+.items-grid-rdg {
+  margin: 0;
+  padding: 0;
+  width: 100%; /* 全体の幅を使用 */
+  flex: 1; /* 親コンテナの残りスペースを占有 */
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* flexスクロールを有効化 */
+  height: 100%;
+  overflow: hidden;
+}
+
+.grid-loading,
+.grid-empty,
+.grid-error {
+  padding: 2rem;
+  text-align: center;
+  color: #666;
+}
+
+.grid-empty-message {
+  padding: 3rem;
+  text-align: center;
+  color: #666;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 200px;
+}
+
+.grid-empty-message p {
+  margin: 0.5rem 0;
+  font-size: 14px;
+}
+
+.grid-error {
+  color: #764ba2;
+  background-color: #ede9fe;
+  border-radius: 4px;
+}
+
+/* グリッド内編集ボタンスタイル (레거시 - 호환성 유지) */
+.btn-edit-inline,
+.btn-cancel-inline,
+.btn-save-inline {
+  padding: 4px 8px;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  font-size: 14px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-edit-inline {
+  background-color: #4ECDC4;
+  color: white;
+}
+
+.btn-edit-inline:hover:not(:disabled) {
+  background-color: #3db5ad;
+}
+
+.btn-edit-inline:disabled {
+  background-color: #e0e0e0;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.btn-save-inline {
+  background-color: #4caf50;
+  color: white;
+}
+
+.btn-save-inline:hover:not(:disabled) {
+  background-color: #45a049;
+}
+
+.btn-cancel-inline {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-cancel-inline:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+}
+
+.rdg-container {
+  flex: 1; /* 남은 공간 모두 차지 */
+  min-height: 0; /* flex 컨테이너에서 스크롤 작동하도록 */
+  width: 100%; /* 全体の幅を使用 */
+  height: 100%;
+  border: none;
+  border-top: 1px solid #e0e0e0;
+  overflow: auto;
+  /* 액션 메뉴가 보이도록 */
+  position: relative;
+}
+
+/* 액션 메뉴가 있는 경우 overflow 조정 */
+.rdg-container:has(.action-menu) {
+  overflow: visible;
+}
+
+/* 그리드가 컨테이너를 꽉 채우도록 */
+.rdg-container .rdg {
+  width: 100% !important;
+  min-width: 100%;
+  max-width: 100%; /* 최대 너비 제한으로 화면 초과 방지 */
+  height: 100% !important;
+  overflow-x: auto; /* 가로 스크롤 허용으로 내용이 잘리지 않도록 */
+}
+
+/* react-data-gridの内部コンテナも全体の幅を使用 */
+.rdg-container .rdg > div {
+  width: 100% !important;
+  min-width: 100%;
+}
+
+.rdg-theme {
+  --rdg-background-color: #fff;
+  --rdg-header-background-color: #f5f5f5;
+  --rdg-row-hover-background-color: #f0f0f0;
+  --rdg-selection-color: #e3f2fd;
+  --rdg-border-color: #d0d0d0;
+  --rdg-color: #333;
+  --rdg-font-size: 14px;
+  --rdg-header-color: #333;
+  --rdg-header-font-weight: 600;
+}
+
+/* 그리드 셀 스타일 개선 */
+.rdg-cell {
+  border-right: 1px solid #d0d0d0;
+  border-bottom: 1px solid #d0d0d0;
+  color: #333;
+  font-size: 14px;
+  padding: 8px;
+  overflow: visible !important; /* 액션 메뉴가 셀 밖으로 나가도 보이도록 */
+}
+
+/* 헤더 셀 스타일 */
+.rdg-header-row {
+  background-color: #f5f5f5;
+  border-bottom: 2px solid #d0d0d0;
+  font-weight: 600;
+  color: #333;
+}
+
+.rdg-header-cell {
+  border-right: 1px solid #d0d0d0;
+  padding: 10px 8px;
+  font-weight: 600;
+  color: #333;
+}
+
+/* 행 스타일 */
+.rdg-row {
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.rdg-row:hover:not(.row-checked) {
+  background-color: #f5f5f5;
+}
+
+/* 偶数行の背景色（オプション） */
+.rdg-row:nth-child(even):not(.row-checked) {
+  background-color: #fafafa;
+}
+
+.rdg-row:nth-child(even):not(.row-checked):hover {
+  background-color: #f0f0f0;
+}
+
+/* 編集不可能なセルスタイル */
+.rdg-cell[aria-readonly="true"] {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+}
+
+/* 編集中の行スタイル */
+.rdg-row.editing {
+  background-color: #fff3cd;
+}
+
+/* チェックボックスがチェックされた行スタイル（紫色背景）- 最高優先順位 */
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-checked,
+.rdg-container .rdg .rdg-row.row-checked,
+.rdg .rdg-row.row-checked,
+.rdg-row.row-checked {
+  background-color: #ede9fe !important; /* 紫色背景 */
+}
+
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-checked:hover,
+.rdg-container .rdg .rdg-row.row-checked:hover,
+.rdg .rdg-row.row-checked:hover,
+.rdg-row.row-checked:hover {
+  background-color: #ddd6fe !important; /* ホバー時に明るい紫色 */
+}
+
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-checked:nth-child(even),
+.rdg-container .rdg .rdg-row.row-checked:nth-child(even),
+.rdg .rdg-row.row-checked:nth-child(even),
+.rdg-row.row-checked:nth-child(even) {
+  background-color: #ede9fe !important; /* 偶数行も紫色を維持 */
+}
+
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-checked:nth-child(even):hover,
+.rdg-container .rdg .rdg-row.row-checked:nth-child(even):hover,
+.rdg .rdg-row.row-checked:nth-child(even):hover,
+.rdg-row.row-checked:nth-child(even):hover {
+  background-color: #ddd6fe !important; /* 偶数行ホバー時 */
+}
+
+/* チェックされた行のすべてのセルにも背景色を適用 */
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-checked .rdg-cell,
+.rdg-container .rdg .rdg-row.row-checked .rdg-cell,
+.rdg .rdg-row.row-checked .rdg-cell,
+.rdg-row.row-checked .rdg-cell {
+  background-color: #ede9fe !important;
+}
+
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-checked:hover .rdg-cell,
+.rdg-container .rdg .rdg-row.row-checked:hover .rdg-cell,
+.rdg .rdg-row.row-checked:hover .rdg-cell,
+.rdg-row.row-checked:hover .rdg-cell {
+  background-color: #ddd6fe !important;
+}
+
+/* 編集モード進入時のセルスタイル（視覚的フィードバック） */
+.rdg-cell[role="gridcell"] {
+  cursor: cell;
+}
+
+.rdg-cell[role="gridcell"]:hover {
+  background-color: #f0f8ff;
+}
+
+/* 編集可能なセルを強調 */
+.rdg-cell[contenteditable="true"] {
+  background-color: #fffacd;
+  border: 2px solid #4ECDC4;
+}
+
+/* 複雑な構造フィールドバッジ領域 */
+.complex-fields-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  background-color: #f9fafb;
+  border-bottom: 1px solid #e0e0e0;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.complex-field-badge {
+  padding: 6px 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.complex-field-badge:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.complex-field-badge:active {
+  transform: translateY(0);
+}
+
+/* 複雑なフィールド詳細テーブル（バッジの下の空の画面に表示） */
+.complex-field-detail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: white;
+  border-top: 1px solid #e0e0e0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.complex-field-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  background-color: #f9fafb;
+  flex-shrink: 0;
+}
+
+.complex-field-detail-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+
+.complex-field-detail-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: #666;
+  cursor: pointer;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+}
+
+.complex-field-detail-close:hover {
+  background-color: #e0e0e0;
+  color: #333;
+}
+
+.complex-field-detail-content {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  position: relative; /* sticky 위치 기준점 */
+}
+
+.complex-field-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  table-layout: fixed; /* 테이블 레이아웃 고정 */
+}
+
+.complex-field-table thead {
+  background-color: #f5f5f5;
+  position: sticky;
+  top: -16px; /* padding 보정 */
+  z-index: 100; /* 더 높은 z-index */
+  margin-top: 16px; /* padding 보정 */
+}
+
+.complex-field-table th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #d0d0d0;
+  white-space: nowrap; /* 헤더 텍스트 줄바꿈 방지 */
+  background-color: #f5f5f5; /* 헤더 배경색 명시 */
+  box-shadow: 0 2px 2px -1px rgba(0, 0, 0, 0.1); /* 그림자로 구분 */
+}
+
+.complex-field-table th:first-child {
+  width: 50%; /* 키 컬럼 너비 */
+}
+
+.complex-field-table th:last-child {
+  width: 50%; /* 값 컬럼 너비 */
+}
+
+.complex-field-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e0e0e0;
+  vertical-align: top; /* 상단 정렬 */
+}
+
+.complex-field-table tbody tr:hover {
+  background-color: #f9fafb;
+}
+
+.complex-field-key {
+  font-weight: 500;
+  color: #667eea;
+  word-break: break-word; /* 長いキーの改行 */
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 0; /* table-layout: fixedと一緒に使用して幅を制限 */
+}
+
+.complex-field-value {
+  color: #333;
+  word-break: break-word;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 0; /* table-layout: fixedと一緒に使用して幅을制限 */
+}
+
+/* 행 컨트롤 버튼들 */
+.row-controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background-color: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.btn-add-row {
+  padding: 0.375rem 0.75rem;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-add-row:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+}
+
+.btn-add-row:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* 통합 액션 컬럼 */
+.action-cell-container {
+  position: relative !important;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10; /* 메뉴가 다른 셀 위에 표시되도록 */
+  overflow: visible !important; /* 메뉴가 셀 밖으로 나가도 보이도록 */
+}
+
+/* 액션 셀의 overflow를 visible로 설정 - 여러 방법으로 시도 */
+.rdg-cell:has(.action-cell-container),
+.rdg-cell .action-cell-container,
+.items-grid-rdg .rdg-cell:has(.action-cell-container),
+.rdg-container .rdg-cell:has(.action-cell-container) {
+  overflow: visible !important;
+}
+
+/* react-data-grid의 행도 overflow visible */
+.rdg-row:has(.action-cell-container) {
+  overflow: visible !important;
+}
+
+.btn-action-main {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  font-size: 18px;
+  font-weight: bold;
+  color: #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.btn-action-main:hover {
+  background-color: #f0f0f0;
+  color: #333;
+}
+
+/* 호버 메뉴 - Portal로 body에 렌더링되므로 fixed positioning */
+.action-menu {
+  position: fixed !important; /* Portal로 body에 렌더링되므로 fixed */
+  z-index: 99999 !important; /* 매우 높은 z-index로 다른 요소 위에 표시 */
+  background: white !important;
+  border: 1px solid #d0d0d0 !important;
+  border-radius: 4px !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+  min-width: 120px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important; /* 클릭 영역 보호를 위해 hidden으로 복원 */
+  pointer-events: auto !important;
+  padding: 4px 0 !important; /* 상하 패딩 추가로 호버 영역 확대 */
+  /* top, left는 JavaScript로 동적 설정 */
+}
+
+.action-menu-item {
+  padding: 10px 20px; /* 좌우 패딩 증가로 호버 영역 확대 */
+  border: none;
+  background: white;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  transition: background-color 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  margin: 0 4px; /* 좌우 마진으로 호버 영역 확대 */
+}
+
+.action-menu-item:hover:not(:disabled) {
+  background-color: #f5f5f5;
+}
+
+.action-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background-color: #f9f9f9;
+}
+
+.action-menu-edit:hover:not(:disabled) {
+  background-color: #e0f7fa;
+  color: #4ECDC4;
+}
+
+.action-menu-save:hover:not(:disabled) {
+  background-color: #e8f5e9;
+  color: #4caf50;
+}
+
+.action-menu-add:hover:not(:disabled) {
+  background-color: #dcfce7;
+  color: #10b981;
+}
+
+.action-menu-delete:hover:not(:disabled) {
+  background-color: #fee2e2;
+  color: #ef4444;
+}

@@ -1,0 +1,471 @@
+.customer-search {
+  padding: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* 상위는 고정 레이아웃, 스크롤은 뷰어 / 그리드 각각에서 */
+  height: 100%;
+  overflow: hidden;
+}
+
+.search-controls {
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+  /* 크기 축소 방지 */
+}
+
+.search-input-group {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.search-input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1em;
+}
+
+.btn-search {
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-search:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+}
+
+.search-filters {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.form-type-select {
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.loading,
+.error {
+  padding: 1rem;
+  margin: 1rem 0;
+  border-radius: 4px;
+}
+
+.loading {
+  background-color: #e3f2fd;
+}
+
+.error {
+  background-color: #ede9fe;
+  color: #764ba2;
+}
+
+.search-results-header {
+  margin: 1rem 0;
+  flex-shrink: 0;
+  /* 크기 축소 방지 */
+}
+
+/* 페이지 내비게이션 섹션 */
+.page-navigation-section {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  flex-shrink: 0;
+  /* 크기 축소 방지 */
+  background-color: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.page-nav-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.nav-buttons-group {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.nav-button {
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 1.2em;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 40px;
+}
+
+.nav-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+}
+
+.nav-button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 페이지 번호 배지 */
+.page-number-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: white;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+.current-page-number {
+  font-size: 1.1em;
+  font-weight: bold;
+  color: #8B4513;
+  /* 갈색 계열 */
+}
+
+.total-pages-text {
+  font-size: 0.9em;
+  color: #8B4513;
+  /* 갈색 계열 */
+}
+
+.page-search-input {
+  width: 250px;
+  padding: 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 1em;
+  flex-shrink: 0;
+}
+
+.search-button {
+  padding: 0.5rem 1rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 0.9em;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.search-button:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+}
+
+/* 파일명 컨테이너 */
+.page-filename-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.page-filename {
+  color: #333;
+  font-size: 0.95em;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 350px;
+}
+
+.page-number-in-file {
+  color: #667eea;
+  font-size: 0.9em;
+  font-weight: bold;
+  background-color: #fff;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #667eea;
+  white-space: nowrap;
+}
+
+/* 검토율 배지 */
+.review-rate-badges {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.review-rate-badge {
+  padding: 0.2rem 0.5rem;
+  color: white;
+  font-size: 0.75em;
+  font-weight: bold;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.page-role-badge {
+  padding: 0.3rem 0.8rem;
+  color: white;
+  font-size: 0.8em;
+  font-weight: bold;
+  border-radius: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-block;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.selected-page-content {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 0;
+  overflow: visible;
+}
+
+/* 이미지 섹션: 위쪽 고정 높이 뷰어 */
+.image-section {
+  flex: 0 0 auto;
+}
+
+/* 그리드 섹션: 아래쪽 고정 높이 뷰어 (내부에서 스크롤) */
+.grid-section {
+  flex: 0 0 auto;
+  max-height: 40vh;
+  min-height: 35vh;
+  overflow: hidden; /* 스크롤은 내부 items-grid-rdg/rdg-container에서 처리 */
+}
+
+/* 그리드가 grid-section 높이를 꽉 채우도록 */
+.grid-section .items-grid-rdg {
+  height: 100%;
+}
+
+/* 반응형 디자인 */
+@media (max-width: 768px) {
+  .page-nav-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-search-input {
+    width: 100%;
+  }
+
+  .page-filename-container {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .page-filename {
+    max-width: 100%;
+  }
+
+  .page-number-badge {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.page-image-viewer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  /* 화면의 약 절반 정도를 차지하는 고정 뷰어 높이 (내부에서 스크롤) */
+  max-height: 55vh;
+  min-height: 45vh;
+}
+
+.image-container {
+  /* 뷰어 높이 안에서 스크롤 */
+  flex: 1 1 auto;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: none;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0;
+  background-color: #fff;
+  position: relative;
+  /* 스크롤 컨테이너로 명확히 지정 */
+}
+
+.image-container img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.image-loading {
+  padding: 2rem;
+  text-align: center;
+  color: #666;
+}
+
+.image-error {
+  padding: 2rem;
+  text-align: center;
+  color: #764ba2;
+  background-color: #ede9fe;
+  border-radius: 4px;
+}
+
+.no-results {
+  padding: 2rem;
+  text-align: center;
+  color: #666;
+}
+
+.page-not-selected {
+  padding: 2rem;
+  text-align: center;
+  color: #999;
+  font-style: italic;
+}
+
+/* 검토 상태 배지 */
+.review-status-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.review-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem 0.6rem;
+  border: 2px solid;
+  border-radius: 16px;
+  font-size: 0.8em;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: white;
+}
+
+.badge-label {
+  font-size: 0.9em;
+}
+
+.badge-icon {
+  font-size: 0.9em;
+}
+
+.badge-count {
+  min-width: 16px;
+  text-align: center;
+}
+
+/* 1次 검토 완료 */
+.review-badge.first-reviewed {
+  border-color: #4CAF50;
+  color: #4CAF50;
+}
+
+.review-badge.first-reviewed:hover,
+.review-badge.first-reviewed.active {
+  background-color: #4CAF50;
+  color: white;
+}
+
+/* 1次 미검토 */
+.review-badge.first-not-reviewed {
+  border-color: #9E9E9E;
+  color: #9E9E9E;
+}
+
+.review-badge.first-not-reviewed:hover,
+.review-badge.first-not-reviewed.active {
+  background-color: #9E9E9E;
+  color: white;
+}
+
+/* 2次 검토 완료 */
+.review-badge.second-reviewed {
+  border-color: #2196F3;
+  color: #2196F3;
+}
+
+.review-badge.second-reviewed:hover,
+.review-badge.second-reviewed.active {
+  background-color: #2196F3;
+  color: white;
+}
+
+/* 2次 미검토 */
+.review-badge.second-not-reviewed {
+  border-color: #FF9800;
+  color: #FF9800;
+}
+
+.review-badge.second-not-reviewed:hover,
+.review-badge.second-not-reviewed.active {
+  background-color: #FF9800;
+  color: white;
+}
+
+/* 연월 선택 - 업로드 탭의 공통 컨테이너 스타일 무시 */
+.year-month-selector {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.year-month-selector.inline {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-right: 0.25rem;
+}
+
+.year-month-caption {
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #4b5563;
+  white-space: nowrap;
+}
+
+.year-month-select {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85em;
+  background: #ffffff;
+  color: #374151;
+  cursor: pointer;
+  font-weight: 500;
+  min-width: 150px;
+}
+
+.year-month-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
