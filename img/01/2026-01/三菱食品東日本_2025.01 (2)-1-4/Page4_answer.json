@@ -1,0 +1,171 @@
+{
+  "page_role": "detail",
+  "items": [
+    {
+      "請求伝票番号": "9337948",
+      "得意先名": "ローソントウカイ",
+      "得意先コード": "(1991474)",
+      "計上日": null,
+      "期間開始": null,
+      "期間終了": null,
+      "ケース入数": null,
+      "数量": null,
+      "数量単位": null,
+      "条件": null,
+      "条件区分": null,
+      "条件備考": null,
+      "金額": "180,808",
+      "消費税率": null,
+      "備考": "栗田　康広",
+      "タイプ": null,
+      "pdf_filename": "三菱食品東日本_2025.01 (2)-1-4.pdf",
+      "page_number": 4,
+      "item_order": 1,
+      "item_id": 351,
+      "version": 1,
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "請求伝票番号": "9337948",
+      "得意先名": "ローソンシズオカ",
+      "得意先コード": "(1991475)",
+      "計上日": null,
+      "期間開始": null,
+      "期間終了": null,
+      "ケース入数": null,
+      "数量": null,
+      "数量単位": null,
+      "条件": null,
+      "条件区分": null,
+      "条件備考": null,
+      "金額": "74,180",
+      "消費税率": null,
+      "備考": "栗田　康広",
+      "タイプ": null,
+      "pdf_filename": "三菱食品東日本_2025.01 (2)-1-4.pdf",
+      "page_number": 4,
+      "item_order": 2,
+      "item_id": 352,
+      "version": 1,
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "請求伝票番号": "9337948",
+      "得意先名": "ローソンホクリク",
+      "得意先コード": "(1991476)",
+      "計上日": null,
+      "期間開始": null,
+      "期間終了": null,
+      "ケース入数": null,
+      "数量": null,
+      "数量単位": null,
+      "条件": null,
+      "条件区分": null,
+      "条件備考": null,
+      "金額": "88,492",
+      "消費税率": null,
+      "備考": "栗田　康広",
+      "タイプ": null,
+      "pdf_filename": "三菱食品東日本_2025.01 (2)-1-4.pdf",
+      "page_number": 4,
+      "item_order": 3,
+      "item_id": 353,
+      "version": 1,
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "請求伝票番号": "9337948",
+      "得意先名": "ローソンアイギ",
+      "得意先コード": "(1993108)",
+      "計上日": null,
+      "期間開始": null,
+      "期間終了": null,
+      "ケース入数": null,
+      "数量": null,
+      "数量単位": null,
+      "条件": null,
+      "条件区分": null,
+      "条件備考": null,
+      "金額": "366,484",
+      "消費税率": null,
+      "備考": "栗田　康広",
+      "タイプ": null,
+      "pdf_filename": "三菱食品東日本_2025.01 (2)-1-4.pdf",
+      "page_number": 4,
+      "item_order": 4,
+      "item_id": 354,
+      "version": 1,
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "請求伝票番号": "9337948",
+      "得意先名": "ローソンアイギ",
+      "得意先コード": "(0000000)",
+      "計上日": null,
+      "期間開始": null,
+      "期間終了": null,
+      "商品名": "2025.01月度消費税計上",
+      "ケース入数": null,
+      "数量": null,
+      "数量単位": null,
+      "条件": null,
+      "条件区分": null,
+      "条件備考": null,
+      "金額": "56,797",
+      "消費税率": "8％",
+      "備考": "栗田　康広",
+      "タイプ": null,
+      "pdf_filename": "三菱食品東日本_2025.01 (2)-1-4.pdf",
+      "page_number": 4,
+      "item_order": 5,
+      "item_id": 355,
+      "version": 1,
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    }
+  ]
+}
