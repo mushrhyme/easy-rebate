@@ -86,7 +86,7 @@ export interface WebSocketMessage {
   error?: string
 }
 
-export type FormType = '01' | '02' | '03' | '04' | '05'
+export type FormType = '01' | '02' | '03' | '04' | '05' | '06'
 
 export interface FormConfig {
   name: string

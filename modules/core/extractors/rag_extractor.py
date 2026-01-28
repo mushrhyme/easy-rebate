@@ -150,15 +150,23 @@ def extract_json_with_rag(
             progress_callback("벡터 DB에서 유사한 예제 검색 중 (하이브리드: BM25 + 벡터)...")
         else:
             progress_callback("벡터 DB에서 유사한 예제 검색 중...")
-    
-    # 하이브리드 검색 사용 (form_type별)
+
+    # 양식지 06의 경우에는 전체 벡터 DB를 참고하기 위해
+    # 검색 시에는 form_type 필터를 사용하지 않는다.
+    effective_form_type = None
+    if form_type:
+        # '6' / '06' 모두 허용
+        if str(form_type).zfill(2) != "06":
+            effective_form_type = form_type
+
+    # 하이브리드 검색 사용 (form_type별, 단 06은 전체 DB)
     similar_examples = rag_manager.search_similar_advanced(
         query_text=ocr_text,
         top_k=top_k,
         similarity_threshold=similarity_threshold,
         search_method=search_method,
         hybrid_alpha=hybrid_alpha,
-        form_type=form_type
+        form_type=effective_form_type,
     )
     
     # 검색 결과가 없으면 threshold를 낮춰서 재검색 (notepad 예제와 동일하게 최상위 결과 사용)
@@ -170,7 +178,7 @@ def extract_json_with_rag(
             similarity_threshold=0.0,  # threshold 무시
             search_method=search_method,
             hybrid_alpha=hybrid_alpha,
-            form_type=form_type
+            form_type=effective_form_type,
         )
         if similar_examples:
             score_key = "hybrid_score" if "hybrid_score" in similar_examples[0] else \

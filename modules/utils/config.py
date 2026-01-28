@@ -56,7 +56,9 @@ class RAGConfig:
                 "02": "excel",
                 "03": "upstage",
                 "04": "upstage",
-                "05": "excel"
+                "05": "excel",
+                # 양식지 06: Upstage OCR 사용
+                "06": "upstage",
             }
         if self.form_color_grouping_column is None:
             self.form_color_grouping_column = {

@@ -3,7 +3,7 @@
  */
 import type { FormConfig, FormType } from '@/types'
 
-export const FORM_TYPES: FormType[] = ['01', '02', '03', '04', '05']
+export const FORM_TYPES: FormType[] = ['01', '02', '03', '04', '05', '06']
 
 export const FORM_CONFIGS: Record<FormType, FormConfig> = {
   '01': {
@@ -30,5 +30,10 @@ export const FORM_CONFIGS: Record<FormType, FormConfig> = {
     name: '05 湧川',
     color: '#98D8C8',
     imagePath: '/images/form_05.png', // 프로젝트 루트의 form_05.png 파일 경로
+  },
+  '06': {
+    name: '06 新規フォーム',
+    color: '#F4A261',
+    imagePath: '/images/form_06.png', // 양식 06 샘플 이미지 (추가 필요)
   },
 }

@@ -294,15 +294,15 @@ async def upload_documents(
     PDF 파일 업로드 및 처리
     
     Args:
-        form_type: 양식지 타입 ("01"~"05")
+        form_type: 양식지 타입 ("01"~"06")
         files: 업로드된 PDF 파일 리스트
         year: 연도 (선택사항)
         month: 월 (선택사항, 1-12)
         background_tasks: 백그라운드 작업
         db: 데이터베이스 인스턴스
     """
-    if form_type not in ["01", "02", "03", "04", "05"]:
-        raise HTTPException(status_code=400, detail="Invalid form_type. Must be 01-05")
+    if form_type not in ["01", "02", "03", "04", "05", "06"]:
+        raise HTTPException(status_code=400, detail="Invalid form_type. Must be 01-06")
     
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
