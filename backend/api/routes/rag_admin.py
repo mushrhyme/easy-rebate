@@ -19,6 +19,39 @@ from modules.utils.hash_utils import compute_page_hash, get_page_key
 router = APIRouter()
 
 
+def _ensure_rag_candidate_column(db):
+    """
+    is_rag_candidate 컬럼이 없으면 추가 (마이그레이션)
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            # 컬럼 존재 여부 확인
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'page_data_current' 
+                AND column_name = 'is_rag_candidate'
+            """)
+            if cursor.fetchone():
+                # 컬럼이 이미 존재
+                return
+            
+            # 컬럼이 없으면 추가
+            cursor.execute("""
+                ALTER TABLE page_data_current
+                ADD COLUMN IF NOT EXISTS is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE
+            """)
+            cursor.execute("""
+                ALTER TABLE page_data_archive
+                ADD COLUMN IF NOT EXISTS is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE
+            """)
+            conn.commit()
+    except Exception as e:
+        # 마이그레이션 실패해도 계속 진행 (이미 컬럼이 있을 수도 있음)
+        pass
+
+
 def _ensure_admin(user: Dict[str, Any]) -> None:
     """
     관리자 권한 확인 (username 이 'admin' 인 사용자만 허용)
@@ -136,6 +169,8 @@ async def get_learning_flag(
     _ensure_admin(current_user)
 
     db = get_db()
+    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
+    
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -168,6 +203,8 @@ async def set_learning_flag(
     _ensure_admin(current_user)
 
     db = get_db()
+    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
+    
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -194,6 +231,8 @@ async def get_learning_pages(
     _ensure_admin(current_user)
 
     db = get_db()
+    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
+    
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -221,6 +260,8 @@ async def build_vector_from_learning_pages(
     _ensure_admin(current_user)
 
     db = get_db()
+    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
+    
     with db.get_connection() as conn:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute(

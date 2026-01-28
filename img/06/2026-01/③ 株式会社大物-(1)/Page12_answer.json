@@ -1,0 +1,335 @@
+{
+  "page_role": "detail",
+  "items": [
+    {
+      "備考": null,
+      "数量": "1",
+      "条件": "133",
+      "金額": "3,990",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "30",
+      "得意先コード": null,
+      "請求伝票番号": "2111772",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 1,
+      "item_id": 523,
+      "version": 1,
+      "商品名": "チャバゲティー　１４０Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "1",
+      "条件": "115",
+      "金額": "3,450",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "30",
+      "得意先コード": null,
+      "請求伝票番号": "3199073",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 2,
+      "item_id": 524,
+      "version": 1,
+      "商品名": "チャパゲティー　１４０Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "1",
+      "条件": "126",
+      "金額": "3,780",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "30",
+      "得意先コード": null,
+      "請求伝票番号": "2111772",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 3,
+      "item_id": 525,
+      "version": 1,
+      "商品名": "ノグリラーメン　袋　１２０ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "1",
+      "条件": "100",
+      "金額": "3,000",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "30",
+      "得意先コード": null,
+      "請求伝票番号": "3199073",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 4,
+      "item_id": 526,
+      "version": 1,
+      "商品名": "ノグリラーメン　袋　１２０ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "2",
+      "条件": "140",
+      "金額": "6,720",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "24",
+      "得意先コード": null,
+      "請求伝票番号": "2111772",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 5,
+      "item_id": 527,
+      "version": 1,
+      "商品名": "辛カップラーメン　６８Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "2",
+      "条件": "105",
+      "金額": "5,040",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "24",
+      "得意先コード": null,
+      "請求伝票番号": "3199073",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 6,
+      "item_id": 528,
+      "version": 1,
+      "商品名": "辛カップラーメン　６８Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "8",
+      "条件": "140",
+      "金額": "26,880",
+      "タイプ": null,
+      "計上日": null,
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": null,
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "24",
+      "得意先コード": null,
+      "請求伝票番号": "2113577",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 7,
+      "item_id": 529,
+      "version": 1,
+      "商品名": "辛カップラーメン　６８Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "8",
+      "条件": "108",
+      "金額": "20,736",
+      "タイプ": null,
+      "計上日": "20250214",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "24",
+      "得意先コード": null,
+      "請求伝票番号": "3202828",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 8,
+      "item_id": 530,
+      "version": 1,
+      "商品名": "辛カップラーメン　６８Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "2",
+      "条件": "378",
+      "金額": "9,072",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "12",
+      "得意先コード": null,
+      "請求伝票番号": "2111772",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 9,
+      "item_id": 531,
+      "version": 1,
+      "商品名": "辛ラーメン　３食パック　（１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "備考": null,
+      "数量": "2",
+      "条件": "260",
+      "金額": "6,240",
+      "タイプ": null,
+      "計上日": "20250205",
+      "数量単位": "ケース",
+      "期間終了": null,
+      "期間開始": null,
+      "条件備考": "フ　ル　セ",
+      "条件区分": null,
+      "消費税率": null,
+      "ケース入数": "12",
+      "得意先コード": null,
+      "請求伝票番号": "3199073",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 12,
+      "item_order": 10,
+      "item_id": 532,
+      "version": 1,
+      "商品名": "辛ラーメン　３食パック　（１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    }
+  ]
+}

@@ -217,17 +217,30 @@ class RAGManager:
             print(f"⚠️ 테이블 생성 중 오류 발생: {e}")
     
     def _load_index_from_db(self, form_type: Optional[str] = None) -> Tuple[Optional[Any], Dict[str, Any], Dict[str, int], Dict[int, str]]:
+        """
+        DB에서 FAISS 인덱스를 로드합니다.
+
+        - form_type 가 주어진 경우: 해당 양식의 base_{form_type} 또는 shard_* 들만 병합
+        - form_type 가 None 인 경우:
+          1) index_name = 'base' (글로벌 인덱스)가 있으면 그것을 사용
+          2) 없으면 모든 base_{XX} 인덱스를 병합해 전체용 인덱스 생성
+          3) 그래도 없으면 shard_* 전체를 병합 시도
+        """
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
-                
-                # 디버깅: DB에 있는 인덱스 목록 확인
+
+                # 디버깅용 전체 인덱스 목록 (필요시 사용할 수 있음)
                 cursor.execute("""
                     SELECT index_name, form_type, vector_count, updated_at
                     FROM rag_vector_index
                     ORDER BY updated_at DESC
                 """)
-                all_indices = cursor.fetchall()                
+                all_indices = cursor.fetchall()
+
+                # -----------------------------
+                # 1. form_type 이 있는 경우 (기존 동작 유지)
+                # -----------------------------
                 if form_type:
                     base_index_name = f'base_{form_type}'
                     # print(f"🔍 [인덱스 로드] 양식지 {form_type}의 인덱스 로드 시도: {base_index_name}")
@@ -239,6 +252,10 @@ class RAGManager:
                         LIMIT 1
                     """, (base_index_name, form_type))
                 else:
+                    # -----------------------------
+                    # 2. form_type 이 없는 경우 (글로벌 인덱스)
+                    #    2-1) index_name = 'base' 먼저 시도
+                    # -----------------------------
                     cursor.execute("""
                         SELECT index_data, metadata_json, vector_count
                         FROM rag_vector_index
@@ -246,31 +263,91 @@ class RAGManager:
                         ORDER BY updated_at DESC
                         LIMIT 1
                     """)
-                
+
                 row = cursor.fetchone()
                 if row and len(row) >= 3:
                     index_data_bytes = row[0]
                     metadata_json = row[1]
                     vector_count = row[2] or 0
-                    # print(f"✅ [인덱스 로드] base 인덱스 발견: 벡터 {vector_count}개")
                     if isinstance(index_data_bytes, memoryview):
                         index_data_bytes = np.frombuffer(index_data_bytes, dtype=np.uint8)
                     elif isinstance(index_data_bytes, bytes):
                         index_data_bytes = np.frombuffer(index_data_bytes, dtype=np.uint8)
                     else:
                         index_data_bytes = np.frombuffer(bytes(index_data_bytes), dtype=np.uint8)
-                    
+
                     index = faiss.deserialize_index(index_data_bytes)
                     metadata = metadata_json.get('metadata', {})
                     id_to_index = metadata_json.get('id_to_index', {})
                     index_to_id_raw = metadata_json.get('index_to_id', {})
                     index_to_id = {int(k): v for k, v in index_to_id_raw.items()}
-                    # print(f"✅ [인덱스 로드] 로드 완료: 인덱스 ntotal={index.ntotal}, 메타데이터={len(metadata)}개")
                     return index, metadata, id_to_index, index_to_id
                 else:
                     if form_type:
+                        # 개별 양식 base_{form_type} 도 없고 shard 도 없으면 완전히 비어있는 상태
                         print(f"⚠️ [인덱스 로드] base_{form_type} 인덱스를 찾을 수 없습니다. shard 검색 시도...")
-                
+
+                # -----------------------------------------
+                # 2-2. form_type 이 없는 경우: 모든 base_{XX} 병합
+                # -----------------------------------------
+                if not form_type:
+                    cursor.execute("""
+                        SELECT index_data, metadata_json, vector_count, form_type
+                        FROM rag_vector_index
+                        WHERE index_name LIKE 'base_%'
+                        ORDER BY updated_at DESC
+                    """)
+                    base_rows = cursor.fetchall()
+
+                    if base_rows:
+                        # 첫 번째 base 인덱스를 기준으로 시작
+                        first_data_bytes, first_metadata_json, first_vector_count, first_form_type = base_rows[0]
+                        if isinstance(first_data_bytes, memoryview):
+                            first_data_bytes = np.frombuffer(first_data_bytes, dtype=np.uint8)
+                        elif isinstance(first_data_bytes, bytes):
+                            first_data_bytes = np.frombuffer(first_data_bytes, dtype=np.uint8)
+                        else:
+                            first_data_bytes = np.frombuffer(bytes(first_data_bytes), dtype=np.uint8)
+
+                        base_index = faiss.deserialize_index(first_data_bytes)
+                        base_metadata = first_metadata_json.get('metadata', {})
+                        base_id_to_index = first_metadata_json.get('id_to_index', {})
+                        base_index_to_id_raw = first_metadata_json.get('index_to_id', {})
+                        base_index_to_id = {int(k): v for k, v in base_index_to_id_raw.items()}
+
+                        # 나머지 base_{XX} 들을 순차적으로 병합
+                        for other_row in base_rows[1:]:
+                            if len(other_row) < 4:
+                                continue
+                            shard_data_bytes, shard_metadata_json, shard_vector_count, shard_form_type = other_row
+                            if isinstance(shard_data_bytes, memoryview):
+                                shard_data_bytes = np.frombuffer(shard_data_bytes, dtype=np.uint8)
+                            elif isinstance(shard_data_bytes, bytes):
+                                shard_data_bytes = np.frombuffer(shard_data_bytes, dtype=np.uint8)
+                            else:
+                                shard_data_bytes = np.frombuffer(bytes(shard_data_bytes), dtype=np.uint8)
+
+                            shard_index = faiss.deserialize_index(shard_data_bytes)
+                            base_vector_count = base_index.ntotal
+                            base_index.merge_from(shard_index)
+
+                            shard_metadata = shard_metadata_json.get('metadata', {})
+                            shard_id_to_index = shard_metadata_json.get('id_to_index', {})
+                            shard_index_to_id_raw = shard_metadata_json.get('index_to_id', {})
+                            shard_index_to_id = {int(k): v for k, v in shard_index_to_id_raw.items()}
+
+                            for doc_id, shard_faiss_idx in shard_id_to_index.items():
+                                new_faiss_idx = base_vector_count + shard_faiss_idx
+                                base_metadata[doc_id] = shard_metadata.get(doc_id, {})
+                                base_id_to_index[doc_id] = new_faiss_idx
+                                base_index_to_id[new_faiss_idx] = doc_id
+
+                        # 이 시점에서 base_index 는 모든 양식의 예제를 포함하는 글로벌 인덱스
+                        return base_index, base_metadata, base_id_to_index, base_index_to_id
+
+                # -----------------------------------------
+                # 3. shard_* 병합 (기존 로직, form_type 여부에 따라 분기)
+                # -----------------------------------------
                 if form_type:
                     if isinstance(form_type, (tuple, list)):
                         form_type = form_type[0] if form_type else None

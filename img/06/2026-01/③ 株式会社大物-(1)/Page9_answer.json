@@ -1,0 +1,293 @@
+{
+  "page_role": "detail",
+  "items": [
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "7,560",
+      "個別条件": "105",
+      "基本条件": null,
+      "照会番号": "3193567",
+      "請求合計額": "7,560",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "1,224",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 1,
+      "item_id": 499,
+      "version": 1,
+      "customer": "玉出新今宮",
+      "商品名": "辛カップラーメン 68G",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "7,560",
+      "個別条件": "105",
+      "基本条件": null,
+      "照会番号": "3193568",
+      "請求合計額": "7,560",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "1,224",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 2,
+      "item_id": 500,
+      "version": 1,
+      "customer": "玉出天下茶",
+      "商品名": "辛カップラーメン 68G",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "10,080",
+      "個別条件": "105",
+      "基本条件": null,
+      "照会番号": "3193569",
+      "請求合計額": "10,080",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "4",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "1,632",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 3,
+      "item_id": 501,
+      "version": 1,
+      "customer": "玉出 今里",
+      "商品名": "辛カップラーメン 68G",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "7,560",
+      "個別条件": "105",
+      "基本条件": null,
+      "照会番号": "3193572",
+      "請求合計額": "7,560",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "1,224",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 4,
+      "item_id": 502,
+      "version": 1,
+      "customer": "玉出千林店",
+      "商品名": "辛カップラーメン 68G",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "12,480",
+      "個別条件": "260",
+      "基本条件": null,
+      "照会番号": "3193567",
+      "請求合計額": "12,480",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "4",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "1,968",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 5,
+      "item_id": 503,
+      "version": 1,
+      "customer": "玉出新今宮",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "24,960",
+      "個別条件": "260",
+      "基本条件": null,
+      "照会番号": "3193568",
+      "請求合計額": "24,960",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "8",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "3,936",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 6,
+      "item_id": 504,
+      "version": 1,
+      "customer": "玉出天下茶",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "24,960",
+      "個別条件": "260",
+      "基本条件": null,
+      "照会番号": "3193569",
+      "請求合計額": "24,960",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "8",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "3,936",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 7,
+      "item_id": 505,
+      "version": 1,
+      "customer": "玉出 今里",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "2,520",
+      "個別条件": "105",
+      "基本条件": null,
+      "照会番号": "3193567",
+      "請求合計額": "2,520",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "408",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 8,
+      "item_id": 506,
+      "version": 1,
+      "customer": "玉出新今宮",
+      "商品名": "辛ラーメン 激辛カップ 68Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "2,520",
+      "個別条件": "105",
+      "基本条件": null,
+      "照会番号": "3193568",
+      "請求合計額": "2,520",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "408",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 9,
+      "item_order": 9,
+      "item_id": 507,
+      "version": 1,
+      "customer": "玉出 天下茶",
+      "商品名": "辛ラーメン 激辛カップ 68Ｇ",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    }
+  ]
+}

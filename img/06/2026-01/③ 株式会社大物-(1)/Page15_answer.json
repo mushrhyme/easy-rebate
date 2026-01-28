@@ -1,0 +1,389 @@
+{
+  "page_role": "detail",
+  "items": [
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "2,592",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194601",
+      "請求合計額": "2,592",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "6",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 1,
+      "item_id": 557,
+      "version": 1,
+      "customer": "王子 富松",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "1,728",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194602",
+      "請求合計額": "1,728",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "4",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 2,
+      "item_id": 558,
+      "version": 1,
+      "customer": "王子 塚口",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "2,160",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194603",
+      "請求合計額": "2,160",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "5",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 3,
+      "item_id": 559,
+      "version": 1,
+      "customer": "王子 伊丹",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "2,160",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194604",
+      "請求合計額": "2,160",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "5",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 4,
+      "item_id": 560,
+      "version": 1,
+      "customer": "王子 尾浜",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "1,296",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194605",
+      "請求合計額": "1,296",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 5,
+      "item_id": 561,
+      "version": 1,
+      "customer": "王子西難波",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "2,160",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194606",
+      "請求合計額": "2,160",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "5",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 6,
+      "item_id": 562,
+      "version": 1,
+      "customer": "王子安堂寺",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "1,296",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194601",
+      "請求合計額": "1,296",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 7,
+      "item_id": 563,
+      "version": 1,
+      "customer": "王子 富松",
+      "商品名": "辛ラーメンキムチ ３食パック（１２０Ｇｘ３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "864",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194602",
+      "請求合計額": "864",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "2",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 8,
+      "item_id": 564,
+      "version": 1,
+      "customer": "王子 塚口",
+      "商品名": "辛ラーメンキムチ ３食パック（１２０Ｇｘ３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "1,296",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194603",
+      "請求合計額": "1,296",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 9,
+      "item_id": 565,
+      "version": 1,
+      "customer": "王子 伊丹",
+      "商品名": "辛ラーメンキムチ ３食パック（１２０Ｇｘ３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "1,296",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194604",
+      "請求合計額": "1,296",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 10,
+      "item_id": 566,
+      "version": 1,
+      "customer": "王子 尾浜",
+      "商品名": "辛ラーメンキムチ ３食パック（１２０Ｇｘ３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "864",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194605",
+      "請求合計額": "864",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "2",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 11,
+      "item_id": 567,
+      "version": 1,
+      "customer": "王子西難波",
+      "商品名": "辛ラーメンキムチ ３食パック（１２０Ｇｘ３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "1,296",
+      "個別条件": "250",
+      "基本条件": null,
+      "照会番号": "3194606",
+      "請求合計額": "1,296",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "0",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 15,
+      "item_order": 12,
+      "item_id": 568,
+      "version": 1,
+      "customer": "王子安堂寺",
+      "商品名": "辛ラーメンキムチ ３食パック（１２０Ｇｘ３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    }
+  ]
+}

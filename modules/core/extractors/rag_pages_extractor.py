@@ -119,6 +119,36 @@ def extract_pages_with_rag(
     from modules.core.extractors.pdf_processor import PdfImageConverter
     pdf_processor = PdfImageConverter(dpi=dpi)
     images = pdf_processor.convert_pdf_to_images(pdf_path)
+
+    # 이미지 회전 보정 (프론트/디버깅에 보여줄 이미지도 바로잡기)
+    try:
+        from modules.utils.image_rotation_utils import (
+            detect_and_correct_rotation,
+            is_rotation_detection_available,
+        )
+
+        if is_rotation_detection_available():
+            corrected_images: List[Image.Image] = []
+            for idx, img in enumerate(images, start=1):
+                try:
+                    corrected, angle = detect_and_correct_rotation(img, return_angle=True)
+                    if angle and angle != 0:
+                        print(f"🔄 RAG용 페이지 이미지 회전 보정: 페이지 {idx} - {angle}도")
+                    corrected_images.append(corrected)
+                except Exception as rotate_error:
+                    # 개별 페이지 회전 보정 실패 시 원본 유지
+                    print(
+                        f"⚠️ RAG용 페이지 이미지 회전 보정 실패 (페이지 {idx}): {rotate_error}"
+                    )
+                    corrected_images.append(img)
+            images = corrected_images
+        else:
+            # 회전 감지 기능이 없으면 원본 그대로 사용
+            pass
+    except Exception as rotate_error:
+        # 회전 보정 전체 실패해도 흐름은 유지
+        print(f"⚠️ RAG용 페이지 이미지 회전 보정 전체 실패: {rotate_error}")
+
     pil_images = images
     print(f"PDF 변환 완료: {len(images)}개 페이지")
     

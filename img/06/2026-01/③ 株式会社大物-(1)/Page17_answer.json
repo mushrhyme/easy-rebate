@@ -1,0 +1,389 @@
+{
+  "page_role": "detail",
+  "items": [
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "9,792",
+      "個別条件": "272",
+      "基本条件": null,
+      "照会番号": "3195435",
+      "請求合計額": "1,080",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "30",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 1,
+      "item_id": 577,
+      "version": 1,
+      "customer": "ケント東寺",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "6,528",
+      "個別条件": "272",
+      "基本条件": null,
+      "照会番号": "3208810",
+      "請求合計額": "720",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "2",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "30",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 2,
+      "item_id": 578,
+      "version": 1,
+      "customer": "ケント東寺",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "32,640",
+      "個別条件": "272",
+      "基本条件": null,
+      "照会番号": "3197426",
+      "請求合計額": "3,600",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "10",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "30",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 3,
+      "item_id": 579,
+      "version": 1,
+      "customer": "ケント福島",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "3,540",
+      "個別条件": "295",
+      "基本条件": null,
+      "照会番号": "3209204",
+      "請求合計額": "120",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "10",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 4,
+      "item_id": 580,
+      "version": 1,
+      "customer": "ダイキョ高",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "3,180",
+      "個別条件": "265",
+      "基本条件": null,
+      "照会番号": "3195791",
+      "請求合計額": "540",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "45",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 5,
+      "item_id": 581,
+      "version": 1,
+      "customer": "ハウディ",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "3,180",
+      "個別条件": "265",
+      "基本条件": null,
+      "照会番号": "3201985",
+      "請求合計額": "540",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "45",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 6,
+      "item_id": 582,
+      "version": 1,
+      "customer": "ハウディ",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "3,180",
+      "個別条件": "265",
+      "基本条件": null,
+      "照会番号": "3206251",
+      "請求合計額": "540",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "45",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 7,
+      "item_id": 583,
+      "version": 1,
+      "customer": "ハウディ",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "6,360",
+      "個別条件": "265",
+      "基本条件": null,
+      "照会番号": "3210699",
+      "請求合計額": "1,080",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "2",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "45",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 8,
+      "item_id": 584,
+      "version": 1,
+      "customer": "ハウディ",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "9,360",
+      "個別条件": "260",
+      "基本条件": null,
+      "照会番号": "3199544",
+      "請求合計額": "1,476",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "3",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "41",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 9,
+      "item_id": 585,
+      "version": 1,
+      "customer": "マルチ昆陽",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "12",
+      "タイプ": null,
+      "請求額": "3,240",
+      "個別条件": "270",
+      "基本条件": null,
+      "照会番号": "3195940",
+      "請求合計額": "492",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "1",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "41",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 10,
+      "item_id": 586,
+      "version": 1,
+      "customer": "マルチ山本",
+      "商品名": "辛ラーメン ３食パック （１２０ｇ＊３）",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "24",
+      "タイプ": null,
+      "請求額": "1,272",
+      "個別条件": "106",
+      "基本条件": null,
+      "照会番号": "3195941",
+      "請求合計額": "204",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "12",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "17",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 11,
+      "item_id": 587,
+      "version": 1,
+      "customer": "マルチ山本",
+      "商品名": "辛カップラーメン 68G",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    },
+    {
+      "入数": "60",
+      "タイプ": null,
+      "請求額": "2,940",
+      "個別条件": "98",
+      "基本条件": null,
+      "照会番号": "3200431",
+      "請求合計額": "300",
+      "売上数_バラ": "0",
+      "景品数_バラ": "0",
+      "得意先コード": null,
+      "売上数_ケース": "30",
+      "景品数_ケース": "0",
+      "景品補助_請求額": "10",
+      "pdf_filename": "③ 株式会社大物-(1).pdf",
+      "page_number": 17,
+      "item_order": 12,
+      "item_id": 588,
+      "version": 1,
+      "customer": "奥田御池店",
+      "商品名": "辛ラーメン 袋 120g",
+      "review_status": {
+        "first_review": {
+          "checked": false,
+          "reviewed_at": null
+        },
+        "second_review": {
+          "checked": false,
+          "reviewed_at": null
+        }
+      }
+    }
+  ]
+}
