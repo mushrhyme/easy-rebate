@@ -431,6 +431,7 @@ async def process_pdf_background(
         form_type: 양식지 타입
         session_id: 세션 ID (WebSocket task_id로 사용)
     """
+    pdf_path = None
     try:
         # 이벤트 루프 캡처 (스레드에서 안전하게 사용하기 위해)
         main_loop = asyncio.get_event_loop()
@@ -538,6 +539,43 @@ async def process_pdf_background(
             })
         except Exception as ws_error:
             print(f"⚠️ WebSocket 메시지 전송 실패: {ws_error}")
+    finally:
+        # 처리 완료 후 temp 폴더의 PDF 파일 및 세션 디렉토리 정리
+        # 이미지로 변환되어 static 폴더에 저장되므로 temp 폴더의 파일은 더 이상 필요 없음
+        try:
+            if pdf_path and pdf_path.exists():
+                pdf_path.unlink()
+                print(f"🗑️ [temp 정리] PDF 파일 삭제: {pdf_path}")
+            
+            # 세션 디렉토리 내 모든 파일 정리
+            if pdf_path:
+                pdfs_dir = pdf_path.parent  # temp/{session_id}/pdfs
+                session_dir = pdfs_dir.parent  # temp/{session_id}
+                
+                # pdfs 디렉토리 내 모든 파일 삭제
+                if pdfs_dir.exists():
+                    for file in pdfs_dir.iterdir():
+                        if file.is_file():
+                            file.unlink()
+                            print(f"🗑️ [temp 정리] 파일 삭제: {file}")
+                    # pdfs 디렉토리가 비어있으면 삭제
+                    if not any(pdfs_dir.iterdir()):
+                        pdfs_dir.rmdir()
+                        print(f"🗑️ [temp 정리] pdfs 디렉토리 삭제: {pdfs_dir}")
+                
+                # 세션 디렉토리 내 다른 파일들도 정리 (OCR 결과 JSON 등)
+                if session_dir.exists():
+                    for item in session_dir.iterdir():
+                        if item.is_file():
+                            item.unlink()
+                            print(f"🗑️ [temp 정리] 파일 삭제: {item}")
+                    # 세션 디렉토리가 비어있으면 삭제
+                    if not any(session_dir.iterdir()):
+                        session_dir.rmdir()
+                        print(f"🗑️ [temp 정리] 세션 디렉토리 삭제: {session_dir}")
+        except Exception as cleanup_error:
+            # 정리 실패해도 처리 흐름에는 영향 없음
+            print(f"⚠️ [temp 정리] 실패 (무시): {cleanup_error}")
 
 
 @router.get("/", response_model=DocumentListResponse)
