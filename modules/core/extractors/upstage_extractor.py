@@ -214,8 +214,42 @@ class UpstageExtractor:
             pix = page.get_pixmap(dpi=dpi)
             img_bytes = pix.tobytes("png")
             doc.close()
-            
-            # 임시 이미지 파일 생성
+
+            # 1) 필요 시 이미지 회전 감지 및 보정
+            try:
+                from modules.utils.image_rotation_utils import (
+                    detect_and_correct_rotation,
+                    is_rotation_detection_available,
+                )
+
+                if is_rotation_detection_available():
+                    image = Image.open(BytesIO(img_bytes))
+                    corrected_image, angle = detect_and_correct_rotation(
+                        image, return_angle=True
+                    )
+
+                    # 회전이 실제로 발생한 경우에만 이미지 교체
+                    if angle and angle != 0:
+                        print(
+                            f"🔄 Upstage OCR용 이미지 회전 보정: 페이지 {page_num} - {angle}도"
+                        )
+                        buf = BytesIO()
+                        # PNG로 다시 인코딩
+                        if corrected_image.mode != "RGB":
+                            corrected_image = corrected_image.convert("RGB")
+                        corrected_image.save(buf, format="PNG")
+                        img_bytes = buf.getvalue()
+                else:
+                    # 회전 감지 기능이 사용 불가한 경우는 그냥 원본 사용
+                    pass
+            except Exception as rotate_error:
+                # 회전 보정에 실패해도 전체 OCR 흐름은 유지
+                print(
+                    f"⚠️ Upstage OCR용 이미지 회전 보정 실패 "
+                    f"({pdf_path}, 페이지 {page_num}): {rotate_error}"
+                )
+
+            # 2) 임시 이미지 파일 생성
             temp_image_path = pdf_path.parent / f"{pdf_path.stem}_Page{page_num}_temp.png"
             with open(temp_image_path, "wb") as f:
                 f.write(img_bytes)

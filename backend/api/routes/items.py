@@ -214,12 +214,9 @@ async def create_item(
         db: 데이터베이스 인스턴스
     """
     try:
-        print(f"🔵 [create_item] 시작: pdf_filename={item_data.pdf_filename}, page_number={item_data.page_number}")
-        
         # 문서 존재 확인
         doc = db.get_document(item_data.pdf_filename)
         if not doc:
-            print(f"❌ [create_item] 문서를 찾을 수 없음: {item_data.pdf_filename}")
             raise HTTPException(status_code=404, detail="Document not found")
 
         # 페이지 존재 확인 (get_page_result는 느릴 수 있으므로 간단한 확인만 수행)
@@ -240,13 +237,10 @@ async def create_item(
                 """, (item_data.pdf_filename, item_data.page_number, item_data.pdf_filename, item_data.page_number))
                 # UNION ALL 결과 합산
                 item_count = sum(row[0] for row in cursor.fetchall())
-                item_count = cursor.fetchone()[0]
-                print(f"🔵 [create_item] 페이지 확인: pdf={item_data.pdf_filename}, page={item_data.page_number}, 기존 아이템 수={item_count}")
-        except Exception as page_check_error:
-            print(f"⚠️ [create_item] 페이지 확인 중 오류 (무시하고 계속): {page_check_error}")
+        except Exception:
+            pass
 
         # 아이템 생성
-        print(f"🔵 [create_item] 아이템 생성 시도: item_data={item_data.item_data}, after_item_id={item_data.after_item_id}")
         item_id = db.create_item(
             pdf_filename=item_data.pdf_filename,
             page_number=item_data.page_number,
@@ -260,10 +254,7 @@ async def create_item(
             error_detail = "Failed to create item"
             if item_data.after_item_id:
                 error_detail = f"Failed to create item: after_item_id={item_data.after_item_id} not found"
-            print(f"❌ [create_item] 아이템 생성 실패: db.create_item이 -1 반환, after_item_id={item_data.after_item_id}")
             raise HTTPException(status_code=500, detail=error_detail)
-
-        print(f"✅ [create_item] 아이템 생성 성공: item_id={item_id}")
 
         # 생성된 아이템 조회 (응답용)
         items = None
@@ -271,10 +262,8 @@ async def create_item(
         
         try:
             items = db.get_items(item_data.pdf_filename, item_data.page_number)
-            print(f"🔵 [create_item] 조회된 아이템 수: {len(items)}")
             created_item = next((item for item in items if item.get('item_id') == item_id), None)
-        except Exception as get_items_error:
-            print(f"❌ [create_item] get_items 호출 실패: {get_items_error}")
+        except Exception:
             import traceback
             traceback.print_exc()
             # get_items 실패 시 직접 DB에서 조회 시도
@@ -320,24 +309,17 @@ async def create_item(
                         }
                         
                         items = [created_item]
-                        print(f"✅ [create_item] 직접 DB 조회 성공: item_id={item_id}")
                     else:
-                        print(f"❌ [create_item] 직접 DB 조회: item_id={item_id}인 아이템을 찾을 수 없음")
                         raise HTTPException(status_code=500, detail="Failed to retrieve created item: item not found in database")
             except HTTPException:
                 raise
             except Exception as direct_query_error:
-                print(f"❌ [create_item] 직접 DB 조회도 실패: {direct_query_error}")
                 import traceback
                 traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Failed to retrieve created item: {str(direct_query_error)}")
         
         if not created_item:
-            item_ids = [item.get('item_id') for item in items] if items else []
-            print(f"❌ [create_item] 생성된 아이템을 조회할 수 없음: item_id={item_id}, 조회된 items={item_ids}")
             raise HTTPException(status_code=500, detail="Failed to retrieve created item")
-        
-        print(f"✅ [create_item] 생성된 아이템 조회 성공: item_id={item_id}, item_order={created_item.get('item_order')}")
 
         # 응답 형식 변환 (get_page_items와 동일)
         # get_items()는 review_status 객체로 반환하므로, 기존 review_status를 사용하거나 새로 구성
@@ -391,14 +373,11 @@ async def create_item(
         # 필수 필드 검증
         item_order = created_item.get('item_order')
         if item_order is None:
-            print(f"❌ [create_item] item_order가 없음: created_item keys={list(created_item.keys())}")
             raise HTTPException(status_code=500, detail="Missing required field: item_order")
         
         version = created_item.get('version', 1)
         customer = created_item.get('customer') or created_item.get('customer')
         product_name = created_item.get('product_name') or created_item.get('商品名')
-        
-        print(f"🔵 [create_item] ItemResponse 생성: item_order={item_order}, version={version}, customer={customer}, product_name={product_name}")
         
         try:
             response = ItemResponse(
@@ -412,21 +391,13 @@ async def create_item(
                 review_status=review_status,
                 version=version
             )
-            print(f"✅ [create_item] ItemResponse 생성 성공")
             return response
         except Exception as validation_error:
-            print(f"❌ [create_item] ItemResponse 생성 실패: {validation_error}")
-            print(f"   item_id={item_id}, item_order={item_order}, version={version}")
-            print(f"   review_status={review_status}")
-            print(f"   response_item_data keys={list(response_item_data.keys())}")
             raise HTTPException(status_code=500, detail=f"Failed to create response: {str(validation_error)}")
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ [create_item] 예외 발생: {type(e).__name__}: {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -444,7 +415,6 @@ async def update_item(
         update_data: 업데이트 요청 데이터 (item_data, review_status, expected_version, session_id 포함)
         db: 데이터베이스 인스턴스
     """
-    print(f"🔵 [백엔드] update_item 호출: item_id={item_id}, review_status={update_data.review_status}")
     try:
         # update_data에서 필요한 필드 추출
         expected_version = update_data.expected_version
@@ -491,9 +461,7 @@ async def update_item(
             if item_lock_info and item_lock_info.get('is_locked_by_others'):
                 locked_by_user_id = item_lock_info.get('locked_by_user_id')
                 # user_id가 None인 경우는 만료되었거나 잘못된 락이므로 무시
-                if locked_by_user_id is None:
-                    print(f"⚠️ [백엔드] user_id가 None인 락 발견 - 무시하고 계속 진행: item_id={item_id}")
-                else:
+                if locked_by_user_id is not None:
                     raise HTTPException(
                         status_code=409,
                         detail=f"Item is locked by another user: user_id={locked_by_user_id}"
@@ -516,19 +484,16 @@ async def update_item(
             
             # 검토 상태 업데이트
             if update_data.review_status:
-                print(f"🔵 [백엔드] review_status 업데이트: {update_data.review_status}")
                 first_review = update_data.review_status.get('first_review', {})
                 second_review = update_data.review_status.get('second_review', {})
                 
                 if 'checked' in first_review:
                     checked_value = first_review['checked']
-                    print(f"🔵 [백엔드] first_review_checked = {checked_value} (type: {type(checked_value)})")
                     set_clauses.append("first_review_checked = %s")
                     params.append(bool(checked_value))  # 명시적으로 boolean으로 변환
                 
                 if 'checked' in second_review:
                     checked_value = second_review['checked']
-                    print(f"🔵 [백엔드] second_review_checked = {checked_value} (type: {type(checked_value)})")
                     set_clauses.append("second_review_checked = %s")
                     params.append(bool(checked_value))  # 명시적으로 boolean으로 변환
             
@@ -567,12 +532,9 @@ async def update_item(
                   AND version = %s
             """
             
-            print(f"🔵 [백엔드] SQL 실행: {sql}")
-            print(f"🔵 [백엔드] 파라미터: {params}")
             cursor.execute(sql, params)
             
             if cursor.rowcount == 0:
-                print(f"❌ [백엔드] 업데이트 실패: rowcount=0")
                 raise HTTPException(
                     status_code=409,
                     detail="Version conflict or item not found"
@@ -581,25 +543,13 @@ async def update_item(
             # 락 해제 (체크박스 업데이트는 락이 없을 수 있으므로 실패해도 계속 진행)
             try:
                 db.release_item_lock(item_id, session_id)
-            except Exception as lock_error:
-                # 락 해제 실패는 경고만 출력 (체크박스 업데이트는 락 없이도 가능)
-                print(f"⚠️ [백엔드] 락 해제 실패 (무시): {lock_error}")
+            except Exception:
+                pass
             
             conn.commit()
-            print(f"✅ [백엔드] DB 업데이트 완료: item_id={item_id}, rowcount={cursor.rowcount}")
-            
-            # 저장된 값 확인 (items_current 또는 items_archive에서 조회)
-            cursor.execute(f"""
-                SELECT first_review_checked, second_review_checked
-                FROM {items_table}
-                WHERE item_id = %s
-            """, (item_id,))
-            saved_values = cursor.fetchone()
-            print(f"✅ [백엔드] 저장된 값 확인: first={saved_values[0]}, second={saved_values[1]}")
             
             # review_status 업데이트 시 WebSocket으로 브로드캐스트
             if update_data.review_status:
-                print(f"🔵 [백엔드] WebSocket 브로드캐스트 시작: pdf_filename={item[1]}, page_number={item[2]}")
                 await manager.broadcast_lock_update(
                     pdf_filename=item[1],
                     page_number=item[2],
@@ -609,18 +559,12 @@ async def update_item(
                         "review_status": update_data.review_status,
                     }
                 )
-                print(f"✅ [백엔드] WebSocket 브로드캐스트 완료")
         
-        print(f"✅ [백엔드] update_item 성공: item_id={item_id}")
         return {"message": "Item updated successfully", "item_id": item_id}
     
-    except HTTPException as e:
-        print(f"❌ [백엔드] HTTPException: status={e.status_code}, detail={e.detail}")
+    except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ [백엔드] Exception: {type(e).__name__}, {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -639,11 +583,8 @@ async def acquire_item_lock(
         db: 데이터베이스 인스턴스
     """
     try:
-        print(f"🔵 [acquire_item_lock] 시작: item_id={item_id}, session_id={session_id[:8] if session_id else 'None'}...")
-        
         # session_id 검증
         if not session_id or not isinstance(session_id, str) or len(session_id.strip()) == 0:
-            print(f"❌ [acquire_item_lock] session_id 검증 실패: session_id={session_id}")
             raise HTTPException(
                 status_code=422,
                 detail="session_id is required and must be a non-empty string"
@@ -668,30 +609,23 @@ async def acquire_item_lock(
                 item_info = cursor.fetchone()
                 
                 if not item_info:
-                    print(f"❌ [acquire_item_lock] 아이템을 찾을 수 없음: item_id={item_id}")
                     raise HTTPException(
                         status_code=404,
                         detail=f"Item not found: item_id={item_id}"
                     )
-                
-                print(f"✅ [acquire_item_lock] 아이템 확인: item_id={item_id}, pdf={item_info[0]}, page={item_info[1]}")
         except HTTPException:
             raise
         except Exception as item_check_error:
-            print(f"❌ [acquire_item_lock] 아이템 조회 중 오류: {item_check_error}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to check item: {str(item_check_error)}"
             )
         
         # 락 획득 시도 (만료된 락 강제 정리 포함)
-        print(f"🔵 [acquire_item_lock] 락 획득 시도: item_id={item_id}")
         success, reason = db.acquire_item_lock(item_id=item_id, session_id=session_id, lock_duration_minutes=5, force_cleanup=True)
-        print(f"🔵 [acquire_item_lock] 락 획득 결과: success={success}, reason={reason}")
         
         # 락 획득 성공 시 브로드캐스트
         if success and item_info:
-            print(f"🔒 [락 획득] item_id={item_id}, session_id={session_id[:8]}..., pdf={item_info[0]}, page={item_info[1]}")
             try:
                 await manager.broadcast_lock_update(
                     pdf_filename=item_info[0],
@@ -702,13 +636,11 @@ async def acquire_item_lock(
                         "session_id": session_id,
                     }
                 )
-                print(f"✅ [락 획득] 브로드캐스트 호출 완료")
-            except Exception as broadcast_error:
-                print(f"⚠️ [락 획득] 브로드캐스트 실패 (무시): {broadcast_error}")
+            except Exception:
+                pass
         
         if not success:
             # 락 정보 조회
-            print(f"❌ [acquire_item_lock] 락 획득 실패: item_id={item_id}, reason={reason}")
             if item_info:
                 try:
                     items_with_locks = db.get_items_with_lock_status(
@@ -726,7 +658,6 @@ async def acquire_item_lock(
                         
                         # user_id가 None이거나 is_locked_by_others가 False인 경우는 잘못된 락이므로 무시하고 재시도
                         if locked_by_user_id is None or not is_locked_by_others:
-                            print(f"⚠️ [acquire_item_lock] 잘못된 락 발견 (user_id={locked_by_user_id}, is_locked_by_others={is_locked_by_others}) - 강제 정리 후 재시도: item_id={item_id}")
                             # 만료된 락 강제 정리 후 재시도
                             try:
                                 with db.get_connection() as conn:
@@ -743,24 +674,21 @@ async def acquire_item_lock(
                                 if retry_success:
                                     return {"message": "Lock acquired successfully", "item_id": item_id}
                                 else:
-                                    print(f"⚠️ [acquire_item_lock] 재시도 후에도 실패: item_id={item_id}, reason={retry_reason}")
                                     reason = retry_reason  # 재시도 실패 원인으로 업데이트
-                            except Exception as cleanup_error:
-                                print(f"⚠️ [acquire_item_lock] 락 정리 실패: {cleanup_error}")
+                            except Exception:
+                                pass
                         else:
-                            print(f"❌ [acquire_item_lock] 다른 사용자가 락을 보유: locked_by_user_id={locked_by_user_id}")
                             raise HTTPException(
                                 status_code=409,
                                 detail=f"Item is locked by another user: user_id={locked_by_user_id}"
                             )
                 except HTTPException:
                     raise
-                except Exception as lock_info_error:
-                    print(f"⚠️ [acquire_item_lock] 락 정보 조회 실패: {lock_info_error}")
+                except Exception:
+                    pass
             
             # 실패 원인 메시지 사용 (reason은 위에서 이미 받았으므로 사용 가능)
             error_detail = reason if reason else "Failed to acquire lock"
-            print(f"❌ [acquire_item_lock] 락 획득 실패: item_id={item_id}, reason={error_detail}")
             raise HTTPException(
                 status_code=409,
                 detail=error_detail
