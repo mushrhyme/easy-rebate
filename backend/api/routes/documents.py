@@ -92,9 +92,6 @@ def query_documents_table(
             rows = cursor.fetchall()
             query_label = "documents (current+archive)" + (f" (form_type={form_type})" if form_type else " (전체)")
     
-    query_time = time.perf_counter() - query_start
-    print(f"⏱️ [DB 성능] documents 테이블 조회 ({query_label}): {query_time:.3f}초, {len(rows)}개 행")
-    
     return rows
 
 
@@ -146,9 +143,6 @@ def query_page_meta_batch(
             """, (pdf_filenames, pdf_filenames))
         
         page_meta_rows = cursor.fetchall()
-    
-    query_time = time.perf_counter() - query_start
-    print(f"⏱️ [DB 성능] page_data 테이블 조회 (page_meta): {query_time:.3f}초, {len(page_meta_rows)}개 행")
     
     return page_meta_rows
 
@@ -228,7 +222,6 @@ def get_document_year_month(db, pdf_filename: str, year: Optional[int] = None, m
             row = cursor.fetchone()
             
             if not row or not row[0]:
-                print(f"⚠️ {pdf_filename}: 첫 페이지의 page_meta가 없음")
                 return None
             
             # page_meta가 JSONB이므로 파싱
@@ -236,28 +229,21 @@ def get_document_year_month(db, pdf_filename: str, year: Optional[int] = None, m
             if isinstance(page_meta, str):
                 page_meta = json.loads(page_meta)
             
-            # page_meta의 구조 확인 (디버깅)
-            print(f"🔍 {pdf_filename}: page_meta 키들 = {list(page_meta.keys()) if isinstance(page_meta, dict) else 'not dict'}")
-            
             # document_meta에서 請求年月 찾기
             document_meta = page_meta.get('document_meta', {})
             if isinstance(document_meta, str):
                 document_meta = json.loads(document_meta)
             
             if not isinstance(document_meta, dict):
-                print(f"⚠️ {pdf_filename}: document_meta가 dict가 아님: {type(document_meta)}")
                 # page_meta 자체에서 직접 찾기 시도
                 billing_date = page_meta.get('請求年月')
                 if billing_date:
-                    print(f"✅ {pdf_filename}: page_meta에서 직접 請求年月 발견: {billing_date}")
                     result = extract_year_month_from_billing_date(billing_date)
                     if result:
                         return result
             else:
-                print(f"🔍 {pdf_filename}: document_meta 키들 = {list(document_meta.keys())}")
                 billing_date = document_meta.get('請求年月')
                 if billing_date:
-                    print(f"✅ {pdf_filename}: document_meta에서 請求年月 발견: {billing_date}")
                     result = extract_year_month_from_billing_date(billing_date)
                     if result:
                         return result
@@ -266,18 +252,13 @@ def get_document_year_month(db, pdf_filename: str, year: Optional[int] = None, m
                 for key in ['請求年月分', '請求期間', '対象期間']:
                     if key in document_meta:
                         value = document_meta[key]
-                        print(f"✅ {pdf_filename}: document_meta에서 {key} 발견: {value}")
                         if isinstance(value, str):
                             result = extract_year_month_from_billing_date(value)
                             if result:
                                 return result
             
-            print(f"⚠️ {pdf_filename}: 請求年月를 찾을 수 없음")
-            
-    except Exception as e:
-        print(f"⚠️ {pdf_filename}의 연월 추출 실패: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        pass
     
     return None
 
@@ -527,9 +508,6 @@ async def process_pdf_background(
             })
     
     except Exception as e:
-        print(f"❌ PDF 처리 실패: {pdf_name}, 오류: {e}")
-        import traceback
-        traceback.print_exc()
         try:
             await manager.send_progress(session_id, {
                 "type": "error",
@@ -537,15 +515,14 @@ async def process_pdf_background(
                 "error": str(e),
                 "message": f"Processing failed: {str(e)}"
             })
-        except Exception as ws_error:
-            print(f"⚠️ WebSocket 메시지 전송 실패: {ws_error}")
+        except Exception:
+            pass
     finally:
         # 처리 완료 후 temp 폴더의 PDF 파일 및 세션 디렉토리 정리
         # 이미지로 변환되어 static 폴더에 저장되므로 temp 폴더의 파일은 더 이상 필요 없음
         try:
             if pdf_path and pdf_path.exists():
                 pdf_path.unlink()
-                print(f"🗑️ [temp 정리] PDF 파일 삭제: {pdf_path}")
             
             # 세션 디렉토리 내 모든 파일 정리
             if pdf_path:
@@ -557,25 +534,20 @@ async def process_pdf_background(
                     for file in pdfs_dir.iterdir():
                         if file.is_file():
                             file.unlink()
-                            print(f"🗑️ [temp 정리] 파일 삭제: {file}")
                     # pdfs 디렉토리가 비어있으면 삭제
                     if not any(pdfs_dir.iterdir()):
                         pdfs_dir.rmdir()
-                        print(f"🗑️ [temp 정리] pdfs 디렉토리 삭제: {pdfs_dir}")
                 
                 # 세션 디렉토리 내 다른 파일들도 정리 (OCR 결과 JSON 등)
                 if session_dir.exists():
                     for item in session_dir.iterdir():
                         if item.is_file():
                             item.unlink()
-                            print(f"🗑️ [temp 정리] 파일 삭제: {item}")
                     # 세션 디렉토리가 비어있으면 삭제
                     if not any(session_dir.iterdir()):
                         session_dir.rmdir()
-                        print(f"🗑️ [temp 정리] 세션 디렉토리 삭제: {session_dir}")
-        except Exception as cleanup_error:
-            # 정리 실패해도 처리 흐름에는 영향 없음
-            print(f"⚠️ [temp 정리] 실패 (무시): {cleanup_error}")
+        except Exception:
+            pass
 
 
 @router.get("/", response_model=DocumentListResponse)
@@ -625,8 +597,7 @@ async def get_documents(
                 else:
                     try:
                         created_at_str = str(created_at)
-                    except Exception as e:
-                        print(f"⚠️ created_at 변환 실패: {pdf_filename}, 타입: {type(created_at)}, 값: {created_at}, 오류: {e}")
+                    except Exception:
                         created_at_str = None
             
             # data_year, data_month가 없으면 page_meta에서 추출 시도
@@ -655,8 +626,8 @@ async def get_documents(
                                     data_year = data_year or year_month[0]
                                     data_month = data_month or year_month[1]
                                     break
-                        except Exception as e:
-                            print(f"⚠️ {pdf_filename}의 請求年月 추출 실패: {e}")
+                        except Exception:
+                            pass
             
             documents.append(DocumentResponse(
                 pdf_filename=pdf_filename,
@@ -667,11 +638,6 @@ async def get_documents(
                 data_year=data_year,
                 data_month=data_month
             ))
-        processing_time = time.perf_counter() - processing_start
-        print(f"⏱️ [DB 성능] 데이터 처리 시간: {processing_time:.3f}초, {len(documents)}개 문서")
-        
-        total_time = time.perf_counter() - total_start  # 전체 엔드포인트 시간 측정 종료
-        print(f"⏱️ [DB 성능] 전체 엔드포인트 시간: {total_time:.3f}초")
         
         return DocumentListResponse(
             documents=documents,
@@ -712,8 +678,7 @@ async def get_document(
                 # 다른 타입인 경우 문자열로 변환 시도
                 try:
                     created_at_str = str(created_at)
-                except Exception as e:
-                    print(f"⚠️ created_at 변환 실패: {doc.get('pdf_filename')}, 타입: {type(created_at)}, 값: {created_at}, 오류: {e}")
+                except Exception:
                     created_at_str = None
         
         # 문서의 첫 번째 페이지에서 請求年月 추출

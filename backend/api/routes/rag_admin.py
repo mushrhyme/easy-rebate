@@ -11,7 +11,7 @@ from psycopg2.extras import RealDictCursor
 
 from database.registry import get_db
 from backend.core.auth import get_current_user
-from build_faiss_db import build_faiss_db
+from modules.core.build_faiss_db import build_faiss_db
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.hash_utils import compute_page_hash, get_page_key
 

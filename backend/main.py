@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin
 from backend.core.config import settings
 from backend.core.scheduler import setup_archive_scheduler
+from database.registry import close_db
 
 # 스케줄러 전역 변수
 scheduler = None
@@ -28,21 +29,22 @@ async def lifespan(app: FastAPI):
     """
     애플리케이션 생명주기 관리
     - 시작 시: 스케줄러 시작
-    - 종료 시: 스케줄러 중지
+    - 종료 시: 스케줄러 중지 및 DB 연결 풀 정리
     """
     global scheduler
     
     # 시작 시
     scheduler = setup_archive_scheduler()
     scheduler.start()
-    print("✅ 아카이브 마이그레이션 스케줄러 시작됨")
     
     yield
     
     # 종료 시
     if scheduler:
         scheduler.shutdown()
-        print("✅ 아카이브 마이그레이션 스케줄러 종료됨")
+    
+    # 데이터베이스 연결 풀 정리
+    close_db()
 
 
 # FastAPI 앱 생성
