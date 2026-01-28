@@ -90,11 +90,25 @@ cors_origins = list(settings.CORS_ORIGINS)
 
 # 개발 모드에서는 로컬 네트워크 origin도 동적으로 허용
 if settings.DEBUG or os.getenv("ALLOW_LOCAL_NETWORK", "true").lower() == "true":
-    # allow_origin_regex를 사용하여 로컬 네트워크 IP 패턴 허용
-    # 개발 포트 범위: 3000-3999 (React, Vite 등), 5173 (Vite 기본 포트)
+    # allow_origin_regex를 사용하여 로컬 네트워크 IP 패턴 및 도메인 허용
+    # 개발 포트 범위: 3000-3999 (React, Vite 등 - 3002 포함), 5173 (Vite 기본 포트)
     import re
+    # LOCAL_IP 환경 변수에서 도메인 추출
+    local_ip = os.getenv('LOCAL_IP', '')
+    domain_pattern = ''
+    if local_ip:
+        # http:// 또는 https:// 제거
+        domain = local_ip.replace("http://", "").replace("https://", "")
+        # 포트가 포함되어 있으면 제거
+        if ":" in domain:
+            domain = domain.split(":")[0]
+        # 도메인 패턴 생성 (점을 이스케이프)
+        if domain and '.' in domain:
+            domain_pattern = f"|{re.escape(domain)}"
+    
     # 포트 3000-3999 또는 5173 허용
-    cors_origin_regex = r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+):(3\d{3}|5173)"
+    # localhost, 127.0.0.1, 로컬 네트워크 IP, 도메인 모두 허용
+    cors_origin_regex = r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+" + domain_pattern + r"):(3\d{3}|5173)"
 else:
     cors_origin_regex = None
 

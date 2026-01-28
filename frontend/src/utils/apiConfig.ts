@@ -25,9 +25,10 @@ export const getApiBaseUrl = (): string => {
     return url
   }
   
-  // 외부 IP 접속 시 같은 IP의 백엔드에 연결
+  // 도메인 또는 외부 IP 접속 시 같은 호스트의 백엔드에 연결
+  // 예: dlab.nongshim.com -> http://dlab.nongshim.com:8000
   const url = `http://${host}:${port}`
-  console.log('🔵 [API Config] 외부 IP API URL:', url, '(현재 호스트:', host, ')')
+  console.log('🔵 [API Config] 도메인/IP API URL:', url, '(현재 호스트:', host, ')')
   return url
 }
 

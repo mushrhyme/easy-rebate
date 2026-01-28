@@ -23,13 +23,20 @@ def _get_cors_origins() -> List[str]:
         "http://127.0.0.1:5173",
     ]
     
-    # 로컬 네트워크 접속을 위한 IP 주소 추가 (환경 변수로 설정 가능)
+    # 로컬 네트워크 접속을 위한 IP 주소 또는 도메인 추가 (환경 변수로 설정 가능)
     local_ip = os.getenv('LOCAL_IP')
     if local_ip:
+        # http:// 또는 https:// 제거
+        domain = local_ip.replace("http://", "").replace("https://", "")
+        # 포트가 포함되어 있으면 제거
+        if ":" in domain:
+            domain = domain.split(":")[0]
+        
         cors_origins.extend([
-            f"http://{local_ip}:3000",
-            f"http://{local_ip}:3001",
-            f"http://{local_ip}:5173",
+            f"http://{domain}:3002",  # 프론트엔드 포트 (주 포트)
+            f"http://{domain}:3000",  # 프론트엔드 대체 포트
+            f"http://{domain}:3001",  # 프론트엔드 대체 포트
+            f"http://{domain}:5173",  # Vite 기본 포트
         ])
     
     return cors_origins
