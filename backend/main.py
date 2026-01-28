@@ -91,8 +91,10 @@ cors_origins = list(settings.CORS_ORIGINS)
 # 개발 모드에서는 로컬 네트워크 origin도 동적으로 허용
 if settings.DEBUG or os.getenv("ALLOW_LOCAL_NETWORK", "true").lower() == "true":
     # allow_origin_regex를 사용하여 로컬 네트워크 IP 패턴 허용
+    # 개발 포트 범위: 3000-3999 (React, Vite 등), 5173 (Vite 기본 포트)
     import re
-    cors_origin_regex = r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+):(3000|3001|5173)"
+    # 포트 3000-3999 또는 5173 허용
+    cors_origin_regex = r"http://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+):(3\d{3}|5173)"
 else:
     cors_origin_regex = None
 

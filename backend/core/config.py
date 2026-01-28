@@ -15,9 +15,11 @@ def _get_cors_origins() -> List[str]:
     cors_origins = [
         "http://localhost:3000",  # React 개발 서버
         "http://localhost:3001",  # Vite 개발 서버 (포트 충돌 시)
+        "http://localhost:3002",  # 추가 개발 포트
         "http://localhost:5173",  # Vite 개발 서버
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
         "http://127.0.0.1:5173",
     ]
     
