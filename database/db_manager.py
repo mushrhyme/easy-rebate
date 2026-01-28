@@ -54,6 +54,16 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
             min_conn, max_conn, **self.db_config
         )
     
+    def close(self):
+        """
+        데이터베이스 연결 풀 닫기
+        
+        애플리케이션 종료 시 호출하여 모든 연결을 정리합니다.
+        """
+        if self.pool:
+            self.pool.closeall()
+            self.pool = None
+    
     @contextmanager
     def get_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
@@ -108,12 +118,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     """, (pdf_filename, pdf_filename))
                 
                 row = cursor.fetchone()
-                query_time = time.perf_counter() - query_start  # 쿼리 시간 측정 종료
-                if row:
-                    print(f"⏱️ [DB 성능] get_document: {query_time:.3f}초")
                 return dict(row) if row else None
         except Exception as e:
-            print(f"⚠️ 문서 조회 실패: {e}")
             return None
     
     def has_document(self, pdf_filename: str, year: Optional[int] = None, month: Optional[int] = None) -> bool:
@@ -201,8 +207,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                         'form_type': None
                     }
                 return result
-        except Exception as e:
-            print(f"⚠️ 문서 확인 실패: {e}")
+        except Exception:
             return {
                 'exists': False,
                 'total_pages': 0,
@@ -336,7 +341,6 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 
                 cursor.execute(sql, params)
                 fetched_rows = cursor.fetchall()
-                print(f"🔍 [search_items_by_customer] 검색 결과: {len(fetched_rows)}개 항목")
                 
                 # 키 순서 조회 (form_type별)
                 item_key_order = None
@@ -424,10 +428,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     results.append(merged_item)
                 
                 return results
-        except Exception as e:
-            print(f"⚠️ 거래처명 검색 실패: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return []
     
     # ============================================
@@ -515,8 +516,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     return result[0]
 
                 return None
-        except Exception as e:
-            print(f"⚠️ 이미지 경로 조회 실패: {e}")
+        except Exception:
             return None
     
     # ============================================
@@ -603,8 +603,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     doc_info = self.get_document(pdf_filename)
                     if doc_info:
                         form_type = doc_info.get("form_type")
-                except Exception as e:
-                    print(f"  ⚠️ [키 순서 재정렬] form_type 조회 실패: {e}")
+                except Exception:
+                    pass
             
             # 벡터 DB에서 키 순서 가져오기
             if form_type:
@@ -615,17 +615,13 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     
                     if key_order:
                         reordered = self._reorder_by_key_order(page_json, key_order)
-                        print(f"  ✅ [키 순서 재정렬] form_type={form_type} 기준으로 재정렬 완료 (벡터 DB 메타데이터 사용)")
                         return reordered
-                    else:
-                        print(f"  ⚠️ [키 순서 재정렬] 벡터 DB에서 키 순서를 찾을 수 없음 (원본 그대로 반환)")
-                except Exception as e:
-                    print(f"  ⚠️ [키 순서 재정렬] 벡터 DB 조회 실패: {e}")
+                except Exception:
+                    pass
             
             return page_json
                 
-        except Exception as e:
-            print(f"  ⚠️ [키 순서 재정렬] 실패: {e}")
+        except Exception:
             return page_json
     
     def get_all_pdf_filenames(self) -> List[str]:
@@ -645,7 +641,6 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 """)
                 
                 return [row[0] for row in cursor.fetchall()]
-        except Exception as e:
-            print(f"⚠️ PDF 파일명 목록 조회 실패: {e}")
+        except Exception:
             return []
 
