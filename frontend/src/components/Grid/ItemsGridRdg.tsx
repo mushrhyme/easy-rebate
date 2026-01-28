@@ -1429,6 +1429,20 @@ const ActionCellWithMenu = ({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
+          {/* 행 추가 버튼 */}
+          <button
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onAdd()
+            }}
+            className="action-menu-item action-menu-add"
+            disabled={isEditing || isLockedByOthers || createItemPending}
+            title={isLockedByOthers ? `編集中: ${lockedBy}` : 'この行の下に行を追加'}
+          >
+            ➕ 追加
+          </button>
+          
           {/* 편집/저장 버튼 */}
           {isEditing ? (
             <button
@@ -1456,20 +1470,6 @@ const ActionCellWithMenu = ({
               {isLockedByOthers ? '🔒 編集中' : '✏️ 編集'}
             </button>
           )}
-          
-          {/* 행 추가 버튼 */}
-          <button
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAdd()
-            }}
-            className="action-menu-item action-menu-add"
-            disabled={isEditing || isLockedByOthers || createItemPending}
-            title={isLockedByOthers ? `編集中: ${lockedBy}` : 'この行の下に行を追加'}
-          >
-            ➕ 追加
-          </button>
           
           {/* 삭제 버튼 */}
           <button
