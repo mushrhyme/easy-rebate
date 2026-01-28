@@ -9,7 +9,6 @@ import os
 import json
 import sys
 import uuid
-import streamlit as st
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -41,18 +40,20 @@ class SessionManager:
     @staticmethod
     def get_session_id() -> str:
         """
-        현재 Streamlit 세션 ID 반환
+        현재 프로세스/요청 기준 세션 ID 반환
         
         Returns:
             세션 ID 문자열
         """
-        # Streamlit의 내부 세션 ID 사용
-        if hasattr(st, 'session_id'):
-            return str(st.session_id)
-        # fallback: session_state에 저장된 ID 사용
-        if 'session_id' not in st.session_state:
-            st.session_state.session_id = str(uuid.uuid4())
-        return st.session_state.session_id
+        # 환경 변수에 SESSION_ID가 지정된 경우 우선 사용
+        env_session_id = os.environ.get("SESSION_ID")
+        if env_session_id:
+            return env_session_id
+
+        # 프로세스 단위 캐시 사용 (Streamlit 제거)
+        if not hasattr(SessionManager, "_SESSION_ID"):
+            SessionManager._SESSION_ID = str(uuid.uuid4())
+        return SessionManager._SESSION_ID
     
     @staticmethod
     def get_session_dir() -> str:
@@ -216,14 +217,6 @@ class SessionManager:
         Returns:
             PDF 파일명 리스트 (확장자 제외)
         """
-        # Streamlit 세션 상태 확인 (list_cleared 플래그)
-        try:
-            import streamlit as st
-            if st.session_state.get("list_cleared", False):
-                return []
-        except:
-            pass  # Streamlit이 없는 환경에서는 무시
-        
         try:
             from database.registry import get_db
 
@@ -419,7 +412,7 @@ class SessionManager:
     @staticmethod
     def save_analysis_status(pdf_name: str, status: str, pages: int = 0, error: Optional[str] = None) -> bool:
         """
-        분석 상태 저장 (PdfRegistry 제거됨 - st.session_state로 관리)
+        분석 상태 저장 (파일 시스템 기반)
         
         Args:
             pdf_name: PDF 파일명 (확장자 제외)
@@ -430,22 +423,30 @@ class SessionManager:
         Returns:
             저장 성공 여부 (항상 True)
         """
-        # st.session_state로 관리 (PdfRegistry 제거됨)
-        import streamlit as st
-        if "analysis_status" not in st.session_state:
-            st.session_state.analysis_status = {}
-        
-        st.session_state.analysis_status[pdf_name] = {
+        # 파일 시스템에 상태 JSON 저장
+        status_dir = SessionManager.get_status_dir()
+        status_path = os.path.join(status_dir, f"{pdf_name}.json")
+
+        data = {
             "status": status,
             "pages": pages,
-            "error": error
+            "error": error,
+            "pdf_name": pdf_name,
         }
+
+        try:
+            with open(status_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            # 상태 저장 실패해도 애플리케이션 흐름은 막지 않음
+            pass
+
         return True
     
     @staticmethod
     def load_analysis_status(pdf_name: str) -> Optional[Dict[str, Any]]:
         """
-        저장된 분석 상태 로드 (PdfRegistry 제거됨 - st.session_state에서 조회)
+        저장된 분석 상태 로드 (파일 시스템 + DB 폴백)
         
         Args:
             pdf_name: PDF 파일명 (확장자 제외)
@@ -453,17 +454,24 @@ class SessionManager:
         Returns:
             분석 상태 딕셔너리 또는 None
         """
-        # st.session_state에서 조회 (PdfRegistry 제거됨)
-        import streamlit as st
-        if "analysis_status" in st.session_state:
-            status = st.session_state.analysis_status.get(pdf_name)
-            if status:
+        # 1. 파일 시스템에서 상태 JSON 조회
+        status_dir = SessionManager.get_status_dir()
+        status_path = os.path.join(status_dir, f"{pdf_name}.json")
+
+        if os.path.exists(status_path):
+            try:
+                with open(status_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # 필드 기본값 보정
                 return {
-                    "status": status.get("status", "pending"),
-                    "pages": status.get("pages", 0),
-                    "error": status.get("error"),
-                    "pdf_name": pdf_name
+                    "status": data.get("status", "pending"),
+                    "pages": data.get("pages", 0),
+                    "error": data.get("error"),
+                    "pdf_name": data.get("pdf_name", pdf_name),
                 }
+            except Exception:
+                # 손상된 JSON 등은 무시하고 DB 폴백으로 진행
+                pass
         
         # DB에서 페이지 수 확인
         try:
