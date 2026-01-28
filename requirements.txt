@@ -10,6 +10,7 @@ psycopg2-binary>=2.9.9
 
 # 이미지 처리
 Pillow>=10.0.0
+pytesseract>=0.3.10
 
 # PDF 처리
 PyMuPDF>=1.23.0

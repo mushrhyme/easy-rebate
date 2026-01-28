@@ -134,15 +134,10 @@ def get_extraction_method_for_form(form_number: str = None) -> str:
     양식지 번호에 따라 텍스트 추출 방법을 반환합니다.
     """
     config = rag_config
-    print(f"🔍 [get_extraction_method_for_form] form_number: {form_number}")
-    print(f"   config.form_extraction_method: {config.form_extraction_method}")
-    print(f"   config.text_extraction_method: {config.text_extraction_method}")
     if form_number and config.form_extraction_method:
         result = config.form_extraction_method.get(form_number, config.text_extraction_method)
-        print(f"   딕셔너리에서 찾음: {result}")
         return result
     result = config.text_extraction_method
-    print(f"   기본값 반환: {result}")
     return result
 
 

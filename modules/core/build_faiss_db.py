@@ -19,7 +19,6 @@ from modules.utils.config import get_project_root, get_extraction_method_for_for
 from modules.utils.hash_utils import compute_page_hash, get_page_key, compute_file_fingerprint
 from modules.utils.db_manifest_manager import DBManifestManager
 from modules.utils.pdf_utils import PdfTextExtractor
-from modules.utils.pdf_to_excel import PdfToExcelConverter
 
 
 def find_pdf_pages(

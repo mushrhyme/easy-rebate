@@ -37,7 +37,7 @@ frontend/dist-ssr/
 
 # 디버그/임시
 debug2/
-
+test/
 # DB (로컬 SQLite 등)
 *.db
 *.sqlite3

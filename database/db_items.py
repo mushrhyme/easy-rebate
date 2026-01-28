@@ -156,7 +156,6 @@ class ItemsMixin:
                     
                     # page_json이 딕셔너리인지 확인
                     if not isinstance(page_json, dict):
-                        print(f"⚠️ [save_document_data] 페이지 {page_number}: page_json이 딕셔너리가 아닙니다 (타입: {type(page_json)}). 딕셔너리로 변환합니다.")
                         if isinstance(page_json, list):
                             page_json = {"items": page_json, "page_role": "detail", "error": "잘못된 형식: 리스트가 전달됨"}
                         else:
@@ -216,9 +215,6 @@ class ItemsMixin:
                             separated.get("second_reviewed_at"),
                             json.dumps(separated.get("item_data", {}), ensure_ascii=False)
                         ))
-                    
-                print(f"  ✅ page_data 저장 완료: {len(page_results)}개 페이지")
-                print(f"  ✅ items 저장 완료: 총 {sum(len(p.get('items', [])) if isinstance(p, dict) else 0 for p in page_results)}개 행")
                 
                 # 4. 이미지 저장 (파일 시스템에 저장하고 DB에는 경로만 저장)
                 if image_data_list:
@@ -230,8 +226,7 @@ class ItemsMixin:
                             try:
                                 image_path = self.save_image_to_file(pdf_filename, page_number, image_data)
                                 images_to_save.append((pdf_filename, page_number, image_path, len(image_data)))
-                            except Exception as e:
-                                print(f"⚠️ 이미지 파일 저장 실패 (page {page_number}): {e}")
+                            except Exception:
                                 continue
 
                     if images_to_save:
@@ -247,14 +242,10 @@ class ItemsMixin:
                                     image_size = EXCLUDED.image_size,
                                     created_at = CURRENT_TIMESTAMP
                             """, (pdf_fn, page_num, img_path, 'JPEG', img_size))
-                        print(f"  ✅ 이미지 저장 완료: {len(images_to_save)}개")
                 
                 return True
                 
-        except Exception as e:
-            print(f"❌ 문서 데이터 저장 실패: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return False
     
     def get_items(
@@ -414,9 +405,6 @@ class ItemsMixin:
                             ORDER BY page_number, item_order
                         """, (pdf_filename, pdf_filename))
                         rows = cursor.fetchall()
-                query_time = time.perf_counter() - query_start  # 쿼리 시간 측정 종료
-                print(f"⏱️ [DB 성능] get_items - DB 쿼리: {query_time:.3f}초, {len(rows)}개 행")
-                # print(f"🔍 [get_items] DB 쿼리 결과: {len(rows)}개 행")
                 
                 # form_type 조회 (키 순서 정렬용, 미제공 시에만 조회)
                 if form_type is None:
@@ -424,8 +412,8 @@ class ItemsMixin:
                         doc_info = self.get_document(pdf_filename)
                         if doc_info:
                             form_type = doc_info.get("form_type")
-                    except Exception as form_type_error:
-                        print(f"  ⚠️ [get_items] form_type 조회 실패: {form_type_error}")
+                    except Exception:
+                        pass
                 
                 # 벡터 DB에서 키 순서 가져오기 (미제공 시에만 조회)
                 if item_key_order is None and form_type:
@@ -435,8 +423,8 @@ class ItemsMixin:
                         key_order = rag_manager.get_key_order_by_form_type(form_type)
                         if key_order:
                             item_key_order = key_order.get("item_keys")
-                    except Exception as key_order_error:
-                        print(f"  ⚠️ [get_items] 벡터 DB에서 키 순서 조회 실패: {key_order_error}")
+                    except Exception:
+                        pass
                 
                 results = []
                 for row in rows:
@@ -507,17 +495,13 @@ class ItemsMixin:
                                 if item_key not in item_key_order:
                                     reordered_item[item_key] = merged_item[item_key]
                             merged_item = reordered_item
-                        except Exception as reorder_error:
-                            print(f"  ⚠️ [get_items] 키 순서 정렬 실패: {reorder_error}")
+                        except Exception:
+                            pass
                     
                     results.append(merged_item)
                 
-                # print(f"✅ [get_items] 성공: {len(results)}개 items 반환")
                 return results
-        except Exception as e:
-            print(f"❌ [get_items] 항목 조회 실패: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return []
     
     def get_page_result(
@@ -536,14 +520,11 @@ class ItemsMixin:
             페이지 파싱 결과 딕셔너리 또는 None
         """
         total_start = time.perf_counter()  # 전체 메서드 시간 측정 시작
-        print(f"🔍 [get_page_result] 시작: pdf_filename={pdf_filename}, page_num={page_num}")
         
         try:
             # 1. 먼저 문서 정보 조회 (테이블 선택 및 form_type 확인용)
             query_start = time.perf_counter()  # get_document 시간 측정 시작
             doc_info = self.get_document(pdf_filename)
-            query_time = time.perf_counter() - query_start
-            print(f"⏱️ [DB 성능] get_page_result - get_document: {query_time:.3f}초")
             
             form_type = None
             data_year = None
@@ -588,34 +569,22 @@ class ItemsMixin:
                         """, (pdf_filename, page_num))
                         page_row = cursor.fetchone()
             
-            query_time = time.perf_counter() - query_start
-            print(f"⏱️ [DB 성능] get_page_result - page_data 조회: {query_time:.3f}초")
                     
             # 3. 키 순서 조회 (벡터 DB)
             item_key_order = None
-            try:
-                    
-                if form_type:
-                    try:
-                        query_start = time.perf_counter()  # 벡터 DB 조회 시간 측정 시작
-                        from modules.core.rag_manager import get_rag_manager
-                        rag_manager = get_rag_manager()
-                        key_order = rag_manager.get_key_order_by_form_type(form_type)
-                        if key_order:
-                            item_key_order = key_order.get("item_keys")
-                        query_time = time.perf_counter() - query_start
-                        print(f"⏱️ [DB 성능] get_page_result - 벡터 DB 조회: {query_time:.3f}초")
-                    except Exception as key_order_error:
-                        print(f"  ⚠️ [get_page_result] 벡터 DB에서 키 순서 조회 실패: {key_order_error}")
-            except Exception as form_type_error:
-                print(f"  ⚠️ [get_page_result] form_type 조회 실패: {form_type_error}")
+            if form_type:
+                try:
+                    from modules.core.rag_manager import get_rag_manager
+                    rag_manager = get_rag_manager()
+                    key_order = rag_manager.get_key_order_by_form_type(form_type)
+                    if key_order:
+                        item_key_order = key_order.get("item_keys")
+                except Exception:
+                    pass
             
             # 4. items 조회 (form_type과 키 순서를 전달하여 중복 조회 방지)
             query_start = time.perf_counter()  # get_items 시간 측정 시작
             items = self.get_items(pdf_filename, page_num, form_type=form_type, item_key_order=item_key_order, year=data_year, month=data_month)
-            query_time = time.perf_counter() - query_start
-            print(f"⏱️ [DB 성능] get_page_result - get_items: {query_time:.3f}초, {len(items)}개 items")
-            print(f"🔍 [get_page_result] 조회된 items 수: {len(items)}개")
             
             # 5. 페이지 이미지 확인 (성능 최적화: 경로만 확인, 실제 파일 읽기 생략)
             # 파일 읽기는 느리므로 경로 존재 여부만 확인
@@ -630,7 +599,6 @@ class ItemsMixin:
                 
             # page_data도 없고 items도 없고 이미지도 없으면 페이지가 존재하지 않음
             if not page_row and not items and not has_image:
-                print(f"⚠️ [get_page_result] 페이지가 존재하지 않음")
                 return None
             
             # 6. page_meta 파싱
@@ -694,17 +662,8 @@ class ItemsMixin:
                 # 키 순서가 없으면 기존 방식 사용 (하위 호환성)
                 page_json = self._reorder_by_original_file(pdf_filename, page_num, page_json, is_page=True, form_type=form_type)
             
-            total_time = time.perf_counter() - total_start  # 전체 메서드 시간 측정 종료
-            if items:
-                print(f"✅ [get_page_result] 성공: {len(items)}개 items 반환, 전체 시간: {total_time:.3f}초")
-            else:
-                print(f"ℹ️ [get_page_result] items 없음 (빈 페이지 또는 표지 페이지), 전체 시간: {total_time:.3f}초")
-            
             return page_json
-        except Exception as e:
-            print(f"❌ [get_page_result] 페이지 조회 실패: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             return None
     
     def get_page_results(
@@ -772,7 +731,6 @@ class ItemsMixin:
                 
                 return results
         except Exception as e:
-            print(f"⚠️ 페이지 결과 조회 실패: {e}")
             return []
 
     def create_item(
