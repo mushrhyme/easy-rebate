@@ -12,7 +12,12 @@ export default defineConfig({
   },
   server: {
     host: '0.0.0.0', // 외부 접속 허용
-    port: 3000,
+    port: 3002, // 프론트엔드 포트
+    allowedHosts: [
+      'dlab.nongshim.com', // 도메인 접속 허용
+      'localhost',
+      '.localhost',
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

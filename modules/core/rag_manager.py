@@ -10,6 +10,44 @@ import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from threading import Lock
 import faiss
+import ssl
+import urllib3
+
+# SSL 인증서 검증 비활성화 (프록시/자체 서명 인증서 환경 대응)
+# 내부 네트워크 환경에서 Hugging Face 모델 다운로드 시 필요
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# 환경 변수 설정
+os.environ.setdefault("PYTHONHTTPSVERIFY", "0")
+os.environ.setdefault("CURL_CA_BUNDLE", "")
+os.environ.setdefault("REQUESTS_CA_BUNDLE", "")
+
+# httpx 클라이언트 SSL 검증 비활성화 (huggingface_hub가 httpx를 사용)
+try:
+    import httpx
+    # httpx 클라이언트의 기본 verify 값을 False로 설정
+    original_client_init = httpx.Client.__init__
+    original_async_client_init = httpx.AsyncClient.__init__
+    
+    def patched_client_init(self, *args, verify=None, **kwargs):
+        if verify is None:
+            verify = False
+        return original_client_init(self, *args, verify=verify, **kwargs)
+    
+    def patched_async_client_init(self, *args, verify=None, **kwargs):
+        if verify is None:
+            verify = False
+        return original_async_client_init(self, *args, verify=verify, **kwargs)
+    
+    httpx.Client.__init__ = patched_client_init
+    httpx.AsyncClient.__init__ = patched_async_client_init
+except ImportError:
+    # httpx가 설치되지 않은 경우 무시
+    pass
+except Exception as e:
+    # 패치 실패해도 계속 진행
+    print(f"⚠️ httpx SSL 패치 중 경고 (무시 가능): {e}")
 
 
 class RAGManager:
@@ -56,7 +94,9 @@ class RAGManager:
             with RAGManager._model_lock:
                 if self._embedding_model is None:
                     try:
+                        # Tokenizers 병렬 처리 비활성화
                         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+                        
                         from sentence_transformers import SentenceTransformer
                         self._embedding_model = SentenceTransformer(
                             'paraphrase-multilingual-MiniLM-L12-v2'

@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 def is_local_network_origin(origin: str) -> bool:
-    """로컬 네트워크 IP인지 확인"""
+    """로컬 네트워크 IP 또는 설정된 도메인인지 확인"""
     if not origin:
         return False
     try:
@@ -25,6 +25,17 @@ def is_local_network_origin(origin: str) -> bool:
         # localhost, 127.0.0.1 체크
         if host in ["localhost", "127.0.0.1"]:
             return True
+        
+        # LOCAL_IP 환경 변수에서 도메인 확인
+        local_ip = os.getenv('LOCAL_IP', '')
+        if local_ip:
+            # http:// 또는 https:// 제거
+            domain = local_ip.replace("http://", "").replace("https://", "")
+            # 포트가 포함되어 있으면 제거
+            if ":" in domain:
+                domain = domain.split(":")[0]
+            if host == domain:
+                return True
         
         # 로컬 네트워크 IP 범위 체크
         parts = host.split(".")
@@ -188,13 +199,13 @@ async def processing_status(websocket: WebSocket, task_id: str):
         print(f"   허용된 origins: {settings.CORS_ORIGINS}")
         await websocket.close(code=403, reason="Origin not allowed")
         return
-    elif origin:
-        print(f"✅ WebSocket origin 허용: {origin}")
+    # elif origin:
+    #     print(f"✅ WebSocket origin 허용: {origin}")
     
     try:
         # manager.connect에서 websocket.accept() 호출
         await manager.connect(websocket, task_id)
-        print(f"✅ WebSocket 연결 성공: task_id={task_id}")
+        # print(f"✅ WebSocket 연결 성공: task_id={task_id}")
     except Exception as e:
         print(f"❌ WebSocket 연결 실패: {e}")
         try:
@@ -256,11 +267,11 @@ async def item_locks(websocket: WebSocket):
         await websocket.close(code=403, reason="Origin not allowed")
         return
     elif origin:
-        print(f"✅ WebSocket origin 허용: {origin}")
+        print(f" origin 허용: {origin}")
     
     try:
         await websocket.accept()
-        print(f"✅ WebSocket 연결 수락 (locks): origin={origin}")
+        # print(f"✅ WebSocket 연결 수락 (locks): origin={origin}")
     except Exception as e:
         print(f"❌ WebSocket accept 실패: {e}")
         import traceback
@@ -288,8 +299,8 @@ async def item_locks(websocket: WebSocket):
                     return
                 
                 await manager.subscribe_page(websocket, pdf_filename, page_number)
-                print(f"✅ [구독] 페이지 구독 완료: pdf_filename={pdf_filename}, page_number={page_number}")
-                print(f"   page_key: {pdf_filename}::{page_number}")
+                # print(f"✅ [구독] 페이지 구독 완료: pdf_filename={pdf_filename}, page_number={page_number}")
+                # print(f"   page_key: {pdf_filename}::{page_number}")
                 
                 # 현재 활성 락 목록 조회
                 from database.registry import get_db
@@ -320,7 +331,7 @@ async def item_locks(websocket: WebSocket):
                             {"item_id": lock[0], "locked_by": lock[1]}
                             for lock in active_locks
                         ]
-                    print(f"📋 [구독] 현재 활성 락: {len(current_locks)}개")
+                    # print(f"📋 [구독] 현재 활성 락: {len(current_locks)}개")
                 except Exception as e:
                     print(f"⚠️ [구독] 활성 락 조회 실패: {e}")
                     import traceback
