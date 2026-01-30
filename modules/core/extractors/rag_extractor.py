@@ -92,6 +92,61 @@ def convert_numpy_types(obj: Any) -> Any:
         return obj
 
 
+def _vertices_to_rect(vertices):
+    if not vertices:
+        return None
+    xs = [v["x"] for v in vertices]
+    ys = [v["y"] for v in vertices]
+    left = min(xs)
+    top = min(ys)
+    right = max(xs)
+    bottom = max(ys)
+    return {"left": left, "top": top, "width": right - left, "height": bottom - top}
+
+
+def _bbox_from_word_indices(words: list, indices: list) -> Optional[Dict[str, float]]:
+    """단어 인덱스 리스트로 union bbox 계산 (페이지 픽셀 좌표)."""
+    if not words or not indices:
+        return None
+    rects = []
+    for i in indices:
+        if i < 0 or i >= len(words):
+            continue
+        w = words[i]
+        bbox = w.get("boundingBox") or w.get("bounding_box")
+        if not bbox:
+            continue
+        vert = bbox.get("vertices")
+        rect = _vertices_to_rect(vert)
+        if rect:
+            rects.append(rect)
+    if not rects:
+        return None
+    left = min(r["left"] for r in rects)
+    top = min(r["top"] for r in rects)
+    right = max(r["left"] + r["width"] for r in rects)
+    bottom = max(r["top"] + r["height"] for r in rects)
+    return {"left": left, "top": top, "width": right - left, "height": bottom - top}
+
+
+def _attach_bbox_to_json(obj: Any, words: list, path: str = "") -> None:
+    """재귀적으로 _word_indices를 bbox로 변환해 _bbox 키로 붙인다. 리스트/딕셔너리만 순회."""
+    if isinstance(obj, dict):
+        keys = list(obj.keys())
+        for key in keys:
+            if key.endswith("_word_indices"):
+                base = key[:- len("_word_indices")]
+                if base in obj and isinstance(obj[key], list):
+                    bbox = _bbox_from_word_indices(words, obj[key])
+                    if bbox is not None:
+                        obj[base + "_bbox"] = bbox
+            else:
+                _attach_bbox_to_json(obj[key], words, path + "." + key if path else key)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            _attach_bbox_to_json(item, words, path + f"[{i}]")
+
+
 def extract_json_with_rag(
     ocr_text: str,
     question: Optional[str] = None,
@@ -103,7 +158,10 @@ def extract_json_with_rag(
     debug_dir: Optional[str] = None,
     page_num: Optional[int] = None,
     prompt_version: str = "v3",  # 사용하지 않음 (호환성 유지용)
-    form_type: Optional[str] = None
+    form_type: Optional[str] = None,
+    ocr_words: Optional[list] = None,
+    page_width: Optional[int] = None,
+    page_height: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     RAG 기반 JSON 추출
@@ -151,12 +209,11 @@ def extract_json_with_rag(
         else:
             progress_callback("벡터 DB에서 유사한 예제 검색 중...")
 
-    # 양식지 06의 경우에는 전체 벡터 DB를 참고하기 위해
-    # 검색 시에는 form_type 필터를 사용하지 않는다.
+    # 03/04/06: 전체 벡터 DB 참조 (form_type 필터 없이 검색)
     effective_form_type = None
     if form_type:
-        # '6' / '06' 모두 허용
-        if str(form_type).zfill(2) != "06":
+        fn = str(form_type).zfill(2)
+        if fn not in ("03", "04", "06"):
             effective_form_type = form_type
 
     # 하이브리드 검색 사용 (form_type별, 단 06은 전체 DB)
@@ -240,29 +297,42 @@ def extract_json_with_rag(
             print(f"⚠️ 디버깅 정보 저장 실패: {debug_error}")
             print(f"  상세:\n{traceback.format_exc()}")
     
-    # 2. 프롬프트 구성 (config에서 지정한 단일 프롬프트 파일 사용)
+    # 2. 프롬프트 구성 (ocr_words 있으면 단어 인덱스 형식으로 전달)
     prompt_template = load_rag_prompt()
-    
+    text_for_prompt = ocr_text
+    word_index_instruction = ""
+    if ocr_words and len(ocr_words) > 0:
+        lines = [f"{i}\t{(w.get('text') or '').strip()}" for i, w in enumerate(ocr_words)]
+        text_for_prompt = "\n".join(lines)
+        word_index_instruction = """
+
+WORD_INDEX RULES (좌표 부여용, 반드시 준수):
+- 위 TARGET_OCR은 한 줄에 "단어인덱스(0부터)\\t단어텍스트" 형태로 나열된 것이다.
+- **문자열 값을 추출하는 모든 필드**에 대해, 같은 키 이름 뒤에 _word_indices 를 붙여
+  해당 값이 TARGET_OCR의 어느 단어 인덱스들로 구성되는지 JSON 배열로 반드시 출력한다.
+- 예: 商品名: "農心 辛ラーメン" 이면 商品名_word_indices: [5, 6, 7] 처럼 해당 단어 인덱스 배열을 함께 출력.
+- items 배열 안의 각 객체 필드(商品名, 金額, 得意先 등)도 모두 해당 필드별로 _word_indices 를 출력한다.
+- null 값인 필드는 _word_indices 를 출력하지 않는다.
+"""
+
     if similar_examples:
-        # 예제가 있는 경우: Example-augmented RAG
-        example = similar_examples[0]  # 가장 유사한 예제 사용
-        example_ocr = example["ocr_text"]  # RAG 예제의 OCR 텍스트 (given_text)
-        example_answer = example["answer_json"]  # RAG 예제의 정답 JSON (given_answer)
+        example = similar_examples[0]
+        example_ocr = example["ocr_text"]
+        example_answer = example["answer_json"]
         example_answer_str = json.dumps(example_answer, ensure_ascii=False, indent=2)
-        
         prompt = prompt_template.format(
             example_ocr=example_ocr,
             example_answer_str=example_answer_str,
-            ocr_text=ocr_text
+            ocr_text=text_for_prompt
         )
     else:
-        # 예제가 없는 경우: 같은 프롬프트 템플릿 사용 (예제 필드에 빈 값 사용)
-        # 프롬프트 템플릿이 예제를 요구하는 경우를 대비해 빈 값으로 채움
         prompt = prompt_template.format(
             example_ocr="",
             example_answer_str="{}",
-            ocr_text=ocr_text
+            ocr_text=text_for_prompt
         )
+    if word_index_instruction:
+        prompt = prompt.replace("ANSWER:\n", word_index_instruction.strip() + "\n\nANSWER:\n", 1)
     
     # 디버깅: 프롬프트 저장 (항상 저장)
     try:
@@ -449,18 +519,18 @@ def extract_json_with_rag(
                                 print(f"  ⚠️ {key}가 NaN이어서 null로 변환했습니다.")
             
             # 키 순서 재정렬 (REFERENCE_JSON이 있는 경우)
-            # normalize_nan이 딕셔너리를 재생성하므로 순서가 바뀔 수 있음
-            # 따라서 NaN 정규화 후에 다시 재정렬 필요
             if similar_examples and len(similar_examples) > 0:
                 example = similar_examples[0]
-                
-                # DB의 메타데이터에서 키 순서 가져오기 (img 폴더 접근 불필요)
-                # RAG 검색 결과의 메타데이터에 이미 key_order가 저장되어 있음
                 key_order = example.get("key_order")
                 if key_order:
-                    # 메타데이터의 키 순서로 결과 JSON 정렬
                     result_json = _reorder_json_by_key_order(result_json, key_order)
-            
+
+            # 03/04: LLM이 준 _word_indices를 bbox로 변환해 _bbox로 저장
+            if ocr_words:
+                _attach_bbox_to_json(result_json, ocr_words)
+                if page_width is not None and page_height is not None:
+                    result_json["_page_bbox"] = {"width": page_width, "height": page_height}
+
             # 디버깅: 파싱된 JSON 저장
             if debug_dir and page_num:
                 try:

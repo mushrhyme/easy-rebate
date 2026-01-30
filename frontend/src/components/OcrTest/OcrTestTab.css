@@ -1,0 +1,292 @@
+.ocr-test-tab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 1rem;
+  background: #f8f9fa;
+}
+
+.ocr-test-header {
+  flex-shrink: 0;
+  margin-bottom: 1rem;
+}
+
+.ocr-test-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 0.25rem 0;
+}
+
+.ocr-test-desc {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin: 0;
+}
+
+.ocr-test-upload-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.ocr-test-file-input {
+  font-size: 0.875rem;
+}
+
+.ocr-test-run-btn {
+  padding: 0.5rem 1rem;
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ocr-test-run-btn:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.ocr-test-run-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ocr-test-error {
+  padding: 0.75rem 1rem;
+  background: #fef2f2;
+  color: #b91c1c;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+}
+
+.ocr-test-main {
+  flex: 1;
+  display: flex;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.ocr-test-image-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.ocr-test-image-container {
+  flex: 1;
+  overflow: auto;
+  max-height: 70vh;
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.ocr-test-image-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.ocr-test-image-wrapper img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  vertical-align: top;
+}
+
+.ocr-test-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ocr-test-highlight {
+  position: absolute;
+  background: rgba(59, 130, 246, 0.35);
+  border: 2px solid #3b82f6;
+  border-radius: 2px;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.ocr-test-words-panel {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.ocr-test-words-label {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+
+.ocr-test-words-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.ocr-test-word-chip {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ocr-test-word-chip:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.ocr-test-word-chip.active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+/* 行（意味単位）リスト */
+.ocr-test-lines-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.ocr-test-line-chip {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8125rem;
+  text-align: left;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.ocr-test-line-chip:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.ocr-test-line-chip.active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.ocr-test-full-text {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e5e7eb;
+}
+
+.ocr-test-full-text-label {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-bottom: 0.25rem;
+}
+
+.ocr-test-full-text-content {
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  color: #374151;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.ocr-test-no-words,
+.ocr-test-hint {
+  font-size: 0.875rem;
+  color: #9ca3af;
+}
+
+/* 構造化JSON入力・構造リスト */
+.ocr-test-structured-section {
+  margin-bottom: 0.75rem;
+}
+
+.ocr-test-json-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  font-size: 0.75rem;
+  font-family: ui-monospace, monospace;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.ocr-test-structure-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 1rem;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.ocr-test-structure-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8125rem;
+  text-align: left;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ocr-test-structure-row:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.ocr-test-structure-key {
+  flex-shrink: 0;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.ocr-test-structure-value {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: #111827;
+}

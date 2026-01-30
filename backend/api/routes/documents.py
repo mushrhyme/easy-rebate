@@ -394,6 +394,79 @@ async def upload_documents(
     }
 
 
+@router.post("/upload-with-bbox", response_model=dict)
+async def upload_documents_with_bbox(
+    form_type: str = Form(...),
+    files: List[UploadFile] = File(...),
+    year: Optional[int] = Form(None),
+    month: Optional[int] = Form(None),
+    background_tasks: BackgroundTasks = None,
+    current_user_id: int = Depends(get_current_user_id),
+    db=Depends(get_db)
+):
+    """
+    PDF 업로드 후 좌표 포함 파싱 (새 탭 전용).
+    form_type 03/04일 때 Upstage 단어 좌표 + LLM _word_indices → _bbox 부여.
+    """
+    if form_type not in ["01", "02", "03", "04", "05", "06"]:
+        raise HTTPException(status_code=400, detail="Invalid form_type. Must be 01-06")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    if month is not None and not (1 <= month <= 12):
+        raise HTTPException(status_code=422, detail=f"Invalid month: {month}. Must be 1-12")
+
+    session_id = SessionManager.generate_session_id()
+    results = []
+    for uploaded_file in files:
+        try:
+            pdf_name = Path(uploaded_file.filename).stem
+            file_bytes = await uploaded_file.read()
+            if len(file_bytes) > settings.MAX_UPLOAD_SIZE:
+                results.append({
+                    "filename": uploaded_file.filename,
+                    "status": "error",
+                    "error": f"File size exceeds {settings.MAX_UPLOAD_SIZE / 1024 / 1024}MB"
+                })
+                continue
+            pdf_filename = f"{pdf_name}.pdf"
+            doc_info = db.check_document_exists(pdf_filename)
+            if doc_info["exists"]:
+                results.append({
+                    "filename": uploaded_file.filename,
+                    "status": "exists",
+                    "pages": doc_info.get("total_pages", 0)
+                })
+            else:
+                results.append({
+                    "filename": uploaded_file.filename,
+                    "status": "pending",
+                    "pdf_name": pdf_name
+                })
+                if background_tasks:
+                    background_tasks.add_task(
+                        process_pdf_background,
+                        file_bytes=file_bytes,
+                        pdf_name=pdf_name,
+                        form_type=form_type,
+                        session_id=session_id,
+                        user_id=current_user_id,
+                        data_year=year,
+                        data_month=month,
+                        include_bbox=True,
+                    )
+        except Exception as e:
+            results.append({
+                "filename": uploaded_file.filename,
+                "status": "error",
+                "error": str(e)
+            })
+    return {
+        "message": "Files uploaded (with bbox)",
+        "results": results,
+        "session_id": session_id
+    }
+
+
 async def process_pdf_background(
     file_bytes: bytes,
     pdf_name: str,
@@ -401,7 +474,8 @@ async def process_pdf_background(
     session_id: str,
     user_id: int,
     data_year: Optional[int] = None,
-    data_month: Optional[int] = None
+    data_month: Optional[int] = None,
+    include_bbox: bool = False,
 ):
     """
     백그라운드에서 PDF 처리
@@ -459,7 +533,8 @@ async def process_pdf_background(
                 form_type=form_type,
                 user_id=user_id,
                 data_year=data_year,
-                data_month=data_month
+                data_month=data_month,
+                include_bbox=include_bbox,
             )
         )
         

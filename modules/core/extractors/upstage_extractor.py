@@ -190,7 +190,62 @@ class UpstageExtractor:
             import traceback
             traceback.print_exc()
             return None
-    
+
+    def extract_from_image_raw(self, image_path: Optional[Path] = None, image_bytes: Optional[bytes] = None) -> Optional[dict]:
+        """
+        Upstage OCR API를 호출하여 이미지에서 텍스트를 추출하고,
+        **전체 API 응답(bbox 포함)** 을 그대로 반환합니다. 캐시 미사용.
+        테스트/하이라이트 UI용.
+
+        Args:
+            image_path: 이미지 파일 경로 (image_bytes가 없을 때 사용)
+            image_bytes: 이미지 바이트 (업로드 파일 등)
+
+        Returns:
+            API 응답 dict (pages[].words[].boundingBox 등) 또는 None
+        """
+        if not self.api_key:
+            print("⚠️ UPSTAGE_API_KEY 환경 변수가 설정되지 않았습니다.")
+            return None
+
+        file_to_close = None
+        try:
+            if image_bytes is not None:
+                files = {"document": ("image.png", image_bytes, "image/png")}
+            elif image_path and image_path.exists():
+                file_to_close = open(image_path, "rb")
+                files = {"document": file_to_close}
+            else:
+                print("⚠️ extract_from_image_raw: image_path 또는 image_bytes 필요")
+                return None
+
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            data = {"model": "ocr"}
+            response = requests.post(self.api_url, headers=headers, files=files, data=data)
+            if file_to_close:
+                file_to_close.close()
+                file_to_close = None
+
+            response.raise_for_status()
+            result = response.json()
+            if isinstance(result, dict) and ("pages" in result or "text" in result):
+                return result
+            print(f"⚠️ Upstage OCR 응답 형식 예상 외: {type(result)}")
+            return result if isinstance(result, dict) else None
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ Upstage OCR API 호출 실패: {e}")
+            return None
+        except Exception as e:
+            if file_to_close:
+                try:
+                    file_to_close.close()
+                except Exception:
+                    pass
+            print(f"⚠️ Upstage OCR 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def extract_from_pdf_page(self, pdf_path: Path, page_num: int, dpi: int = 300) -> Optional[str]:
         """
         PDF 페이지를 이미지로 변환한 후 Upstage OCR로 텍스트를 추출합니다.
@@ -272,7 +327,54 @@ class UpstageExtractor:
         except Exception as e:
             print(f"⚠️ PDF 페이지 이미지 변환 실패 ({pdf_path}, 페이지 {page_num}): {e}")
             return None
-    
+
+    def extract_from_pdf_page_raw(self, pdf_path: Path, page_num: int, dpi: int = 300) -> Optional[dict]:
+        """
+        PDF 페이지를 이미지로 변환한 후 Upstage OCR을 호출하고,
+        **전체 API 응답(words + bbox 포함)** 을 그대로 반환합니다. 캐시 미사용.
+        RAG/LLM에서 word_indices → bbox 매핑용.
+        """
+        try:
+            doc = fitz.open(pdf_path)
+            if page_num < 1 or page_num > doc.page_count:
+                doc.close()
+                return None
+            page = doc.load_page(page_num - 1)
+            pix = page.get_pixmap(dpi=dpi)
+            img_bytes = pix.tobytes("png")
+            doc.close()
+
+            try:
+                from modules.utils.image_rotation_utils import (
+                    detect_and_correct_rotation,
+                    is_rotation_detection_available,
+                )
+                if is_rotation_detection_available():
+                    image = Image.open(BytesIO(img_bytes))
+                    corrected_image, angle = detect_and_correct_rotation(image, return_angle=True)
+                    if angle and angle != 0:
+                        buf = BytesIO()
+                        if corrected_image.mode != "RGB":
+                            corrected_image = corrected_image.convert("RGB")
+                        corrected_image.save(buf, format="PNG")
+                        img_bytes = buf.getvalue()
+            except Exception:
+                pass
+
+            temp_image_path = pdf_path.parent / f"{pdf_path.stem}_Page{page_num}_temp.png"
+            with open(temp_image_path, "wb") as f:
+                f.write(img_bytes)
+            result = self.extract_from_image_raw(image_path=temp_image_path)
+            try:
+                if temp_image_path.exists():
+                    temp_image_path.unlink()
+            except Exception:
+                pass
+            return result
+        except Exception as e:
+            print(f"⚠️ PDF 페이지 raw OCR 실패 ({pdf_path}, 페이지 {page_num}): {e}")
+            return None
+
     def extract_from_pil_image(self, image: Image.Image, cache_path: Optional[Path] = None) -> Optional[str]:
         """
         PIL Image 객체에서 Upstage OCR로 텍스트를 추출합니다.

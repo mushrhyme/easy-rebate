@@ -205,7 +205,6 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
     setFileProgresses(initialProgresses)
 
     try {
-      // 선택한 년월을 API에 전달
       const response = await documentsApi.upload(formType, files, selectedYear, selectedMonth)
 
       // 선택된 년월을 로컬 스토리지에 저장 (양식지별로 독립적으로 저장)

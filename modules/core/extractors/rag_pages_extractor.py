@@ -31,7 +31,8 @@ def extract_pages_with_rag(
     similarity_threshold: Optional[float] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     form_type: Optional[str] = None,
-    debug_dir_name: str = "debug"  # 디버깅 폴더명 (기본값: "debug", 백엔드 경로에서는 "debug2" 사용)
+    debug_dir_name: str = "debug",  # 디버깅 폴더명
+    include_bbox: bool = False,  # True일 때만 03/04에서 단어 좌표 추출·LLM _word_indices·_bbox 부여 (새 탭 전용)
 ) -> tuple[List[Dict[str, Any]], List[str], Optional[List[Image.Image]]]:
     """
     PDF 파일을 RAG 기반으로 분석하여 페이지별 JSON 결과 반환
@@ -86,20 +87,19 @@ def extract_pages_with_rag(
     else:
         print(f"📋 양식지 번호 (전달받음): {form_type}")
     
-    # 1. DB에서 먼저 확인
+    # 1. DB에서 먼저 확인 (include_bbox=True면 캐시 스킵하고 항상 좌표 포함 재파싱)
     page_jsons = None
-    try:
-        from database.registry import get_db
-        db_manager = get_db()
-        page_jsons = db_manager.get_page_results(
-            pdf_filename=pdf_filename
-        )
-        if page_jsons and len(page_jsons) > 0:
-            print(f"💾 DB에서 기존 파싱 결과 로드: {len(page_jsons)}개 페이지")
-            image_paths = [None] * len(page_jsons)
-            return page_jsons, image_paths, None
-    except Exception as db_error:
-        print(f"⚠️ DB 확인 실패: {db_error}. 새로 파싱합니다.")
+    if not include_bbox:
+        try:
+            from database.registry import get_db
+            db_manager = get_db()
+            page_jsons = db_manager.get_page_results(pdf_filename=pdf_filename)
+            if page_jsons and len(page_jsons) > 0:
+                print(f"💾 DB에서 기존 파싱 결과 로드: {len(page_jsons)}개 페이지")
+                image_paths = [None] * len(page_jsons)
+                return page_jsons, image_paths, None
+        except Exception as db_error:
+            print(f"⚠️ DB 확인 실패: {db_error}. 새로 파싱합니다.")
     
     # 2. DB에 데이터가 없으면 RAG 기반 파싱
     # 디버깅 폴더 설정 (실제 분석을 수행할 때만 생성)
@@ -165,100 +165,108 @@ def extract_pages_with_rag(
         "page_details": []
     }
     
-    # 1단계: PDF에서 텍스트 추출 (config.py 설정에 따라 excel/upstage/pymupdf 사용)
+    # 1단계: PDF에서 텍스트 추출 (include_bbox=True이고 03/04일 때만 Upstage full로 단어 좌표 확보)
     print(f"📝 1단계: PDF 텍스트 추출 시작 ({len(images)}개 페이지)")
-    
-    # PDF 텍스트 추출기 생성 (캐싱 지원 - 여러 페이지 처리 시 성능 향상, form_type 전달하여 config.py 설정 따르기)
-    text_extractor = PdfTextExtractor(form_number=form_type)
     pdf_path_obj = Path(pdf_path)
-    
-    ocr_texts = []  # OCR 텍스트 저장
-    
+    ocr_texts = []
+    ocr_words_list = [None] * len(images)
+
+    use_upstage_raw = include_bbox and form_type in ("03", "04")
+
+    if use_upstage_raw:
+        from modules.core.extractors.upstage_extractor import get_upstage_extractor
+        upstage_extractor = get_upstage_extractor(enable_cache=False)
+    else:
+        text_extractor = PdfTextExtractor(form_number=form_type)
+
     try:
         for idx, image in enumerate(images):
             page_num = idx + 1
             total_pages = len(images)
-            
+
             if progress_callback:
                 progress_callback(page_num, total_pages, f"🔍 페이지 {page_num}/{total_pages}: 텍스트 추출 중...")
-            
+
             print(f"페이지 {page_num}/{total_pages} 텍스트 추출 중...", end="", flush=True)
-            
+
             try:
-                # 디버깅: 원본 이미지 저장
+                os.makedirs(debug_dir, exist_ok=True)
                 try:
-                    os.makedirs(debug_dir, exist_ok=True)
                     debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
                     image.save(debug_image_path, "PNG")
-                    print(f"  💾 디버깅: 원본 이미지 저장 완료 - {debug_image_path}")
                 except Exception as debug_error:
                     print(f"  ⚠️ 원본 이미지 저장 실패: {debug_error}")
-                
-                # PDF에서 텍스트 추출 (config.py 설정에 따라 excel/upstage/pymupdf 사용)
-                ocr_text = text_extractor.extract_text(pdf_path_obj, page_num)
-                
-                if not ocr_text or len(ocr_text.strip()) == 0:
-                    print(f"  ⚠️ 텍스트가 비어있습니다")
-                    ocr_texts.append(None)
+
+                if use_upstage_raw:
+                    raw = upstage_extractor.extract_from_pdf_page_raw(pdf_path_obj, page_num)
+                    if not raw or not raw.get("pages"):
+                        print(f"  ⚠️ Upstage raw 결과 없음")
+                        ocr_texts.append(None)
+                    else:
+                        page_data = raw["pages"][0]
+                        ocr_text = page_data.get("text") or raw.get("text") or ""
+                        ocr_text = normalize_ocr_text(ocr_text or "", use_fullwidth=True)
+                        ocr_texts.append(ocr_text if ocr_text.strip() else None)
+                        words = page_data.get("words") or []
+                        w, h = page_data.get("width", 1), page_data.get("height", 1)
+                        ocr_words_list[idx] = {"words": words, "width": w, "height": h} if words else None
+                        print(f" 완료 (길이: {len(ocr_text or '')} 문자, 단어 {len(words)}개)")
                 else:
-                    # OCR 텍스트 정규화 (반각 → 전각 변환)
-                    ocr_text = normalize_ocr_text(ocr_text, use_fullwidth=True)  # 정규화된 OCR 텍스트
-                    ocr_texts.append(ocr_text)
-                    print(f" 완료 (길이: {len(ocr_text)} 문자)")
-                    
+                    ocr_text = text_extractor.extract_text(pdf_path_obj, page_num)
+                    if not ocr_text or len(ocr_text.strip()) == 0:
+                        print(f"  ⚠️ 텍스트가 비어있습니다")
+                        ocr_texts.append(None)
+                    else:
+                        ocr_text = normalize_ocr_text(ocr_text, use_fullwidth=True)
+                        ocr_texts.append(ocr_text)
+                        print(f" 완료 (길이: {len(ocr_text)} 문자)")
             except Exception as e:
                 error_msg = str(e)
                 print(f" 실패 - {error_msg}")
-                ocr_texts.append(None)  # 실패한 페이지는 None으로 표시
+                ocr_texts.append(None)
     finally:
-        # PDF 텍스트 추출기 캐시 정리
-        text_extractor.close_all()
-    
+        if not use_upstage_raw:
+            text_extractor.close_all()
+
     print(f"✅ 텍스트 추출 완료: {len([t for t in ocr_texts if t is not None])}/{len(images)}개 페이지 성공\n")
     
     # 2단계: RAG+LLM 병렬 처리 (OCR 텍스트가 있는 페이지만)
     stats_lock = Lock()
     
-    def process_rag_llm(idx: int, ocr_text: str) -> tuple[int, Dict[str, Any], Optional[str]]:
+    def process_rag_llm(idx: int, ocr_text: str, ocr_words_data: Optional[Dict[str, Any]] = None) -> tuple[int, Dict[str, Any], Optional[str]]:
         """
         RAG+LLM 처리 함수 (스레드에서 실행)
-        
-        Args:
-            idx: 페이지 인덱스 (0부터 시작)
-            ocr_text: OCR 추출된 텍스트
-        
-        Returns:
-            (페이지 인덱스, 페이지 JSON 결과, 에러 메시지) 튜플
+        ocr_words_data가 있으면(03/04) 단어 인덱스→좌표를 LLM 출력에 붙인다.
         """
         page_num = idx + 1
         total_pages = len(images)
         page_detail = {"page_num": page_num, "status": "unknown", "items_count": 0, "error": None}
         process_start_time = time.time()
-        
+
         try:
             if progress_callback:
                 progress_callback(page_num, total_pages, f"🔎 페이지 {page_num}/{total_pages}: RAG 검색 중...")
-            
+
             print(f"페이지 {page_num}/{total_pages} RAG+LLM 처리 중...", end="", flush=True)
-            
-            # RAG 추출용 progress_callback 래퍼
+
             def rag_progress_wrapper(msg: str):
                 if progress_callback:
                     progress_callback(page_num, total_pages, f"🤖 페이지 {page_num}/{total_pages}: {msg}")
-            
-            # RAG 검색 시간 측정
-            rag_start_time = time.time()
+
             page_json = extract_json_with_rag(
                 ocr_text=ocr_text,
                 question=question,
                 model_name=openai_model,
-                temperature=None,  # None이면 API 호출 시 포함하지 않음 (모델 기본값 사용)
+                temperature=None,
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
                 progress_callback=rag_progress_wrapper if progress_callback else None,
                 debug_dir=str(debug_dir),
                 page_num=page_num,
-                form_type=form_type  # 양식지 번호 전달
+                form_type=form_type,
+                ocr_words=ocr_words_data["words"] if ocr_words_data else None,
+                page_width=ocr_words_data["width"] if ocr_words_data else None,
+                page_height=ocr_words_data["height"] if ocr_words_data else None,
             )
             rag_end_time = time.time()
             total_duration = rag_end_time - process_start_time
@@ -314,7 +322,11 @@ def extract_pages_with_rag(
     
     # RAG+LLM 병렬 처리
     page_results = {}
-    valid_ocr_indices = [(idx, ocr_text) for idx, ocr_text in enumerate(ocr_texts) if ocr_text is not None]
+    valid_ocr_indices = [
+        (idx, ocr_text, ocr_words_list[idx] if idx < len(ocr_words_list) else None)
+        for idx, ocr_text in enumerate(ocr_texts)
+        if ocr_text is not None
+    ]
     
     if len(valid_ocr_indices) == 0:
         # OCR이 모두 실패한 경우
@@ -338,8 +350,8 @@ def extract_pages_with_rag(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 유효한 OCR 텍스트에 대해 Future 제출
             future_to_idx = {
-                executor.submit(process_rag_llm, idx, ocr_text): idx
-                for idx, ocr_text in valid_ocr_indices
+                executor.submit(process_rag_llm, idx, ocr_text, ocr_words_data): idx
+                for idx, ocr_text, ocr_words_data in valid_ocr_indices
             }
             
             # 완료된 작업부터 처리
@@ -366,9 +378,8 @@ def extract_pages_with_rag(
         parallel_duration = parallel_end_time - parallel_start_time
         print(f"✅ 병렬 처리 완료: 총 {len(valid_ocr_indices)}개 페이지, 소요 시간: {parallel_duration:.2f}초 (평균 {parallel_duration/len(valid_ocr_indices):.2f}초/페이지)")
     else:
-        # 순차 처리 (OCR 텍스트가 1개일 때)
-        idx, ocr_text = valid_ocr_indices[0]
-        idx, page_json, error = process_rag_llm(idx, ocr_text)
+        idx, ocr_text, ocr_words_data = valid_ocr_indices[0]
+        idx, page_json, error = process_rag_llm(idx, ocr_text, ocr_words_data)
         page_results[idx] = page_json
     
     # OCR 실패한 페이지는 빈 결과로 추가

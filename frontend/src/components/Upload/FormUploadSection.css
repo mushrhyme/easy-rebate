@@ -126,10 +126,12 @@
   text-align: center;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  flex-shrink: 0; /* 고정 크기 */
+  flex-shrink: 0;
   background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
   position: relative;
   overflow: hidden;
+  margin-top: 0;
+  min-height: 0;
 }
 
 .file-input-label::before {
@@ -345,18 +347,22 @@
   flex-wrap: nowrap !important;
   align-items: center;
   gap: 0.75rem;
-  margin: 0.25rem 0 1.25rem;
-  flex-shrink: 0; /* 고정 크기 */
-  justify-content: center;
+  margin: 0.25rem 0 0.75rem;
+  flex-shrink: 0;
+  justify-content: flex-start;
   width: 100%;
+  max-width: 100%;
 }
 
 .btn-primary {
   flex: 0 0 auto !important;
-  min-width: 200px;
-  max-width: none !important;
+  min-width: 120px;
+  max-width: 200px !important;
   width: auto !important;
-  padding: 0.75rem 1.25rem;
+  padding: 0.6rem 1rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
