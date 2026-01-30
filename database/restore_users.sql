@@ -2,6 +2,10 @@
 -- 사용자 테이블 복구 스크립트
 -- users 테이블이 삭제되었거나 데이터가 없을 때 사용
 -- ============================================
+-- 사용자 데이터는 로그인ID.xlsx 기준으로 아래 스크립트로 반영:
+--   python -m database.sync_users_from_excel
+-- (엑셀 B열=username, D열=display_name)
+-- ============================================
 
 -- 사용자 테이블이 없으면 생성
 CREATE TABLE IF NOT EXISTS users (
@@ -24,14 +28,3 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     ip_address VARCHAR(45),
     user_agent TEXT
 );
-
--- 초기 관리자 사용자 생성 (이미 존재하면 무시)
--- username: admin, display_name: 관리자
-INSERT INTO users (username, display_name, is_active)
-VALUES ('admin', '관리자', TRUE)
-ON CONFLICT (username) DO NOTHING;
-
--- 사용 예시: 다른 사용자 추가
-INSERT INTO users (username, display_name, is_active, created_by_user_id)
-VALUES ('user1', '사용자1', TRUE, 1)
-ON CONFLICT (username) DO NOTHING;

@@ -7,13 +7,14 @@ import { FormUploadSection } from './components/Upload/FormUploadSection'
 import { CustomerSearch } from './components/Search/CustomerSearch'
 import { SAPUpload } from './components/SAPUpload/SAPUpload'
 import { RagAdminPanel } from './components/Admin/RagAdminPanel'
+import { OcrTestTab } from './components/OcrTest/OcrTestTab'
 import { documentsApi } from './api/client'
 import { FORM_TYPES } from './config/formConfig'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './components/Auth/Login'
 import './App.css'
 
-type Tab = 'upload' | 'search' | 'sap_upload' | 'rag_admin'
+type Tab = 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin'
 
 // 문서 인터페이스
 interface Document {
@@ -199,6 +200,14 @@ function AppContent() {
             </button>
             {isAdmin && (
               <button
+                className={`sidebar-button ${activeTab === 'ocr_test' ? 'active' : ''}`}
+                onClick={() => setActiveTab('ocr_test')}
+              >
+                OCRテスト
+              </button>
+            )}
+            {isAdmin && (
+              <button
                 className={`sidebar-button ${activeTab === 'rag_admin' ? 'active' : ''}`}
                 onClick={() => {
                   setActiveTab('rag_admin')
@@ -244,6 +253,12 @@ function AppContent() {
         {activeTab === 'sap_upload' && (
           <div className="sap-upload-tab-wrapper">
             <SAPUpload />
+          </div>
+        )}
+
+        {isAdmin && activeTab === 'ocr_test' && (
+          <div className="ocr-test-tab-wrapper">
+            <OcrTestTab />
           </div>
         )}
 

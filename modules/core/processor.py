@@ -32,7 +32,8 @@ class PdfProcessor:
         form_type: Optional[str] = None,
         user_id: Optional[int] = None,
         data_year: Optional[int] = None,
-        data_month: Optional[int] = None
+        data_month: Optional[int] = None,
+        include_bbox: bool = False,
     ) -> Tuple[bool, int, Optional[str], float]:
         """
         저장된 PDF 파일 처리
@@ -90,8 +91,9 @@ class PdfProcessor:
                     top_k=config.top_k,
                     similarity_threshold=config.similarity_threshold,
                     progress_callback=progress_callback,
-                    form_type=form_type,  # 양식지 번호 전달
-                    debug_dir_name="debug2"  # 백엔드/processor 경로에서는 debug2 폴더 사용
+                    form_type=form_type,
+                    debug_dir_name="debug2",
+                    include_bbox=include_bbox,
                 )
             except Exception as parse_error:
                 raise RuntimeError(f"PDF 파싱 실패: {parse_error}") from parse_error

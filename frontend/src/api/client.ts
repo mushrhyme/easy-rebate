@@ -179,6 +179,36 @@ export const documentsApi = {
   },
 
   /**
+   * 文書アップロード（座標付き解析・新タブ専用）
+   * 03/04でUpstage単語座標＋LLM _word_indices→_bbox付与
+   */
+  uploadWithBbox: async (
+    formType: string,
+    files: File[],
+    year?: number,
+    month?: number
+  ): Promise<UploadResponse> => {
+    const formData = new FormData()
+    formData.append('form_type', formType)
+    if (year !== undefined && year !== null && !isNaN(year) && year > 0) {
+      formData.append('year', year.toString())
+    }
+    if (month !== undefined && month !== null && !isNaN(month) && month > 0 && month <= 12) {
+      formData.append('month', month.toString())
+    }
+    files.forEach((file) => formData.append('files', file))
+    const sessionId = localStorage.getItem('sessionId')
+    const headers: Record<string, string> = {}
+    if (sessionId) headers['X-Session-ID'] = sessionId
+    const response = await client.post<UploadResponse>(
+      '/api/documents/upload-with-bbox',
+      formData,
+      { headers }
+    )
+    return response.data
+  },
+
+  /**
    * 文書一覧取得
    */
   getList: async (formType?: string): Promise<DocumentListResponse> => {
@@ -644,6 +674,56 @@ export const ragAdminApi = {
     }
     const response = await client.post('/api/rag-admin/build-from-learning-pages', payload)
     return response.data
+  },
+}
+
+/** OCR 테스트: 구조화(좌표付き) 요청 - DB 저장 없이 일회성 */
+export type OcrStructureRequest = {
+  ocr_text: string
+  words: OcrWord[]
+  page_width: number
+  page_height: number
+  form_type?: string
+}
+
+/** Upstage OCR 테스트용 API (bbox 포함 전체 응답) */
+export type OcrWord = {
+  id: number
+  text: string
+  confidence?: number
+  boundingBox?: {
+    vertices: Array< { x: number; y: number } >
+  }
+}
+
+export type OcrTestPage = {
+  id: number
+  text: string
+  width: number
+  height: number
+  confidence?: number
+  words?: OcrWord[]
+}
+
+export type OcrTestResponse = {
+  text?: string
+  pages?: OcrTestPage[]
+  metadata?: { pages?: Array<{ page: number; width: number; height: number }> }
+}
+
+export const ocrTestApi = {
+  /** 이미지 1장 업로드 → Upstage OCR 전체 응답 (bbox 포함) */
+  ocrImage: async (file: File): Promise<OcrTestResponse> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await client.post<OcrTestResponse>('/api/ocr-test/ocr', formData)
+    return response.data
+  },
+
+  /** OCR 결과로 구조화(좌표付き) - LLM _word_indices → _bbox, DB 저장 없음 */
+  structure: async (body: OcrStructureRequest): Promise<OcrTestResponse & Record<string, unknown>> => {
+    const response = await client.post<Record<string, unknown>>('/api/ocr-test/structure', body)
+    return response.data as OcrTestResponse & Record<string, unknown>
   },
 }
 

@@ -165,11 +165,17 @@ class TrainingManager:
                 # answer.json 파일 경로 (기본 버전: v1)
                 answer_json_path = pdf_folder / f"Page{page_num}_answer.json"
                 
-                # 필요한 필드만 추출 (page_role과 items만)
+                # 전체 페이지 결과 저장 (document_meta, party, payment, totals, items 등)
+                # page_number는 파일명에 반영되므로 제외
                 answer_data = {
-                    'page_role': page_result.get('page_role', 'detail'),
-                    'items': page_result.get('items', [])
+                    k: v for k, v in page_result.items()
+                    if k != 'page_number'
                 }
+                if not answer_data:
+                    answer_data = {
+                        'page_role': page_result.get('page_role', 'detail'),
+                        'items': page_result.get('items', [])
+                    }
                 
                 # 페이지 데이터를 JSON으로 저장
                 with open(answer_json_path, 'w', encoding='utf-8') as f:
