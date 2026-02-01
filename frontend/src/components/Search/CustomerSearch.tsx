@@ -101,32 +101,34 @@ export const CustomerSearch = () => {
     })
   }, [documentsData])
 
+  // 연월 선택 시 사용할 값: 선택된 연월이 있으면 그대로, 없으면 DB에 있는 연월 중 최신
+  const effectiveYearMonth = useMemo(() => {
+    if (selectedYearMonth) return selectedYearMonth
+    if (availableYearMonths.length > 0) return availableYearMonths[0]
+    return currentYearMonth
+  }, [selectedYearMonth, availableYearMonths, currentYearMonth])
+
   // 모든 페이지를 평탄화하여 리스트 생성 (검색어가 없을 때 사용)
-  // 선택된 연월(없으면 현재 연월)의 데이터만 필터링
+  // 선택된 연월(또는 기본 최신 연월)의 데이터만 필터링
   const allPages: Page[] = useMemo(() => {
     if (!documentsData?.documents) return []
 
-    const targetYearMonth = selectedYearMonth || currentYearMonth
-
+    const targetYearMonth = effectiveYearMonth
     const pages: Page[] = []
+
     documentsData.documents.forEach((doc: Document) => {
-      // 문서의 연월 정보 확인
       let docYear = doc.data_year
       let docMonth = doc.data_month
-
-      // data_year, data_month가 없으면 created_at으로 폴백
       if (!docYear || !docMonth) {
         const dateString = doc.created_at || doc.upload_date
         if (dateString) {
           const uploadDate = new Date(dateString)
           if (!isNaN(uploadDate.getTime())) {
-            docYear = docYear || uploadDate.getFullYear()
-            docMonth = docMonth || uploadDate.getMonth() + 1
+            docYear = docYear ?? uploadDate.getFullYear()
+            docMonth = docMonth ?? uploadDate.getMonth() + 1
           }
         }
       }
-
-      // 선택된 연월과 일치하는 문서만 포함
       if (docYear === targetYearMonth.year && docMonth === targetYearMonth.month) {
         for (let i = 1; i <= doc.total_pages; i++) {
           pages.push({
@@ -139,7 +141,7 @@ export const CustomerSearch = () => {
       }
     })
     return pages
-  }, [documentsData, currentYearMonth, selectedYearMonth])
+  }, [documentsData, effectiveYearMonth])
 
   // 검색 결과에서 페이지 리스트 생성 (검색어가 있을 때 사용)
   const searchPages: Page[] = useMemo(() => {
@@ -371,70 +373,40 @@ export const CustomerSearch = () => {
     )
   }
 
-  // 전체 문서가 없을 때
-  if (!searchQuery.trim() && allPages.length === 0) {
-    return (
-      <div className="customer-search">
-        {/* 페이지 내비게이션 섹션 (검색창 포함) */}
-        <div className="page-navigation-section">
-          <div className="page-nav-controls" style={{ display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'center', margin: '20px' }}>
-            {/* 검색창 */}
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => handleInputChange(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="取引先名で検索"
-              className="page-search-input"
-              style={{ width: '300px', padding: '10px' }}
-            />
-            {/* 검색 버튼 */}
-            <button
-              onClick={handleSearch}
-              style={{
-                padding: '10px 20px',
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              検索
-            </button>
-          </div>
-        </div>
-        <div className="no-results">アップロードされたファイルがありません。</div>
-      </div>
-    )
-  }
+  // 연월/검색 결과에 데이터가 없을 때는 아래 메인 레이아웃에서 처리 (드롭다운·그리드 영역 유지)
+
+  const hasNoData = displayPages.length === 0
+  const noDataMessage = searchQuery.trim()
+    ? '検索結果がありません。'
+    : documentsData?.documents?.length
+      ? '選択した期間にデータがありません。対象期間を変更してください。'
+      : 'アップロードされたファイルがありません。'
 
   return (
     <div className="customer-search">
-      {/* 이미지 섹션 */}
-      {currentPage && (
+      {/* 이미지 섹션: 데이터 있으면 이미지, 없으면 데이터 없음 메시지 */}
+      {currentPage ? (
         <div className="selected-page-content image-section">
           <PageImageViewer
             pdfFilename={currentPage.pdfFilename}
             pageNumber={currentPage.pageNumber}
           />
         </div>
-      )}
+      ) : hasNoData ? (
+        <div className="selected-page-content image-section no-data-placeholder">
+          <div className="no-results">{noDataMessage}</div>
+        </div>
+      ) : null}
 
       {/* 페이지 내비게이션 섹션 */}
       <div className="page-navigation-section">
         <div className="page-nav-controls">
-          {/* 연월 선택: 페이지 내비게이션 왼쪽 */}
+          {/* 연월 선택: DB에 있는 연월만 표시, 선택한 연월 기준으로 페이지 표시 */}
           <div className="year-month-selector inline">
             <span className="year-month-caption">対象期間</span>
             <select
               className="year-month-select"
-              value={
-                selectedYearMonth
-                  ? `${selectedYearMonth.year}-${selectedYearMonth.month}`
-                  : `${currentYearMonth.year}-${currentYearMonth.month}`
-              }
+              value={`${effectiveYearMonth.year}-${effectiveYearMonth.month}`}
               onChange={(e) => handleYearMonthChange(e.target.value)}
             >
               {!availableYearMonths.find(
@@ -472,7 +444,9 @@ export const CustomerSearch = () => {
 
           {/* 페이지 번호 배지 */}
           <div className="page-number-badge">
-            <span className="current-page-number">{currentPageIndex + 1}</span>
+            <span className="current-page-number">
+              {totalFilteredPages === 0 ? 0 : currentPageIndex + 1}
+            </span>
             <span className="total-pages-text">of {totalFilteredPages}</span>
           </div>
 
@@ -532,8 +506,8 @@ export const CustomerSearch = () => {
         </div>
       </div>
 
-      {/* 그리드 섹션 */}
-      {currentPage && (
+      {/* 그리드 섹션: 데이터 있으면 그리드, 없으면 영역만 유지 */}
+      {currentPage ? (
         <div className="selected-page-content grid-section">
           <ItemsGridRdg
             pdfFilename={currentPage.pdfFilename}
@@ -541,7 +515,11 @@ export const CustomerSearch = () => {
             formType={currentPage.formType}
           />
         </div>
-      )}
+      ) : hasNoData ? (
+        <div className="selected-page-content grid-section no-data-placeholder">
+          <div className="no-results">{noDataMessage}</div>
+        </div>
+      ) : null}
     </div>
   )
 }
