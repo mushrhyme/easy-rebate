@@ -480,7 +480,13 @@
   color: #374151;
   cursor: pointer;
   font-weight: 500;
-  min-width: 150px;
+}
+
+.year-month-selector.inline .year-select {
+  min-width: 5.5rem;
+}
+.year-month-selector.inline .month-select {
+  min-width: 4rem;
 }
 
 .year-month-select:focus {

@@ -101,6 +101,19 @@ export const CustomerSearch = () => {
     })
   }, [documentsData])
 
+  // 연도만 추출 (연도 드롭다운용, 최신순)
+  const availableYears = useMemo(() => {
+    const years = new Set<number>()
+    availableYearMonths.forEach((ym) => years.add(ym.year))
+    const list = Array.from(years).sort((a, b) => b - a)
+    const current = currentYearMonth.year
+    if (list.length === 0 || !list.includes(current)) return [current, ...list]
+    return list
+  }, [availableYearMonths, currentYearMonth.year])
+
+  // 월 목록 (1–12, 월 드롭다운용)
+  const monthOptions = useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), [])
+
   // 연월 선택 시 사용할 값: 선택된 연월이 있으면 그대로, 없으면 DB에 있는 연월 중 최신
   const effectiveYearMonth = useMemo(() => {
     if (selectedYearMonth) return selectedYearMonth
@@ -286,20 +299,17 @@ export const CustomerSearch = () => {
     setCurrentPageIndex(0) // 필터 변경 시 첫 페이지로 이동
   }
 
-  const handleYearMonthChange = (value: string) => {
-    if (!value) {
-      setSelectedYearMonth(null)
-      setCurrentPageIndex(0)
-      return
-    }
-    const [yearStr, monthStr] = value.split('-')
+  const handleYearChange = (yearStr: string) => {
     const year = Number(yearStr)
+    if (!year) return
+    setSelectedYearMonth({ year, month: effectiveYearMonth.month })
+    setCurrentPageIndex(0)
+  }
+
+  const handleMonthChange = (monthStr: string) => {
     const month = Number(monthStr)
-    if (!year || !month) {
-      setSelectedYearMonth(null)
-    } else {
-      setSelectedYearMonth({ year, month })
-    }
+    if (!month) return
+    setSelectedYearMonth({ year: effectiveYearMonth.year, month })
     setCurrentPageIndex(0)
   }
 
@@ -401,24 +411,30 @@ export const CustomerSearch = () => {
       {/* 페이지 내비게이션 섹션 */}
       <div className="page-navigation-section">
         <div className="page-nav-controls">
-          {/* 연월 선택: DB에 있는 연월만 표시, 선택한 연월 기준으로 페이지 표시 */}
+          {/* 연월 선택: 연도·월 각각 드롭다운 (실수 방지, 목록 짧게) */}
           <div className="year-month-selector inline">
             <span className="year-month-caption">対象期間</span>
             <select
-              className="year-month-select"
-              value={`${effectiveYearMonth.year}-${effectiveYearMonth.month}`}
-              onChange={(e) => handleYearMonthChange(e.target.value)}
+              className="year-month-select year-select"
+              value={effectiveYearMonth.year}
+              onChange={(e) => handleYearChange(e.target.value)}
+              aria-label="年を選択"
             >
-              {!availableYearMonths.find(
-                (ym) => ym.year === currentYearMonth.year && ym.month === currentYearMonth.month,
-              ) && (
-                <option value={`${currentYearMonth.year}-${currentYearMonth.month}`}>
-                  {currentYearMonth.year}年 {currentYearMonth.month}月
+              {availableYears.map((y) => (
+                <option key={y} value={y}>
+                  {y}年
                 </option>
-              )}
-              {availableYearMonths.map((ym) => (
-                <option key={`${ym.year}-${ym.month}`} value={`${ym.year}-${ym.month}`}>
-                  {ym.year}年 {ym.month}月（{ym.count}件）
+              ))}
+            </select>
+            <select
+              className="year-month-select month-select"
+              value={effectiveYearMonth.month}
+              onChange={(e) => handleMonthChange(e.target.value)}
+              aria-label="月を選択"
+            >
+              {monthOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}月
                 </option>
               ))}
             </select>
