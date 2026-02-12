@@ -8,6 +8,7 @@ export interface User {
   user_id: number
   username: string
   display_name: string
+  display_name_ja?: string
   is_active: boolean
   last_login_at?: string
   login_count: number
@@ -99,6 +100,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           user_id: data.user_id,
           username: data.username,
           display_name: data.display_name,
+          display_name_ja: data.display_name_ja,
           is_active: true,
           login_count: 0
         })
