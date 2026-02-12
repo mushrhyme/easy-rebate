@@ -23,12 +23,36 @@ class UsersMixin:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
-                cursor.execute("""
-                    SELECT user_id, username, display_name, is_active,
-                           created_at, last_login_at, login_count, created_by_user_id
-                    FROM users
-                    WHERE username = %s AND is_active = TRUE
-                """, (username,))
+                try:
+                    # 新スキーマ: display_name_ja カラムあり
+                    cursor.execute("""
+                        SELECT user_id,
+                               username,
+                               display_name,
+                               display_name_ja,
+                               is_active,
+                               created_at,
+                               last_login_at,
+                               login_count,
+                               created_by_user_id
+                        FROM users
+                        WHERE username = %s AND is_active = TRUE
+                    """, (username,))
+                except Exception:
+                    # 旧スキーマ互換: display_name_ja が無い場合
+                    cursor.execute("""
+                        SELECT user_id,
+                               username,
+                               display_name,
+                               NULL::VARCHAR(200) AS display_name_ja,
+                               is_active,
+                               created_at,
+                               last_login_at,
+                               login_count,
+                               created_by_user_id
+                        FROM users
+                        WHERE username = %s AND is_active = TRUE
+                    """, (username,))
 
                 result = cursor.fetchone()
                 return dict(result) if result else None
@@ -49,12 +73,34 @@ class UsersMixin:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
-                cursor.execute("""
-                    SELECT user_id, username, display_name, is_active,
-                           created_at, last_login_at, login_count, created_by_user_id
-                    FROM users
-                    WHERE user_id = %s
-                """, (user_id,))
+                try:
+                    cursor.execute("""
+                        SELECT user_id,
+                               username,
+                               display_name,
+                               display_name_ja,
+                               is_active,
+                               created_at,
+                               last_login_at,
+                               login_count,
+                               created_by_user_id
+                        FROM users
+                        WHERE user_id = %s
+                    """, (user_id,))
+                except Exception:
+                    cursor.execute("""
+                        SELECT user_id,
+                               username,
+                               display_name,
+                               NULL::VARCHAR(200) AS display_name_ja,
+                               is_active,
+                               created_at,
+                               last_login_at,
+                               login_count,
+                               created_by_user_id
+                        FROM users
+                        WHERE user_id = %s
+                    """, (user_id,))
 
                 result = cursor.fetchone()
                 return dict(result) if result else None
@@ -196,15 +242,38 @@ class UsersMixin:
                     # 만료 여부는 SQL 쿼리에서 처리
                 
                 # 전체 조건으로 다시 조회
-                cursor.execute("""
-                    SELECT u.user_id, u.username, u.display_name, u.is_active,
-                           s.session_id, s.created_at as session_created_at, s.expires_at
-                    FROM user_sessions s
-                    JOIN users u ON s.user_id = u.user_id
-                    WHERE s.session_id = %s
-                      AND s.expires_at > CURRENT_TIMESTAMP
-                      AND u.is_active = TRUE
-                """, (session_id,))
+                try:
+                    cursor.execute("""
+                        SELECT u.user_id,
+                               u.username,
+                               u.display_name,
+                               u.display_name_ja,
+                               u.is_active,
+                               s.session_id,
+                               s.created_at as session_created_at,
+                               s.expires_at
+                        FROM user_sessions s
+                        JOIN users u ON s.user_id = u.user_id
+                        WHERE s.session_id = %s
+                          AND s.expires_at > CURRENT_TIMESTAMP
+                          AND u.is_active = TRUE
+                    """, (session_id,))
+                except Exception:
+                    cursor.execute("""
+                        SELECT u.user_id,
+                               u.username,
+                               u.display_name,
+                               NULL::VARCHAR(200) AS display_name_ja,
+                               u.is_active,
+                               s.session_id,
+                               s.created_at as session_created_at,
+                               s.expires_at
+                        FROM user_sessions s
+                        JOIN users u ON s.user_id = u.user_id
+                        WHERE s.session_id = %s
+                          AND s.expires_at > CURRENT_TIMESTAMP
+                          AND u.is_active = TRUE
+                    """, (session_id,))
 
                 result = cursor.fetchone()
                 if not result:
@@ -257,38 +326,56 @@ class UsersMixin:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
-                cursor.execute("""
-                    SELECT user_id, username, display_name, is_active,
-                           created_at, last_login_at, login_count
-                    FROM users
-                    ORDER BY created_at DESC
-                """)
+                try:
+                    cursor.execute("""
+                        SELECT user_id,
+                               username,
+                               display_name,
+                               display_name_ja,
+                               is_active,
+                               created_at,
+                               last_login_at,
+                               login_count
+                        FROM users
+                        ORDER BY created_at DESC
+                    """)
+                except Exception:
+                    cursor.execute("""
+                        SELECT user_id,
+                               username,
+                               display_name,
+                               NULL::VARCHAR(200) AS display_name_ja,
+                               is_active,
+                               created_at,
+                               last_login_at,
+                               login_count
+                        FROM users
+                        ORDER BY created_at DESC
+                    """)
 
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             print(f"⚠️ 사용자 목록 조회 실패: {e}")
             return []
 
-    def create_user(self, username: str, display_name: str, created_by_user_id: int = None) -> Optional[int]:
-        """
-        새 사용자 생성
-
-        Args:
-            username: 사용자명
-            display_name: 표시 이름
-            created_by_user_id: 생성자 사용자 ID (선택)
-
-        Returns:
-            생성된 사용자 ID 또는 None
-        """
+    def create_user(self, username: str, display_name: str, display_name_ja: str | None = None, created_by_user_id: int | None = None) -> Optional[int]:
+        """새 사용자 생성"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO users (username, display_name, created_by_user_id)
-                    VALUES (%s, %s, %s)
-                    RETURNING user_id
-                """, (username, display_name, created_by_user_id))
+                try:
+                    cursor.execute("""
+                        INSERT INTO users (username, display_name, display_name_ja, created_by_user_id)
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING user_id
+                    """, (username, display_name, display_name_ja, created_by_user_id))
+                except Exception:
+                    # display_name_ja カラムが無い旧スキーマ互換
+                    cursor.execute("""
+                        INSERT INTO users (username, display_name, created_by_user_id)
+                        VALUES (%s, %s, %s)
+                        RETURNING user_id
+                    """, (username, display_name, created_by_user_id))
 
                 result = cursor.fetchone()
                 conn.commit()
@@ -297,29 +384,25 @@ class UsersMixin:
             print(f"⚠️ 사용자 생성 실패: {e}")
             return None
 
-    def update_user(self, user_id: int, display_name: str = None, is_active: bool = None) -> bool:
-        """
-        사용자 정보 업데이트
-
-        Args:
-            user_id: 사용자 ID
-            display_name: 표시 이름 (선택)
-            is_active: 활성 상태 (선택)
-
-        Returns:
-            업데이트 성공 여부
-        """
+    def update_user(self, user_id: int, display_name: str | None = None, display_name_ja: str | None = None, is_active: bool | None = None) -> bool:
+        """사용자 정보 업데이트"""
         try:
+            from typing import Any
+
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
                 # 업데이트할 필드 구성
-                update_fields = []
-                params = []
+                update_fields: list[str] = []
+                params: list[Any] = []
 
                 if display_name is not None:
                     update_fields.append("display_name = %s")
                     params.append(display_name)
+
+                if display_name_ja is not None:
+                    update_fields.append("display_name_ja = %s")
+                    params.append(display_name_ja)
 
                 if is_active is not None:
                     update_fields.append("is_active = %s")
@@ -330,11 +413,22 @@ class UsersMixin:
 
                 params.append(user_id)
 
-                cursor.execute(f"""
-                    UPDATE users
-                    SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP
-                    WHERE user_id = %s
-                """, params)
+                try:
+                    cursor.execute(f"""
+                        UPDATE users
+                        SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = %s
+                    """, params)
+                except Exception:
+                    # display_name_ja が無い旧スキーマ互換
+                    fields_wo_ja = [f for f in update_fields if not f.startswith("display_name_ja")]
+                    if not fields_wo_ja:
+                        return True
+                    cursor.execute(f"""
+                        UPDATE users
+                        SET {', '.join(fields_wo_ja)}, updated_at = CURRENT_TIMESTAMP
+                        WHERE user_id = %s
+                    """, params)
 
                 conn.commit()
                 return True

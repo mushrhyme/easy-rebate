@@ -277,6 +277,74 @@
   grid-column: 1 / -1;
 }
 
+/* Admin subtabs for master vs users */
+.rag-admin-subtabs {
+  display: inline-flex;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+  border-radius: 999px;
+  padding: 0.15rem;
+  background: #eef2ff;
+}
+
+.rag-admin-subtab-button {
+  border: none;
+  background: transparent;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+  color: #4b5563;
+}
+
+.rag-admin-subtab-button.active {
+  background: #4f46e5;
+  color: #ffffff;
+}
+
+.rag-admin-users-wrap {
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+
+.rag-admin-users-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.rag-admin-users-table th,
+.rag-admin-users-table td {
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.rag-admin-users-table th {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #374151;
+}
+
+.rag-admin-users-input {
+  width: 100%;
+  min-width: 6rem;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.25rem;
+  box-sizing: border-box;
+}
+
+.rag-admin-users-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.rag-admin-users-new-row {
+  background: #eff6ff;
+}
+
 /* 基準管理 master_code グリッド */
 .rag-admin-master-grid-wrap {
   overflow-x: auto;

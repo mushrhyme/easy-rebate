@@ -695,7 +695,7 @@ export const authApi = {
   /**
    * 사용자 생성 (관리자용)
    */
-  createUser: async (data: { username: string; display_name: string }) => {
+  createUser: async (data: { username: string; display_name: string; display_name_ja?: string }) => {
     const response = await client.post('/api/auth/users', data)
     return response.data
   },
@@ -703,7 +703,7 @@ export const authApi = {
   /**
    * 사용자 정보 업데이트 (관리자용)
    */
-  updateUser: async (userId: number, data: { display_name?: string; is_active?: boolean }) => {
+  updateUser: async (userId: number, data: { display_name?: string; display_name_ja?: string; is_active?: boolean }) => {
     const response = await client.put(`/api/auth/users/${userId}`, data)
     return response.data
   },

@@ -9,7 +9,6 @@ import { useFormTypes } from '@/hooks/useFormTypes'
 import { ItemsGridRdg, type ItemsGridRdgHandle } from '../Grid/ItemsGridRdg'
 import { getApiBaseUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
-import { useAuth } from '@/contexts/AuthContext'
 import './CustomerSearch.css'
 
 // 페이지 타입
@@ -30,8 +29,6 @@ interface CustomerSearchProps {
 
 export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) => {
   const queryClient = useQueryClient()
-  const { user } = useAuth()
-  const isAdmin = user?.username === 'admin'
   const { options: formTypeOptions, formTypeLabel } = useFormTypes()
   const [showAnswerKeyModal, setShowAnswerKeyModal] = useState(false)
   const [answerKeyFormChoice, setAnswerKeyFormChoice] = useState<'keep' | 'change' | 'new'>('keep')
@@ -618,7 +615,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
             >
               現在の状態を保存
             </button>
-            {isAdmin && currentPage && (
+            {currentPage && (
               <button
                 type="button"
                 className="nav-action-btn answer-key-designate-btn"

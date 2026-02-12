@@ -25,6 +25,7 @@ class LoginResponse(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
     display_name: Optional[str] = None
+    display_name_ja: Optional[str] = None
     session_id: Optional[str] = None
 
 
@@ -33,6 +34,7 @@ class UserInfo(BaseModel):
     user_id: int
     username: str
     display_name: str
+    display_name_ja: Optional[str] = None
     is_active: bool
     last_login_at: Optional[str] = None
     login_count: int
@@ -119,6 +121,7 @@ async def login(
             user_id=user['user_id'],
             username=user['username'],
             display_name=user['display_name'],
+            display_name_ja=user.get('display_name_ja'),
             session_id=session_id
         )
 
@@ -181,6 +184,7 @@ async def get_current_user(
             user_id=user_info['user_id'],
             username=user_info['username'],
             display_name=user_info['display_name'],
+            display_name_ja=user_info.get('display_name_ja'),
             is_active=user_info['is_active'],
             last_login_at=user_info.get('last_login_at'),
             login_count=user_info.get('login_count', 0)
@@ -220,7 +224,8 @@ async def validate_session(
                 "user": {
                     "user_id": user_info['user_id'],
                     "username": user_info['username'],
-                    "display_name": user_info['display_name']
+                    "display_name": user_info['display_name'],
+                    "display_name_ja": user_info.get('display_name_ja'),
                 }
             }
         else:
@@ -238,15 +243,17 @@ class CreateUserRequest(BaseModel):
     """사용자 생성 요청 모델"""
     username: str
     display_name: str
+    display_name_ja: Optional[str] = None
 
 
 class UpdateUserRequest(BaseModel):
     """사용자 업데이트 요청 모델"""
     display_name: Optional[str] = None
+    display_name_ja: Optional[str] = None
     is_active: Optional[bool] = None
 
 
-@router.get("/users", response_model=List[UserInfo])
+@router.get("/users")
 async def get_users(
     current_user_id: int = Depends(get_current_user_id),
     db=Depends(get_db)
@@ -259,21 +266,11 @@ async def get_users(
         db: データベースインスタンス
 
     Returns:
-        사용자 목록
+        사용자 목록 (users 테이블 행 그대로 반환)
     """
     try:
         users = db.get_all_users()
-        return [
-            UserInfo(
-                user_id=user['user_id'],
-                username=user['username'],
-                display_name=user['display_name'],
-                is_active=user['is_active'],
-                last_login_at=user.get('last_login_at'),
-                login_count=user.get('login_count', 0)
-            )
-            for user in users
-        ]
+        return users
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 목록 조회 중 오류가 발생했습니다: {str(e)}")
 
@@ -305,7 +302,8 @@ async def create_user(
         user_id = db.create_user(
             username=request.username,
             display_name=request.display_name,
-            created_by_user_id=current_user_id
+            display_name_ja=request.display_name_ja,
+            created_by_user_id=current_user_id,
         )
 
         if user_id:
@@ -352,7 +350,8 @@ async def update_user(
         success = db.update_user(
             user_id=user_id,
             display_name=request.display_name,
-            is_active=request.is_active
+            display_name_ja=request.display_name_ja,
+            is_active=request.is_active,
         )
 
         if success:
