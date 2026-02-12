@@ -74,11 +74,16 @@
 }
 
 .rag-admin-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 1.5rem;
+  padding-bottom: 2.5rem;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 1.25rem;
   align-items: flex-start;
+  align-content: start;
 }
 
 .rag-admin-card {
@@ -210,9 +215,178 @@
   color: #6b7280;
 }
 
-.rag-admin-file-input {
-  margin-bottom: 0.5rem;
+.rag-admin-col-action {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+  padding-left: 0.75rem;
+}
+
+.rag-admin-button-small {
+  padding: 0.35rem 0.6rem;
   font-size: 0.8rem;
+}
+
+/* 様式名の管理 */
+.rag-admin-form-type-labels-wrap {
+  margin-top: 0.5rem;
+}
+
+.rag-admin-form-type-labels-table {
+  width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.rag-admin-form-type-labels-table th,
+.rag-admin-form-type-labels-table td {
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: middle;
+}
+
+.rag-admin-form-type-labels-table th {
+  text-align: left;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+}
+
+.rag-admin-form-type-code {
+  font-family: ui-monospace, monospace;
+  font-weight: 500;
+  color: #334155;
+}
+
+.rag-admin-form-type-label-input {
+  width: 100%;
+  max-width: 280px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.875rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.rag-admin-form-type-label-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.rag-admin-card-wide {
+  grid-column: 1 / -1;
+}
+
+/* 基準管理 master_code グリッド */
+.rag-admin-master-grid-wrap {
+  overflow-x: auto;
+  margin-top: 0.75rem;
+  margin-bottom: 0.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.rag-admin-master-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.rag-admin-master-table th,
+.rag-admin-master-table td {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+
+.rag-admin-master-table thead tr:first-child th {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #374151;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.rag-admin-master-filter-row th {
+  background: #f8fafc;
+  padding: 0.25rem 0.4rem;
+}
+
+.rag-admin-master-filter-input {
+  width: 100%;
+  min-width: 4rem;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.25rem;
+}
+
+.rag-admin-master-filter-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.rag-admin-master-cell-input {
+  width: 100%;
+  min-width: 5rem;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.25rem;
+  box-sizing: border-box;
+}
+
+.rag-admin-master-cell-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 1px rgba(102, 126, 234, 0.25);
+}
+
+/* 新規行入力（グリッド最上段） */
+.rag-admin-master-new-row {
+  background: #eff6ff;
+  border-bottom: 2px solid #93c5fd;
+}
+
+.rag-admin-master-new-row td {
+  vertical-align: middle;
+}
+
+.rag-admin-master-new-row .rag-admin-master-cell-input {
+  background: #fff;
+}
+
+.rag-admin-master-col-action {
+  width: 1%;
+  white-space: nowrap;
+  padding: 0.35rem 0.5rem !important;
+  background: #f8fafc;
+}
+
+.rag-admin-master-new-row .rag-admin-master-col-action {
+  background: #dbeafe;
+}
+
+.rag-admin-button-add-row {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  background: #2563eb;
+  color: #fff;
+}
+
+.rag-admin-button-add-row:hover {
+  background: #1d4ed8;
+}
+
+.rag-admin-master-actions {
+  margin-top: 0.75rem;
+}
+
+.rag-admin-master-actions-top {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
 }
 
 @media (max-width: 768px) {

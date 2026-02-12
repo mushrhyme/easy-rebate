@@ -83,6 +83,44 @@
   overflow: hidden;
 }
 
+.ocr-test-page-nav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.ocr-test-nav-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 1rem;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #374151;
+}
+
+.ocr-test-nav-btn:hover:not(:disabled) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+.ocr-test-nav-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ocr-test-page-info {
+  font-size: 0.875rem;
+  color: #6b7280;
+  min-width: 4rem;
+  text-align: center;
+}
+
 .ocr-test-image-container {
   flex: 1;
   overflow: auto;
@@ -103,6 +141,40 @@
   max-width: 100%;
   height: auto;
   vertical-align: top;
+}
+
+/* 이미지 위 단어 박스들: 클릭 시 해당 텍스트 표시용 */
+.ocr-test-boxes-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.ocr-test-boxes-overlay .ocr-test-word-box {
+  position: absolute;
+  pointer-events: auto;
+  padding: 0;
+  margin: 0;
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  background: rgba(59, 130, 246, 0.08);
+  border-radius: 1px;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ocr-test-boxes-overlay .ocr-test-word-box:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #3b82f6;
+}
+
+.ocr-test-boxes-overlay .ocr-test-word-box.ocr-test-word-box-selected {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: #2563eb;
+  border-width: 2px;
 }
 
 .ocr-test-overlay {
@@ -289,4 +361,299 @@
   min-width: 0;
   word-break: break-word;
   color: #111827;
+}
+
+/* 画像のボックスをクリック → テキスト表示 */
+.ocr-test-show-boxes-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: #374151;
+  margin-bottom: 0.75rem;
+  cursor: pointer;
+}
+
+.ocr-test-selected-word {
+  padding: 0.6rem 0.75rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  margin-bottom: 0.75rem;
+}
+
+.ocr-test-selected-word-label {
+  display: block;
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-bottom: 0.25rem;
+}
+
+.ocr-test-selected-word-value {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: #1d4ed8;
+  word-break: break-all;
+}
+
+.ocr-test-box-hint {
+  font-size: 0.8125rem;
+  color: #9ca3af;
+  margin: 0 0 0.75rem 0;
+}
+
+.ocr-test-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin-bottom: 0.75rem;
+}
+
+/* キーイン: フィールド選択 → 画像クリックで値を設定 */
+.ocr-test-keyin-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.ocr-test-keyin-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.ocr-test-keyin-key {
+  flex-shrink: 0;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ocr-test-keyin-key:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.ocr-test-keyin-key.ocr-test-keyin-key-selected {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.ocr-test-keyin-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: #374151;
+  word-break: break-all;
+}
+
+.ocr-test-save-btn-inline {
+  flex-shrink: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ocr-test-save-btn-inline:hover:not(:disabled) {
+  background: #047857;
+}
+
+.ocr-test-save-btn-inline:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* コード候補モーダル */
+.ocr-test-suggest-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.ocr-test-suggest-modal-inner {
+  background: #fff;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  min-width: 280px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.ocr-test-suggest-modal-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.5rem;
+}
+
+.ocr-test-suggest-keyword {
+  font-size: 0.8125rem;
+  color: #6b7280;
+  margin-bottom: 0.75rem;
+}
+
+.ocr-test-suggest-keyword strong {
+  color: #111827;
+}
+
+.ocr-test-suggest-keyword-hint {
+  margin-left: 0.35rem;
+  color: #9ca3af;
+  font-size: 0.75rem;
+}
+
+.ocr-test-suggest-table-wrap {
+  margin-bottom: 0.75rem;
+  overflow-x: auto;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.ocr-test-suggest-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.ocr-test-suggest-table th,
+.ocr-test-suggest-table td {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #e5e7eb;
+  text-align: left;
+  word-break: break-all;
+}
+
+.ocr-test-suggest-table th {
+  background: #f3f4f6;
+  font-weight: 600;
+  color: #374151;
+}
+
+.ocr-test-suggest-row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ocr-test-suggest-row:hover {
+  background: #dbeafe;
+}
+
+.ocr-test-suggest-cancel {
+  display: block;
+  width: 100%;
+  padding: 0.4rem;
+  font-size: 0.8125rem;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #6b7280;
+}
+
+.ocr-test-suggest-cancel:hover {
+  background: #f9fafb;
+}
+
+.ocr-test-suggest-loading,
+.ocr-test-suggest-empty {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin-bottom: 0.75rem;
+}
+
+/* マッチ結果（選択したB/Dペアを一覧表示） */
+.ocr-test-matched-result {
+  padding: 0.75rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+
+.ocr-test-matched-result-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #1d4ed8;
+  margin-bottom: 0.35rem;
+}
+
+.ocr-test-matched-result-keyword {
+  font-size: 0.8125rem;
+  color: #374151;
+  margin-bottom: 0.35rem;
+}
+
+.ocr-test-matched-result-keyword strong {
+  color: #1e40af;
+}
+
+.ocr-test-matched-result-hint {
+  margin-left: 0.35rem;
+  color: #6b7280;
+  font-size: 0.75rem;
+}
+
+.ocr-test-matched-result-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: #1e3a8a;
+}
+
+.ocr-test-matched-result-b,
+.ocr-test-matched-result-d {
+  display: block;
+  word-break: break-all;
+}
+
+.ocr-test-save-btn {
+  padding: 0.5rem 1rem;
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 0.5rem;
+}
+
+.ocr-test-save-btn:hover:not(:disabled) {
+  background: #047857;
+}
+
+.ocr-test-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ocr-test-save-ok {
+  font-size: 0.8125rem;
+  color: #059669;
+  margin-bottom: 0.5rem;
+}
+
+.ocr-test-save-error {
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  margin-bottom: 0.5rem;
 }

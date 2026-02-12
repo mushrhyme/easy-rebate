@@ -137,8 +137,8 @@ LIMIT 1
    SELECT 
        item_id,
        customer,
-       product_name,
        item_data->>'請求伝票番号' as invoice_number,  -- DB에서 파싱
+       item_data->>'商品名' as product_name,
        item_data->>'金額' as amount
    FROM items_current
    WHERE pdf_filename = %s AND page_number = %s

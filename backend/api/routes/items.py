@@ -107,14 +107,13 @@ class ItemCreateRequest(BaseModel):
     """아이템 생성 요청 모델"""
     pdf_filename: str
     page_number: int
-    item_data: Dict[str, Any]  # 아이템 데이터 (customer, product_name, 기타 필드)
-    customer: Optional[str] = None
-    product_name: Optional[str] = None
+    # answer.json 한 행 전체 (예: 請求番号, 得意先, 備考, 税額 등)
+    item_data: Dict[str, Any]
     after_item_id: Optional[int] = None  # 특정 행 아래에 추가할 경우 해당 행의 item_id
 
 class ItemUpdateRequest(BaseModel):
     """아이템 업데이트 요청 모델"""
-    item_data: Dict[str, Any]  # 아이템 데이터 (customer, product_name, 기타 필드)
+    item_data: Dict[str, Any]  # 아이템 데이터 (得意先, 商品名 등 표준 일본어 키)
     review_status: Optional[Dict[str, Any]] = None  # 검토 상태
     expected_version: int  # 낙관적 락을 위한 예상 버전
     session_id: str  # 세션 ID
@@ -126,9 +125,7 @@ class ItemResponse(BaseModel):
     pdf_filename: str
     page_number: int
     item_order: int
-    customer: Optional[str] = None
-    product_name: Optional[str] = None
-    item_data: Dict[str, Any]
+    item_data: Dict[str, Any]  # 상품명 등은 item_data['商品名'] 사용
     review_status: Dict[str, Any]
     version: int
 
@@ -149,6 +146,34 @@ async def get_page_items(
     """
     try:
         items = db.get_items(pdf_filename, page_number)
+        
+        # 검토 탭 컬럼 순서: 이 문서가 파싱 시 참조한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
+        item_data_keys: Optional[List[str]] = None
+        try:
+            doc = db.get_document(pdf_filename)
+            if doc:
+                form_type = doc.get("form_type")
+                print(f"[items API] pdf={pdf_filename} form_type={form_type}")
+                doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else None
+                if doc_meta and doc_meta.get("item_data_keys"):
+                    item_data_keys = doc_meta["item_data_keys"]
+                    print(f"[items API] 문서 자체 key_order 사용(파싱 시 참조한 RAG 기준) 개수={len(item_data_keys)} 순서={item_data_keys[:15]}{'...' if len(item_data_keys) > 15 else ''}")
+                elif form_type:
+                    from modules.core.rag_manager import get_rag_manager
+                    rag = get_rag_manager()
+                    key_order = rag.get_key_order_by_form_type(form_type)
+                    if key_order and key_order.get("item_keys"):
+                        item_data_keys = key_order["item_keys"]
+                        print(f"[items API] item_data_keys(RAG form_type 기준) 개수={len(item_data_keys)} 순서={item_data_keys}")
+                    else:
+                        print(f"[items API] key_order 없음 또는 item_keys 비어있음 key_order={key_order}")
+                else:
+                    print(f"[items API] form_type 없음")
+            else:
+                print(f"[items API] doc 없음")
+        except Exception as e:
+            print(f"[items API] key_order 조회 예외: {e}")
+            pass
         
         # 응답 형식 변환
         # db.get_items()는 이미 모든 필드를 평탄화해서 반환하므로,
@@ -178,24 +203,26 @@ async def get_page_items(
                 'created_at', 'updated_at', 'review_status'
             }
             
-            # customer와 product_name도 item_data에 포함 (Streamlit 앱과 동일)
             for key, value in item.items():
                 if key not in exclude_keys:
                     item_data[key] = value
             
-            item_list.append(ItemResponse(
-                item_id=item['item_id'],
-                pdf_filename=item['pdf_filename'],
-                page_number=item['page_number'],
-                item_order=item['item_order'],
-                customer=item.get('customer'),
-                product_name=item.get('product_name') or item.get('商品名'),  # DB에서 "商品名"으로 변환되어 있으므로 확인
-                item_data=item_data,
-                review_status=review_status,
-                version=item.get('version', 1)
-            ))
-        
-        return {"items": item_list}
+            item_list.append(
+                ItemResponse(
+                    item_id=item['item_id'],
+                    pdf_filename=item['pdf_filename'],
+                    page_number=item['page_number'],
+                    item_order=item['item_order'],
+                    item_data=item_data,
+                    review_status=review_status,
+                    version=item.get('version', 1),
+                )
+            )
+        # 첫 아이템의 item_data 키 순서 로그 (DB에서 온 순서인지 확인)
+        if item_list and item_list[0].item_data:
+            first_keys = list(item_list[0].item_data.keys())
+            print(f"[items API] 첫 아이템 item_data 키 순서(응답에 담기는 순서)={first_keys}")
+        return {"items": item_list, "item_data_keys": item_data_keys}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -245,8 +272,7 @@ async def create_item(
             pdf_filename=item_data.pdf_filename,
             page_number=item_data.page_number,
             item_data=item_data.item_data,
-            customer=item_data.customer,
-            product_name=item_data.product_name,
+            customer=None,
             after_item_id=item_data.after_item_id
         )
 
@@ -275,12 +301,12 @@ async def create_item(
                     cursor = conn.cursor(cursor_factory=RealDictCursor)
                     # current와 archive 모두에서 조회
                     cursor.execute("""
-                        SELECT item_id, pdf_filename, page_number, item_order, customer, product_name,
+                        SELECT item_id, pdf_filename, page_number, item_order, customer,
                                first_review_checked, second_review_checked, item_data, version
                         FROM items_current
                         WHERE item_id = %s
                         UNION ALL
-                        SELECT item_id, pdf_filename, page_number, item_order, customer, product_name,
+                        SELECT item_id, pdf_filename, page_number, item_order, customer,
                                first_review_checked, second_review_checked, item_data, version
                         FROM items_archive
                         WHERE item_id = %s
@@ -351,7 +377,7 @@ async def create_item(
             'first_review_checked', 'second_review_checked',
             'first_reviewed_at', 'second_reviewed_at',
             'created_at', 'updated_at', 'review_status',
-            'customer', 'product_name', '商品名'  # customer와 product_name도 제외 (별도 필드로 전달)
+            'customer', '商品名'  # customer는 별도 필드, 商品名은 item_data에만
         }
 
         response_item_data = {}
@@ -376,8 +402,6 @@ async def create_item(
             raise HTTPException(status_code=500, detail="Missing required field: item_order")
         
         version = created_item.get('version', 1)
-        customer = created_item.get('customer') or created_item.get('customer')
-        product_name = created_item.get('product_name') or created_item.get('商品名')
         
         try:
             response = ItemResponse(
@@ -385,8 +409,6 @@ async def create_item(
                 pdf_filename=item_data.pdf_filename,
                 page_number=item_data.page_number,
                 item_order=item_order,
-                customer=customer,
-                product_name=product_name,
                 item_data=response_item_data,
                 review_status=review_status,
                 version=version
@@ -467,20 +489,14 @@ async def update_item(
                         detail=f"Item is locked by another user: user_id={locked_by_user_id}"
                     )
             
-            # 필드 분리
-            separated = db._separate_item_fields(update_data.item_data)
+        # 필드 분리 (_separate_item_fields: 검토 상태/메타만 분리, 得意先 등은 item_data에 유지)
+            pdf_filename = item[1]
+            doc = db.get_document(pdf_filename)
+            form_type = doc.get("form_type") if doc else None
+            separated = db._separate_item_fields(update_data.item_data, form_type=form_type)
             
-            # 업데이트 쿼리 구성
             set_clauses = []
             params = []
-            
-            if 'customer' in separated and separated['customer'] is not None:
-                set_clauses.append("customer = %s")
-                params.append(separated['customer'])
-            
-            if 'product_name' in separated and separated['product_name'] is not None:
-                set_clauses.append("product_name = %s")
-                params.append(separated['product_name'])
             
             # 검토 상태 업데이트
             if update_data.review_status:

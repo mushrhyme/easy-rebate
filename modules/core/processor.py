@@ -30,6 +30,7 @@ class PdfProcessor:
         dpi: int = DEFAULT_DPI,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         form_type: Optional[str] = None,
+        upload_channel: Optional[str] = None,
         user_id: Optional[int] = None,
         data_year: Optional[int] = None,
         data_month: Optional[int] = None,
@@ -92,6 +93,7 @@ class PdfProcessor:
                     similarity_threshold=config.similarity_threshold,
                     progress_callback=progress_callback,
                     form_type=form_type,
+                    upload_channel=upload_channel,
                     debug_dir_name="debug2",
                     include_bbox=include_bbox,
                 )
@@ -101,6 +103,27 @@ class PdfProcessor:
             # page_results가 None이거나 빈 리스트인지 확인
             if page_results is None or len(page_results) == 0:
                 raise ValueError("파싱 결과가 없습니다")
+
+            # 3.1. form_type을 RAG에서 사용한 참조 예제의 form_type으로 재설정
+            # 각 페이지의 _rag_reference.form_type 중 유효한 값을 모아 가장 많이 등장하는 값으로 결정
+            try:
+                rag_form_types = []
+                for page_json in page_results:
+                    if isinstance(page_json, dict):
+                        ref = page_json.get("_rag_reference") or {}
+                        ref_form_type = ref.get("form_type")
+                        if isinstance(ref_form_type, str) and ref_form_type.strip():
+                            rag_form_types.append(ref_form_type.strip())
+                if rag_form_types:
+                    # 가장 많이 등장한 form_type 선택
+                    from collections import Counter
+                    most_common_form_type, _ = Counter(rag_form_types).most_common(1)[0]
+                    if most_common_form_type and most_common_form_type != form_type:
+                        print(f"📋 RAG 참조 예제 기준 form_type 재설정: {form_type!r} → {most_common_form_type!r}")
+                        form_type = most_common_form_type
+            except Exception as _e:
+                # form_type 추론 실패 시에는 기존 form_type 그대로 사용
+                pass
             
             # 3.5. 빈값 채우기 (직전 페이지에서 관리번호/거래처명/摘要, 다음 페이지에서 세액)
             # form_type 별 config 매핑이 있으면 해당 필드만 채움. 없으면(get→None) 스킵.
@@ -151,12 +174,13 @@ class PdfProcessor:
                     success = db_manager.save_document_data(
                         pdf_filename=pdf_filename,
                         page_results=page_results,
-                        image_data_list=image_data_list,  # 이미지 데이터(bytes) 직접 전달
-                        form_type=form_type,  # 양식지 번호 전달
+                        image_data_list=image_data_list,
+                        form_type=form_type,
+                        upload_channel=upload_channel,
                         notes="RAG 기반 분석",
-                        user_id=user_id,  # 사용자 ID 전달
-                        data_year=data_year,  # 지정한 연도
-                        data_month=data_month  # 지정한 월
+                        user_id=user_id,
+                        data_year=data_year,
+                        data_month=data_month
                     )
                     
                     if not success:
@@ -178,6 +202,7 @@ class PdfProcessor:
                                 pdf_name=pdf_name,
                                 pdf_path=Path(pdf_path) if pdf_path else None,
                                 form_type=form_type,
+                                upload_channel=upload_channel,
                                 data_year=data_year,
                                 data_month=data_month,
                                 pdf_bytes=pdf_bytes

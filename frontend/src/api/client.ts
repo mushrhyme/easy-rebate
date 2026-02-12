@@ -115,19 +115,55 @@ client.interceptors.response.use(
   }
 )
 
+// 様式(form_type) 목록 API (DB에서 동적 조회)
+export const formTypesApi = {
+  getList: async (): Promise<{ form_types: Array<{ value: string; label: string }> }> => {
+    const response = await client.get('/api/form-types')
+    return response.data
+  },
+
+  /** 様式コードの表示名を更新（基準管理） */
+  updateLabel: async (formCode: string, displayName: string): Promise<{ form_code: string; display_name: string; message: string }> => {
+    const response = await client.patch(`/api/form-types/${encodeURIComponent(formCode)}/label`, {
+      display_name: displayName,
+    })
+    return response.data
+  },
+
+  /**
+   * 新規様式作成。
+   * display_name のみ渡すと次のコードを自動採番（01,02...の次）。form_code を渡すとそのコードで作成。
+   */
+  create: async (params: {
+    form_code?: string
+    display_name?: string
+  }): Promise<{ form_code: string; display_name: string; message: string }> => {
+    const response = await client.post('/api/form-types', params)
+    return response.data
+  },
+
+  /** 양식지 미리보기 이미지 저장 (문서 1페이지 이미지를 form_XX.png로 저장) */
+  savePreviewImage: async (formCode: string, pdfFilename: string): Promise<{ form_code: string; preview_path: string }> => {
+    const response = await client.post(`/api/form-types/${encodeURIComponent(formCode)}/preview-image`, {
+      pdf_filename: pdfFilename,
+    })
+    return response.data
+  },
+}
+
 // 文書API
 export const documentsApi = {
   /**
-   * 文書アップロード
+   * 文書アップロード (upload_channel: finet | mail)
    */
   upload: async (
-    formType: string,
+    uploadChannel: string,
     files: File[],
     year?: number,
     month?: number
   ): Promise<UploadResponse> => {
     const formData = new FormData()
-    formData.append('form_type', formType)
+    formData.append('upload_channel', uploadChannel)
     // year와 month가 유효한 숫자일 때만 FormData에 추가
     // undefined, null, NaN, 0 이 아닌 유효한 숫자만 전송
     if (year !== undefined && year !== null && !isNaN(year) && year > 0) {
@@ -154,15 +190,14 @@ export const documentsApi = {
     // axios가 자동으로 multipart/form-data와 boundary를 설정함
     // 기본 헤더의 Content-Type: application/json을 제거해야 함
     console.log('🔵 [업로드] 요청 전송:', { 
-      formType, 
+      uploadChannel, 
       fileCount: files.length, 
       year, 
       month, 
       hasSessionId: !!sessionId 
     })
-    // FormData 내용 확인 (디버깅용)
     console.log('🔵 [업로드] FormData 내용:', {
-      form_type: formType,
+      upload_channel: uploadChannel,
       year: year?.toString(),
       month: month?.toString(),
       files: files.map(f => f.name)
@@ -179,17 +214,16 @@ export const documentsApi = {
   },
 
   /**
-   * 文書アップロード（座標付き解析・新タブ専用）
-   * 03/04でUpstage単語座標＋LLM _word_indices→_bbox付与
+   * 文書アップロード（座標付き解析・mailチャネルでUpstage単語座標＋LLM _word_indices→_bbox付与）
    */
   uploadWithBbox: async (
-    formType: string,
+    uploadChannel: string,
     files: File[],
     year?: number,
     month?: number
   ): Promise<UploadResponse> => {
     const formData = new FormData()
-    formData.append('form_type', formType)
+    formData.append('upload_channel', uploadChannel)
     if (year !== undefined && year !== null && !isNaN(year) && year > 0) {
       formData.append('year', year.toString())
     }
@@ -211,8 +245,8 @@ export const documentsApi = {
   /**
    * 文書一覧取得
    */
-  getList: async (formType?: string): Promise<DocumentListResponse> => {
-    const params = formType ? { form_type: formType } : {}
+  getList: async (uploadChannel?: string): Promise<DocumentListResponse> => {
+    const params = uploadChannel ? { upload_channel: uploadChannel } : {}
     const response = await client.get<DocumentListResponse>(
       '/api/documents',
       { params }
@@ -229,10 +263,113 @@ export const documentsApi = {
   },
 
   /**
-   * 문서 삭제
+   * 文書を정답지 생성 대상に指定（検索タブでは非表示、정답지 생성タブでのみ表示）
+   */
+  setAnswerKeyDocument: async (pdfFilename: string): Promise<{ success: boolean; message: string }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post<{ success: boolean; message: string }>(
+      `/api/documents/${encoded}/answer-key-designate`
+    )
+    return response.data
+  },
+
+  /**
+   * Gemini 생성 결과로 페이지에 items 신규 생성 (기존 항목 없을 때)
+   */
+  createItemsFromAnswer: async (
+    pdfFilename: string,
+    pageNumber: number,
+    items: Array<Record<string, any>>,
+    pageRole?: string,
+    pageMeta?: Record<string, any> | null
+  ): Promise<{ success: boolean; created_count: number }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const body: Record<string, any> = { items, page_role: pageRole ?? 'detail' }
+    if (pageMeta != null && Object.keys(pageMeta).length > 0) {
+      body.page_meta = pageMeta
+    }
+    const response = await client.post(
+      `/api/documents/${encoded}/pages/${pageNumber}/create-items-from-answer`,
+      body
+    )
+    return response.data
+  },
+
+  /**
+   * Gemini zero-shot으로 페이지 정답지 생성 (동일 프롬프트)
+   */
+  generateAnswerWithGemini: async (
+    pdfFilename: string,
+    pageNumber: number
+  ): Promise<{ success: boolean; page_number: number; page_role: string; page_meta?: Record<string, any> | null; items: Array<Record<string, any>> }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post(
+      `/api/documents/${encoded}/pages/${pageNumber}/generate-answer`
+    )
+    return response.data
+  },
+
+  /**
+   * 동일 프롬프트(prompt_v3.txt)로 GPT Vision으로 페이지 정답지 생성 (테스트용)
+   */
+  generateAnswerWithGpt: async (
+    pdfFilename: string,
+    pageNumber: number,
+    model: string = 'gpt-5.2-2025-12-11'
+  ): Promise<{ success: boolean; page_number: number; page_role: string; page_meta?: Record<string, any> | null; items: Array<Record<string, any>>; provider?: string; model?: string }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post(
+      `/api/documents/${encoded}/pages/${pageNumber}/generate-answer-gpt`,
+      null,
+      { params: { model } }
+    )
+    return response.data
+  },
+
+  /**
+   * 첫 행(템플릿)으로 나머지 행 LLM 생성 후 페이지 items 전체 교체
+   */
+  generateItemsFromTemplate: async (
+    pdfFilename: string,
+    pageNumber: number,
+    templateItem: Record<string, any>
+  ): Promise<{ success: boolean; page_number: number; items_count: number; items: Array<Record<string, any>> }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post(
+      `/api/documents/${encoded}/pages/${pageNumber}/generate-items-from-template`,
+      { template_item: templateItem }
+    )
+    return response.data
+  },
+
+  /**
+   * 문서의 정답지 생성 대상 지정 해제
+   */
+  revokeAnswerKeyDocument: async (pdfFilename: string): Promise<{ success: boolean; message: string }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post<{ success: boolean; message: string }>(
+      `/api/documents/${encoded}/answer-key-revoke`
+    )
+    return response.data
+  },
+
+  /**
+   * 문서 양식지 타입(form_type) 변경
+   */
+  updateFormType: async (pdfFilename: string, formType: string) => {
+    const encodedFilename = encodeURIComponent(pdfFilename)
+    const response = await client.patch(`/api/documents/${encodedFilename}/form-type`, {
+      form_type: formType,
+    })
+    return response.data
+  },
+
+  /**
+   * 문서 삭제 (파일명에 한글/공백 등 포함 시 URL 인코딩 필요)
    */
   delete: async (pdfFilename: string) => {
-    const response = await client.delete(`/api/documents/${pdfFilename}`)
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.delete(`/api/documents/${encoded}`)
     return response.data
   },
 
@@ -253,9 +390,23 @@ export const documentsApi = {
   ): Promise<{ page_role: string | null; page_meta: Record<string, any> }> => {
     const encodedFilename = encodeURIComponent(pdfFilename)
     const url = `/api/documents/${encodedFilename}/pages/${pageNumber}/meta`
-    console.log('🔵 [documentsApi.getPageMeta] 호출:', { pdfFilename, pageNumber, url })
     const response = await client.get<{ page_role: string | null; page_meta: Record<string, any> }>(url)
-    console.log('✅ [documentsApi.getPageMeta] 응답:', response.data)
+    return response.data
+  },
+
+  /**
+   * page_meta 업데이트 (정답지 생성 탭에서 편집 저장용)
+   */
+  updatePageMeta: async (
+    pdfFilename: string,
+    pageNumber: number,
+    pageMeta: Record<string, any>
+  ): Promise<{ success: boolean; message: string }> => {
+    const encodedFilename = encodeURIComponent(pdfFilename)
+    const response = await client.patch<{ success: boolean; message: string }>(
+      `/api/documents/${encodedFilename}/pages/${pageNumber}/meta`,
+      { page_meta: pageMeta }
+    )
     return response.data
   },
 }
@@ -268,11 +419,11 @@ export const itemsApi = {
   getByPage: async (
     pdfFilename: string,
     pageNumber: number
-  ): Promise<{ items: Item[] }> => {
+  ): Promise<{ items: Item[]; item_data_keys?: string[] | null }> => {
     // URL 인코딩
     const encodedFilename = encodeURIComponent(pdfFilename)
     const url = `/api/items/${encodedFilename}/pages/${pageNumber}`
-    const response = await client.get<{ items: Item[] }>(url)
+    const response = await client.get<{ items: Item[]; item_data_keys?: string[] | null }>(url)
     return response.data
   },
 
@@ -283,8 +434,6 @@ export const itemsApi = {
     pdfFilename: string,
     pageNumber: number,
     itemData: Record<string, any>,
-    customer?: string,
-    productName?: string,
     afterItemId?: number
   ): Promise<Item> => {
     const requestBody: Record<string, any> = {
@@ -293,13 +442,6 @@ export const itemsApi = {
       item_data: itemData,
     }
     
-    // 선택적 필드 추가 (undefined가 아닐 때만)
-    if (customer !== undefined) {
-      requestBody.customer = customer
-    }
-    if (productName !== undefined) {
-      requestBody.product_name = productName
-    }
     if (afterItemId !== undefined) {
       requestBody.after_item_id = afterItemId
     }
@@ -479,6 +621,19 @@ export const searchApi = {
     const response = await client.get<PageImageResponse>(url)
     return response.data
   },
+
+  /**
+   * 페이지 OCR 텍스트 조회 (정답지 생성 탭 이미지 아래 표시용)
+   */
+  getPageOcrText: async (
+    pdfFilename: string,
+    pageNumber: number
+  ): Promise<{ ocr_text: string }> => {
+    const encodedFilename = encodeURIComponent(pdfFilename)
+    const url = `/api/search/${encodedFilename}/pages/${pageNumber}/ocr-text`
+    const response = await client.get<{ ocr_text: string }>(url)
+    return response.data
+  },
 }
 
 /**
@@ -588,6 +743,30 @@ export const sapUploadApi = {
     })
     return response.data
   },
+
+  /**
+   * SAP 템플릿 컬럼명 목록 (1행 기준)
+   */
+  getColumnNames: async (): Promise<{ column_names: string[] }> => {
+    const response = await client.get('/api/sap-upload/column-names')
+    return response.data
+  },
+
+  /**
+   * SAP 산식 설정 조회 (양식지별)
+   */
+  getFormulas: async (): Promise<import('@/types').SapFormulasConfig> => {
+    const response = await client.get('/api/sap-upload/formulas')
+    return response.data
+  },
+
+  /**
+   * SAP 산식 설정 저장 (양식지별 편집)
+   */
+  putFormulas: async (body: import('@/types').SapFormulasConfig): Promise<{ ok: boolean }> => {
+    const response = await client.put('/api/sap-upload/formulas', body)
+    return response.data
+  },
 }
 
 /**
@@ -675,6 +854,28 @@ export const ragAdminApi = {
     const response = await client.post('/api/rag-admin/build-from-learning-pages', payload)
     return response.data
   },
+
+  /**
+   * 基準管理 master_code.xlsx 一覧取得
+   */
+  getMasterCode: async (): Promise<{
+    headers: string[]
+    rows: Array<{ a: string; b: string; c: string; d: string; e: string; f: string }>
+  }> => {
+    const response = await client.get('/api/rag-admin/master-code')
+    return response.data
+  },
+
+  /**
+   * 基準管理 master_code.xlsx 保存
+   */
+  saveMasterCode: async (params: {
+    headers?: string[]
+    rows: Array<{ a: string; b: string; c: string; d: string; e: string; f: string }>
+  }): Promise<{ success: boolean; message: string }> => {
+    const response = await client.put('/api/rag-admin/master-code', params)
+    return response.data
+  },
 }
 
 /** OCR 테스트: 구조화(좌표付き) 요청 - DB 저장 없이 일회성 */
@@ -711,7 +912,53 @@ export type OcrTestResponse = {
   metadata?: { pages?: Array<{ page: number; width: number; height: number }> }
 }
 
+/** キーイン保存リクエスト */
+export type OcrKeyinSaveRequest = {
+  keyed_values: Record<string, string>
+  image_filename?: string
+}
+
+/** PDF 업로드 응답 */
+export type OcrUploadPdfResponse = {
+  upload_id: string
+  num_pages: number
+}
+
+/** master_code.xlsx 1行（A~F列） */
+export type OcrSuggestRow = {
+  a: string
+  b: string
+  c: string
+  d: string
+  e: string
+  f: string
+}
+
 export const ocrTestApi = {
+  /** PDF 업로드 → upload_id, num_pages 반환 */
+  uploadPdf: async (file: File): Promise<OcrUploadPdfResponse> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await client.post<OcrUploadPdfResponse>('/api/ocr-test/upload-pdf', formData)
+    return response.data
+  },
+
+  /** 指定ページの画像URL（img src 用） */
+  getPdfPageImageUrl: (uploadId: string, page: number): string => {
+    const base = client.defaults.baseURL ?? ''
+    const sep = base.includes('?') ? '&' : '?'
+    return `${base}/api/ocr-test/pdf-page-image${sep}upload_id=${encodeURIComponent(uploadId)}&page=${page}`
+  },
+
+  /** 指定PDFページでOCR実行 → OcrTestResponse */
+  ocrPdfPage: async (uploadId: string, page: number): Promise<OcrTestResponse> => {
+    const response = await client.post<OcrTestResponse>('/api/ocr-test/ocr-pdf-page', {
+      upload_id: uploadId,
+      page,
+    })
+    return response.data
+  },
+
   /** 이미지 1장 업로드 → Upstage OCR 전체 응답 (bbox 포함) */
   ocrImage: async (file: File): Promise<OcrTestResponse> => {
     const formData = new FormData()
@@ -724,6 +971,35 @@ export const ocrTestApi = {
   structure: async (body: OcrStructureRequest): Promise<OcrTestResponse & Record<string, unknown>> => {
     const response = await client.post<Record<string, unknown>>('/api/ocr-test/structure', body)
     return response.data as OcrTestResponse & Record<string, unknown>
+  },
+
+  /** キーイン結果を保存 */
+  saveKeyin: async (body: OcrKeyinSaveRequest): Promise<{ success: boolean }> => {
+    const response = await client.post<{ success: boolean }>('/api/ocr-test/keyin', body)
+    return response.data
+  },
+
+  /** master_code.xlsx: 受注先はB列、スーパーはD列基準で類似3件をA~F列付きで取得 */
+  suggestCodes: async (value: string, field?: string): Promise<{ suggestions: OcrSuggestRow[] }> => {
+    const response = await client.post<{ suggestions: OcrSuggestRow[] }>('/api/ocr-test/suggest-codes', {
+      value: value || '',
+      field: field || undefined,
+    })
+    return response.data
+  },
+}
+
+/** 分析(기본 RAG) LLM: gemini | gpt5.2 */
+export type RagProvider = 'gemini' | 'gpt5.2'
+
+export const settingsApi = {
+  getRagProvider: async (): Promise<{ provider: RagProvider }> => {
+    const response = await client.get<{ provider: RagProvider }>('/api/settings/rag-provider')
+    return response.data
+  },
+  setRagProvider: async (provider: RagProvider): Promise<{ provider: RagProvider }> => {
+    const response = await client.put<{ provider: RagProvider }>('/api/settings/rag-provider', { provider })
+    return response.data
   },
 }
 

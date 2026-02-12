@@ -64,19 +64,15 @@ export const useCreateItem = (pdfFilename?: string, pageNumber?: number) => {
   return useMutation({
     mutationFn: ({
       itemData,
-      customer,
-      productName,
       afterItemId
     }: {
       itemData: Record<string, any>
-      customer?: string
-      productName?: string
       afterItemId?: number
     }) => {
       if (!pdfFilename || !pageNumber) {
         throw new Error('pdfFilename and pageNumber are required')
       }
-      return itemsApi.create(pdfFilename, pageNumber, itemData, customer, productName, afterItemId)
+      return itemsApi.create(pdfFilename, pageNumber, itemData, afterItemId)
     },
     onSuccess: () => {
       // 아이템 목록 갱신

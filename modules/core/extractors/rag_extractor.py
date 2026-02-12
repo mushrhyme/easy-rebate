@@ -162,6 +162,7 @@ def extract_json_with_rag(
     ocr_words: Optional[list] = None,
     page_width: Optional[int] = None,
     page_height: Optional[int] = None,
+    include_bbox: bool = False,  # True일 때만 프롬프트에 WORD_INDEX 요청·결과에 _bbox 부여 (OCR 탭 그림용)
 ) -> Dict[str, Any]:
     """
     RAG 기반 JSON 추출
@@ -174,19 +175,27 @@ def extract_json_with_rag(
         top_k: 검색할 예제 수 (None이면 config에서 가져옴)
         similarity_threshold: 최소 유사도 임계값 (None이면 config에서 가져옴)
         form_type: 양식지 번호 (01, 02, 03, 04, 05). None이면 모든 양식지에서 검색 (하위 호환성)
+        include_bbox: True면 OCR 탭처럼 좌표용으로 _word_indices 요청·_bbox 부여. 기본은 False(최종 프롬프트에 좌표 없음).
         
     Returns:
         추출된 JSON 딕셔너리
     """
-    # API 키 확인
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY가 필요합니다. .env 파일에 설정하세요.")
-    
-    # RAG Manager 및 설정 가져오기 (한 번만 호출)
+    # RAG Manager 및 설정 가져오기 (UI 설정 파일 우선)
+    from modules.utils.config import rag_config, get_effective_rag_provider
+    config = rag_config
+    effective_provider, effective_model = get_effective_rag_provider()
+    rag_llm_provider = effective_provider
     rag_manager = get_rag_manager()
-    from modules.utils.config import rag_config
-    config = rag_config  # 설정 한 번만 로드
+
+    # API 키 확인 (provider에 따라)
+    if rag_llm_provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY가 필요합니다. .env 파일에 설정하세요.")
+    else:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY가 필요합니다. .env 파일에 설정하세요.")
     
     # form_type이 전달된 경우 인덱스 새로고침
     # (rag_tab.py와 동일한 동작을 위해 reload_index() 호출)
@@ -195,9 +204,14 @@ def extract_json_with_rag(
     if form_type:
         rag_manager.reload_index()
     
-    # 파라미터가 None이면 config에서 가져오기 (notepad 예제와 동일하게 설정값 사용)
+    # 파라미터가 None이면 config 또는 UI 설정에서 가져오기
     question = question or config.question
-    model_name = model_name or config.openai_model
+    if effective_model is not None:
+        model_name = effective_model
+    elif rag_llm_provider == "gemini":
+        model_name = getattr(config, "gemini_extractor_model", "gemini-2.5-flash-lite")
+    else:
+        model_name = model_name or config.openai_model
     top_k = top_k if top_k is not None else config.top_k
     similarity_threshold = similarity_threshold if similarity_threshold is not None else config.similarity_threshold
     search_method = getattr(config, 'search_method', 'hybrid')  # 기본값: hybrid
@@ -209,14 +223,10 @@ def extract_json_with_rag(
         else:
             progress_callback("벡터 DB에서 유사한 예제 검색 중...")
 
-    # 03/04/06: 전체 벡터 DB 참조 (form_type 필터 없이 검색)
+    # 전체 통합 검색 (form_type=None으로 모든 양식에서 검색)
     effective_form_type = None
-    if form_type:
-        fn = str(form_type).zfill(2)
-        if fn not in ("03", "04", "06"):
-            effective_form_type = form_type
-
-    # 하이브리드 검색 사용 (form_type별, 단 06은 전체 DB)
+    
+    # 하이브리드 검색 사용 (전체 DB 통합 검색)
     similar_examples = rag_manager.search_similar_advanced(
         query_text=ocr_text,
         top_k=top_k,
@@ -244,6 +254,22 @@ def extract_json_with_rag(
             score_value = similar_examples[0].get(score_key, 0)
             print(f"  ✅ 재검색 성공: {score_key}: {score_value:.4f} (threshold 무시하고 최상위 결과 사용)")
     
+    # RAG에서 선택된 최상위 예제 메타데이터 (문서/페이지/form_type)를 추출해 둔다.
+    # - debug JSON 저장뿐만 아니라, LLM 결과(JSON)에도 _rag_reference로 포함시키기 위함.
+    top_example_metadata = None
+    if similar_examples:
+        top_example = similar_examples[0]
+        top_meta = top_example.get("metadata", {}) or {}
+        top_meta = convert_numpy_types(top_meta)
+        top_example_metadata = {
+            "id": top_example.get("id"),
+            "source": top_example.get("source"),
+            "pdf_name": top_meta.get("pdf_name"),
+            "page_num": top_meta.get("page_num"),
+            "form_type": top_meta.get("form_type"),
+            "metadata": top_meta,
+        }
+    
     if progress_callback:
         if similar_examples:
             # 점수 키 확인 (hybrid_score, final_score, similarity 중 하나)
@@ -269,21 +295,25 @@ def extract_json_with_rag(
             # print(f"  💾 디버깅: OCR 텍스트 저장 완료 - {ocr_file}")
             
             # RAG 검색 결과 저장
-            if similar_examples:
+            if similar_examples and top_example_metadata:
                 rag_example_file = os.path.join(debug_dir, f"page_{page_num}_rag_example.json")
+                top_example = similar_examples[0]
+
                 # NumPy 타입을 Python 네이티브 타입으로 변환
                 example_data = {
-                    "similarity": similar_examples[0].get('similarity', 0),
-                    "ocr_text": similar_examples[0].get('ocr_text', ''),
-                    "answer_json": similar_examples[0].get('answer_json', {})
+                    "similarity": top_example.get('similarity', 0),
+                    "ocr_text": top_example.get('ocr_text', ''),
+                    "answer_json": top_example.get('answer_json', {}),
+                    # 어떤 문서를 참조했는지 확인하기 위한 정보
+                    "reference": top_example_metadata,
                 }
                 # 추가 점수 필드도 포함 (hybrid_score, bm25_score 등)
-                if 'hybrid_score' in similar_examples[0]:
-                    example_data["hybrid_score"] = similar_examples[0].get('hybrid_score', 0)
-                if 'bm25_score' in similar_examples[0]:
-                    example_data["bm25_score"] = similar_examples[0].get('bm25_score', 0)
-                if 'final_score' in similar_examples[0]:
-                    example_data["final_score"] = similar_examples[0].get('final_score', 0)
+                if 'hybrid_score' in top_example:
+                    example_data["hybrid_score"] = top_example.get('hybrid_score', 0)
+                if 'bm25_score' in top_example:
+                    example_data["bm25_score"] = top_example.get('bm25_score', 0)
+                if 'final_score' in top_example:
+                    example_data["final_score"] = top_example.get('final_score', 0)
                 
                 # NumPy 타입 변환 후 JSON 저장
                 example_data = convert_numpy_types(example_data)
@@ -297,11 +327,11 @@ def extract_json_with_rag(
             print(f"⚠️ 디버깅 정보 저장 실패: {debug_error}")
             print(f"  상세:\n{traceback.format_exc()}")
     
-    # 2. 프롬프트 구성 (ocr_words 있으면 단어 인덱스 형식으로 전달)
+    # 2. 프롬프트 구성 (include_bbox이고 ocr_words 있을 때만 단어 인덱스·좌표용 지시 추가)
     prompt_template = load_rag_prompt()
     text_for_prompt = ocr_text
     word_index_instruction = ""
-    if ocr_words and len(ocr_words) > 0:
+    if include_bbox and ocr_words and len(ocr_words) > 0:
         lines = [f"{i}\t{(w.get('text') or '').strip()}" for i, w in enumerate(ocr_words)]
         text_for_prompt = "\n".join(lines)
         word_index_instruction = """
@@ -358,58 +388,66 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         print(f"⚠️ 프롬프트 저장 실패: {debug_error}")
         print(f"  상세:\n{traceback.format_exc()}")
     
-    # 3. OpenAI API 호출
+    # 3. LLM API 호출 (provider에 따라 Gemini 또는 GPT 사용)
     if progress_callback:
         progress_callback(f"🤖 LLM ({model_name})에 요청 중...")
     
     try:
-        client = OpenAI(api_key=api_key)
-        
-        # API 호출 전 프롬프트 길이 확인
-        temperature_str = str(temperature) if temperature is not None else "None (모델 기본값 사용)"
-        print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature_str}")
-        
-        # temperature가 None이면 API 호출 시 포함하지 않음 (모델 기본값 사용)
-        api_params = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "timeout": 120,
-            "max_tokens": 8000  # 응답 길이 제한 (너무 긴 응답 방지 및 속도 향상)
-        }
-        
-        # 참고: reasoning 파라미터는 현재 OpenAI Python SDK에서 지원되지 않음
-        # 속도 최적화는 max_tokens 제한과 모델 선택으로 수행
-        
-        if temperature is not None:  # temperature가 지정된 경우에만 포함
-            api_params["temperature"] = temperature
-        
-        # LLM API 호출 시간 측정 (네트워크 지연 포함)
         llm_start_time = time.time()
-        try:
-            response = client.chat.completions.create(**api_params)
+        if rag_llm_provider == "gemini":
+            # Gemini (gemini_extractor 모델) 사용
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel(model_name)
+            temperature_str = str(temperature) if temperature is not None else "None (모델 기본값 사용)"
+            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature_str}")
+            gen_config = {"max_output_tokens": 8000}
+            if temperature is not None:
+                gen_config["temperature"] = temperature
+            response = model.generate_content(prompt, generation_config=gen_config)
             llm_end_time = time.time()
             llm_duration = llm_end_time - llm_start_time
-            result_text = response.choices[0].message.content
-            
-            # 응답 길이, 소요 시간, 토큰 사용량 확인
-            usage = response.usage if hasattr(response, 'usage') else None
-            prompt_tokens = usage.prompt_tokens if usage else "N/A"
-            completion_tokens = usage.completion_tokens if usage else "N/A"
-            total_tokens = usage.total_tokens if usage else "N/A"
-            
+            if not response.candidates or not response.candidates[0].content:
+                raise Exception("Gemini API 응답에 content가 없습니다.")
+            result_parts = []
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "text") and part.text:
+                    result_parts.append(part.text)
+            result_text = "".join(result_parts) if result_parts else ""
+            usage = None
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                um = response.usage_metadata
+                usage = f"prompt={getattr(um, 'prompt_token_count', 'N/A')}, completion={getattr(um, 'candidates_token_count', 'N/A')}"
             print(f"  📥 API 응답: 길이={len(result_text) if result_text else 0} 문자, 소요 시간={llm_duration:.2f}초")
             if usage:
-                print(f"  📊 토큰 사용량: prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
-        except Exception as api_error:
-            llm_end_time = time.time()
-            llm_duration = llm_end_time - llm_start_time
-            print(f"  ❌ API 호출 실패 (소요 시간: {llm_duration:.2f}초): {api_error}")
-            raise
+                print(f"  📊 토큰 사용량: {usage}")
+        else:
+            # GPT (OpenAI) 사용
+            client = OpenAI(api_key=api_key)
+            temperature_str = str(temperature) if temperature is not None else "None (모델 기본값 사용)"
+            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature_str}")
+            api_params = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "timeout": 120,
+                "max_completion_tokens": 8000,
+            }
+            if temperature is not None:
+                api_params["temperature"] = temperature
+            try:
+                response = client.chat.completions.create(**api_params)
+                llm_end_time = time.time()
+                llm_duration = llm_end_time - llm_start_time
+                result_text = response.choices[0].message.content or ""
+                usage = response.usage if hasattr(response, "usage") else None
+                if usage:
+                    print(f"  📊 토큰 사용량: prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
+            except Exception as api_error:
+                llm_end_time = time.time()
+                llm_duration = llm_end_time - llm_start_time
+                print(f"  ❌ API 호출 실패 (소요 시간: {llm_duration:.2f}초): {api_error}")
+                raise
+            print(f"  📥 API 응답: 길이={len(result_text) if result_text else 0} 문자, 소요 시간={llm_duration:.2f}초")
         
         # 디버깅: LLM 원본 응답 저장
         if debug_dir and page_num:
@@ -427,7 +465,7 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             progress_callback("LLM 응답 수신 완료, JSON 파싱 중...")
         
         if not result_text:
-            raise Exception("OpenAI API 응답에 텍스트가 없습니다.")
+            raise Exception("LLM API 응답에 텍스트가 없습니다.")
         
         # JSON 추출 (마크다운 코드 블록 제거 및 정리)
         result_text = result_text.strip()
@@ -525,11 +563,17 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                 if key_order:
                     result_json = _reorder_json_by_key_order(result_json, key_order)
 
-            # 03/04: LLM이 준 _word_indices를 bbox로 변환해 _bbox로 저장
-            if ocr_words:
+            # 좌표는 OCR 탭처럼 그림 그릴 때만 사용: include_bbox이고 ocr_words 있을 때만 _bbox 부여
+            if include_bbox and ocr_words:
                 _attach_bbox_to_json(result_json, ocr_words)
                 if page_width is not None and page_height is not None:
                     result_json["_page_bbox"] = {"width": page_width, "height": page_height}
+
+            # RAG에서 사용한 참조 예제 메타데이터를 LLM 결과에도 포함시켜,
+            # 이후 DB 저장 시 form_type 등을 결정할 때 사용할 수 있게 한다.
+            if top_example_metadata:
+                # 충돌을 피하기 위해 내부 메타 키 이름은 _rag_reference로 사용
+                result_json["_rag_reference"] = top_example_metadata
 
             # 디버깅: 파싱된 JSON 저장
             if debug_dir and page_num:
@@ -562,5 +606,5 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
     except json.JSONDecodeError as e:
         raise Exception(f"JSON 파싱 실패: {e}\n응답 텍스트: {result_text}")
     except Exception as e:
-        raise Exception(f"OpenAI API 호출 실패: {e}")
+        raise Exception(f"LLM API 호출 실패: {e}")
 

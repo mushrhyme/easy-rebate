@@ -1,0 +1,200 @@
+.uploaded-files-list {
+  width: 100%;
+  max-width: 960px;
+  margin-top: 0.5rem;
+  padding: 1.25rem 1.5rem;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.uploaded-files-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.uploaded-files-list-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.uploaded-files-list-channel {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.uploaded-files-list-filters {
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.uploaded-files-list-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #475569;
+}
+
+.uploaded-files-list-form-type-select {
+  padding: 0.375rem 0.5rem;
+  font-size: 0.8125rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #0f172a;
+  min-width: 7rem;
+}
+
+.uploaded-files-list-form-type-select:hover,
+.uploaded-files-list-form-type-select:focus {
+  border-color: #94a3b8;
+  outline: none;
+}
+
+/* 様式セル内の編集用セレクト（行クリックと競合しないよう stopPropagation 使用） */
+.uploaded-files-list-form-type-edit {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8125rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #fff;
+  color: #0f172a;
+  min-width: 6rem;
+  max-width: 100%;
+  cursor: pointer;
+}
+.uploaded-files-list-form-type-edit:hover {
+  border-color: #94a3b8;
+}
+.uploaded-files-list-form-type-edit:focus {
+  border-color: #64748b;
+  outline: none;
+}
+.uploaded-files-list-form-type-edit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.uploaded-files-list-loading,
+.uploaded-files-list-error,
+.uploaded-files-list-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.875rem;
+}
+
+.uploaded-files-list-error {
+  color: #dc2626;
+}
+
+.uploaded-files-list-summary {
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+  color: #64748b;
+}
+
+.uploaded-files-list-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.uploaded-files-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.uploaded-files-list-table th {
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.uploaded-files-list-table th:last-child {
+  text-align: right;
+  width: 80px;
+}
+
+.uploaded-files-list-table td {
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.uploaded-files-list-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+.uploaded-files-list-table tbody tr[role="button"] {
+  cursor: pointer;
+}
+
+.uploaded-files-list-row-selected {
+  background: #eff6ff !important;
+  outline: 1px solid #3b82f6;
+  outline-offset: -1px;
+}
+
+.uploaded-files-list-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.uploaded-files-list-cell-filename {
+  font-weight: 500;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.uploaded-files-list-cell-form-type {
+  color: #475569;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.uploaded-files-list-cell-date {
+  color: #64748b;
+}
+
+.uploaded-files-list-cell-pages {
+  color: #64748b;
+}
+
+.uploaded-files-list-cell-actions {
+  text-align: right;
+}
+
+.uploaded-files-list-delete {
+  padding: 0.25rem 0.5rem;
+  background: transparent;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  color: #dc2626;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.uploaded-files-list-delete:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #f87171;
+}
+
+.uploaded-files-list-delete:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

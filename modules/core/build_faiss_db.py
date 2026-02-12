@@ -15,7 +15,7 @@ from typing import Dict, Any, List, Optional
 import fitz  # PyMuPDF
 
 from modules.core.rag_manager import get_rag_manager
-from modules.utils.config import get_project_root, get_extraction_method_for_form
+from modules.utils.config import get_project_root, get_extraction_method_for_upload_channel, folder_name_to_upload_channel
 from modules.utils.hash_utils import compute_page_hash, get_page_key, compute_file_fingerprint
 from modules.utils.db_manifest_manager import DBManifestManager
 from modules.utils.pdf_utils import PdfTextExtractor
@@ -26,11 +26,11 @@ def find_pdf_pages(
     form_folder: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    img 폴더의 양식별 폴더(01, 02 등) 안의 하위 폴더에서 모든 PDF 페이지 데이터를 찾습니다.
+    img 폴더의 하위 폴더(finet, mail, 01, 02 등) 안에서 PDF 페이지 데이터를 찾습니다.
 
     Args:
         img_dir: img 폴더 경로
-        form_folder: 양식 폴더명 (예: "01", "02"). None이면 모든 양식 폴더를 순회
+        form_folder: 하위 폴더명 (예: "finet", "mail"). None이면 img 하위 모든 폴더를 순회
 
     Returns:
         [page_data, ...] 리스트
@@ -38,91 +38,108 @@ def find_pdf_pages(
             'pdf_name': str,
             'page_num': int,
             'pdf_path': Path,
-            'answer_json_path': Optional[Path]
+            'answer_json_path': Optional[Path],
+            'form_type': Optional[str],  # 01, 02, 03 등 양식 코드 (있으면)
         }
     """
     pages = []
 
-    # 양식별 폴더 목록 (01, 02, 03, 04, 05 등)
+    # img 하위 폴더 목록 (finet, mail 등 채널별 또는 01, 02 등 - 모두 대상)
     if form_folder:
         form_folders = [img_dir / form_folder]
     else:
-        # 모든 양식 폴더 순회
-        form_folders = [d for d in img_dir.iterdir() if d.is_dir() and d.name.isdigit()]
-        form_folders.sort()  # 숫자 순서로 정렬
+        form_folders = sorted(
+            [d for d in img_dir.iterdir() if d.is_dir() and not d.name.startswith(".")],
+            key=lambda d: d.name,
+        )
 
     for form_dir in form_folders:
         if not form_dir.exists():
             continue
 
-        print(f"📁 양식 폴더: {form_dir.name}")
+        print(f"📁 폴더: {form_dir.name}")
 
-        # base 폴더 확인 (새로운 구조: img/01/base/PDF폴더명/)
+        # 상위 폴더 기준 form_type 후보 (과거 구조: img/01/...)
+        parent_form_type: Optional[str] = form_dir.name if form_dir.name.isdigit() else None
+
+        # 검색 루트 결정: base > 타입(01,02) 하위 > 채널 직하위
         base_dir = form_dir / "base"
         if base_dir.exists() and base_dir.is_dir():
-            # 새로운 구조: base 폴더 안의 하위 폴더 순회
-            search_dir = base_dir
+            search_dirs = [base_dir]
         else:
-            # 기존 구조: 양식 폴더 안의 직접 하위 폴더 순회 (하위 호환성)
-            search_dir = form_dir
+            first_children = [d for d in form_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+            # 직하위에 "폴더명.pdf"가 있으면 PDF 폴더가 직하위에 있는 구조
+            has_direct_pdf = any((d / f"{d.name}.pdf").exists() for d in first_children)
+            if has_direct_pdf:
+                search_dirs = [form_dir]
+            else:
+                # finet/01, mail/02 등 타입 폴더 안에서 PDF 폴더 찾기
+                search_dirs = list(first_children)
 
-        # PDF 폴더들 순회
-        for pdf_folder in search_dir.iterdir():
-            if not pdf_folder.is_dir() or pdf_folder.name == ".DS_Store":
-                continue
+        for search_dir in search_dirs:
+            # finet/01, mail/02 등일 때 현재 search_dir이 양식 코드(01~05)를 나타냄
+            current_form_type: Optional[str] = None
+            if search_dir.name.isdigit():
+                current_form_type = search_dir.name
+            elif parent_form_type:
+                # search_dir가 base/년-월/ 등의 하위일 때 상위 폴더명을 form_type으로 사용
+                current_form_type = parent_form_type
 
-            pdf_name = pdf_folder.name
-            pdf_file = pdf_folder / f"{pdf_name}.pdf"
-            if not pdf_file.exists():
-                # 상위 폴더에서도 찾아봄
-                pdf_file = form_dir / f"{pdf_name}.pdf"
+            # PDF 폴더들 순회
+            for pdf_folder in search_dir.iterdir():
+                if not pdf_folder.is_dir() or pdf_folder.name == ".DS_Store":
+                    continue
 
-            if not pdf_file.exists():
-                print(f"  ⚠️ PDF 파일 없음: {pdf_name}")
-                continue
+                pdf_name = pdf_folder.name
+                pdf_file = pdf_folder / f"{pdf_name}.pdf"
+                if not pdf_file.exists():
+                    pdf_file = search_dir / f"{pdf_name}.pdf"
 
-            # 버전 구분 없이 모든 Page*_answer*.json 대상으로 처리
-            answer_files = sorted(pdf_folder.glob("Page*_answer*.json"))
+                if not pdf_file.exists():
+                    print(f"  ⚠️ PDF 파일 없음: {pdf_name}")
+                    continue
 
-            if not answer_files:
-                print(f"  ⚠️ {pdf_name}: answer.json 파일이 없습니다")
-                continue
+                # 버전 구분 없이 모든 Page*_answer*.json 대상으로 처리
+                answer_files = sorted(pdf_folder.glob("Page*_answer*.json"))
 
-            try:
-                doc = fitz.open(pdf_file)
-                page_count = len(doc)
-                doc.close()
-            except Exception as e:
-                print(f"  ⚠️ PDF 파일 열기 실패 ({pdf_name}): {e}")
-                continue
+                if not answer_files:
+                    print(f"  ⚠️ {pdf_name}: answer.json 파일이 없습니다")
+                    continue
 
-            print(f"  - {pdf_name}: {len(answer_files)}개 answer.json 파일, {page_count}페이지")
-
-            for answer_file in answer_files:
                 try:
-                    # Page{num}_answer.json 또는 Page{num}_answer_xx.json 형식 대응
-                    stem = answer_file.stem
-                    # 가장 왼쪽의 숫자만 뽑는다. 예시: Page3_answer_v2 -> '3'
-                    import re
-                    match = re.match(r'Page(\d+)_answer', stem)
-                    if not match:
+                    doc = fitz.open(pdf_file)
+                    page_count = len(doc)
+                    doc.close()
+                except Exception as e:
+                    print(f"  ⚠️ PDF 파일 열기 실패 ({pdf_name}): {e}")
+                    continue
+
+                print(f"  - {pdf_name}: {len(answer_files)}개 answer.json 파일, {page_count}페이지")
+
+                for answer_file in answer_files:
+                    try:
+                        stem = answer_file.stem
+                        import re
+                        match = re.match(r'Page(\d+)_answer', stem)
+                        if not match:
+                            print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
+                            continue
+                        page_num = int(match.group(1))
+
+                        if page_num < 1 or page_num > page_count:
+                            print(f"  ⚠️ 페이지 번호 범위 초과: {pdf_name} Page{page_num} (최대: {page_count})")
+                            continue
+
+                        pages.append({
+                            'pdf_name': pdf_name,
+                            'page_num': page_num,
+                            'pdf_path': pdf_file,
+                            'answer_json_path': answer_file,
+                            'form_type': current_form_type,
+                        })
+                    except ValueError:
                         print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
                         continue
-                    page_num = int(match.group(1))
-
-                    if page_num < 1 or page_num > page_count:
-                        print(f"  ⚠️ 페이지 번호 범위 초과: {pdf_name} Page{page_num} (최대: {page_count})")
-                        continue
-
-                    pages.append({
-                        'pdf_name': pdf_name,
-                        'page_num': page_num,
-                        'pdf_path': pdf_file,
-                        'answer_json_path': answer_file
-                    })
-                except ValueError:
-                    print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
-                    continue
 
     return pages
 
@@ -242,7 +259,7 @@ def detect_deleted_pages(
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT pdf_filename, page_number, status
-                FROM rag_learning_status
+                FROM rag_learning_status_current
                 WHERE status IN ('merged', 'staged')
             """)
 
@@ -273,18 +290,13 @@ def build_faiss_db(
     text_extraction_method: str = "pymupdf"  # 기본값 (양식지별 설정이 없을 때 사용)
 ) -> None:
     """
-    img 폴더의 데이터를 FAISS 벡터 DB로 변환합니다 (증분 shard + merge 구조).
-    
-    각 양식지별로 별도의 벡터 DB를 생성하며, 양식지별로 다른 텍스트 추출 방법을 사용합니다.
-    텍스트 추출 방법은 modules/utils/config.py의 form_extraction_method 설정을 우선 사용합니다.
+    img 폴더 하위(finet, mail 등)를 스캔하여 FAISS 벡터 DB로 변환합니다 (증분 shard + 단일 글로벌 base).
 
     Args:
         img_dir: img 폴더 경로 (None이면 프로젝트 루트/img)
-        form_folder: 양식 폴더명 (예: "01", "02"). None이면 모든 양식 폴더를 순회
-        auto_merge: shard 생성 후 자동으로 merge할지 여부
-        text_extraction_method: 텍스트 추출 방법 기본값 ("pymupdf", "excel", "upstage")
-            - 양식지별 설정(config.py의 form_extraction_method)이 있으면 그것을 우선 사용
-            - 설정이 없을 때만 이 기본값 사용
+        form_folder: 하위 폴더명 하나만 지정 (예: "finet"). None이면 img 하위 모든 폴더 순회
+        auto_merge: shard 생성 후 base에 자동 merge 여부
+        text_extraction_method: 텍스트 추출 방법 기본값 (config.form_extraction_method에 있으면 우선 사용)
     """
     if img_dir is None:
         project_root = get_project_root()
@@ -311,34 +323,36 @@ def build_faiss_db(
 
     print(f"📋 DB Manifest 로드: {len(manifest.get_all_page_keys())}개 페이지 등록됨\n")
 
-    # form_folder가 None이면 모든 양식 폴더를 순회
+    # form_folder가 None이면 img 하위 모든 폴더(finet, mail 등) 순회
     if form_folder:
         form_folders_to_process = [form_folder]
     else:
-        # 모든 양식 폴더 순회
-        form_folders_to_process = [d.name for d in img_dir.iterdir() if d.is_dir() and d.name.isdigit()]
-        form_folders_to_process.sort()
+        form_folders_to_process = sorted(
+            d.name for d in img_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
 
-    # 각 양식지별로 처리
+    # img 하위 각 폴더(finet, mail 등) 처리
     for current_form_folder in form_folders_to_process:
         print(f"\n{'='*60}")
-        print(f"📂 양식 폴더 '{current_form_folder}' 처리 중")
+        print(f"📂 폴더 '{current_form_folder}' 처리 중")
         print(f"{'='*60}\n")
 
-        # 양식지별 텍스트 추출 방법 가져오기 (config.py에서 설정된 값 우선 사용)
-        form_extraction_method = get_extraction_method_for_form(current_form_folder)
-        # config에 없으면 전달받은 기본값 사용
-        if form_extraction_method == text_extraction_method:
-            # config에서 가져온 값이 기본값과 같으면 그대로 사용
+        # 폴더명을 upload_channel로 변환 (form_type → upload_channel 매핑)
+        upload_channel = folder_name_to_upload_channel(current_form_folder)
+        
+        # 텍스트 추출 방법 결정 (upload_channel 기반)
+        extraction_method = get_extraction_method_for_upload_channel(upload_channel)
+        if extraction_method == text_extraction_method:
             pass
-        print(f"📝 양식지 '{current_form_folder}' 텍스트 추출 방법: {form_extraction_method}\n")
+        print(f"📝 '{current_form_folder}' → upload_channel: {upload_channel}, 추출 방법: {extraction_method}\n")
 
-        # PDF 텍스트 추출기 생성 (양식지별로 생성, 캐싱 지원)
-        text_extractor = PdfTextExtractor(method=form_extraction_method)
+        # PDF 텍스트 추출기 생성 (캐싱 지원)
+        text_extractor = PdfTextExtractor(method=extraction_method, upload_channel=upload_channel)
 
         pages = find_pdf_pages(img_dir, current_form_folder)
         if not pages:
-            print(f"⚠️ 양식 폴더 '{current_form_folder}'에 처리할 페이지가 없습니다.\n")
+            print(f"⚠️ 폴더 '{current_form_folder}'에 처리할 페이지가 없습니다.\n")
             text_extractor.close_all()  # 캐시 정리
             continue
 
@@ -356,11 +370,11 @@ def build_faiss_db(
                 manifest.mark_pages_deleted(deleted_pages)
 
             # manifest와 비교하여 변경분만 필터링
-            print(f"🔍 Manifest와 비교하여 변경분 확인 중... (텍스트 추출 방법: {form_extraction_method})")
-            new_pages = diff_pages_with_manifest(pages, manifest, text_extractor, form_extraction_method)
+            print(f"🔍 Manifest와 비교하여 변경분 확인 중... (텍스트 추출 방법: {extraction_method})")
+            new_pages = diff_pages_with_manifest(pages, manifest, text_extractor, extraction_method)
 
             if not new_pages:
-                print(f"✅ 양식 폴더 '{current_form_folder}': 변경된 페이지가 없습니다.\n")
+                print(f"✅ 폴더 '{current_form_folder}': 변경된 페이지가 없습니다.\n")
                 continue
 
             print(f"📝 변경된 페이지: {len(new_pages)}개 발견\n")
@@ -370,19 +384,20 @@ def build_faiss_db(
             existing_count = rag_manager.count_examples()
             print(f"📊 기존 벡터 DB 예제 수: {existing_count}개\n")
 
-            # form_type은 현재 처리 중인 폴더명
-            form_type = current_form_folder
-
             # shard 생성을 위한 페이지 데이터 준비
             shard_pages = []
             for page_data in new_pages:
                 pdf_name = page_data['pdf_name']
                 page_num = page_data['page_num']
+                # 페이지 단위 form_type (01~05 등)이 있으면 사용, 없으면 폴더명 그대로
+                page_form_type = page_data.get('form_type') or current_form_folder
 
                 metadata = {
                     'pdf_name': pdf_name,
                     'page_num': page_num,
-                    'form_type': form_type,  # 양식지 번호 추가
+                    # upload_channel(finet/mail)과 form_type(01~05)을 모두 메타데이터에 저장
+                    'upload_channel': upload_channel,
+                    'form_type': page_form_type,
                     'source': 'img_folder'
                 }
 
@@ -396,12 +411,12 @@ def build_faiss_db(
                     'page_hash': page_data['page_hash']
                 })
 
-            # shard FAISS DB 생성 (양식지별)
-            print(f"🔨 Shard 생성 중... (양식지: {form_type})")
-            result = rag_manager.build_shard(shard_pages, form_type=form_type)
+            # shard FAISS DB 생성 (단일 글로벌 인덱스로 병합됨)
+            print(f"🔨 Shard 생성 중... (폴더: {current_form_folder})")
+            result = rag_manager.build_shard(shard_pages, form_type=None)
 
             if not result:
-                print(f"❌ Shard 생성 실패 (양식지: {form_type})")
+                print(f"❌ Shard 생성 실패 (폴더: {current_form_folder})")
                 continue
 
             # result는 (shard_path 또는 shard_index_name, shard_id) 튜플
@@ -440,16 +455,16 @@ def build_faiss_db(
                     print("🔄 메모리 인덱스 리로드 중...")
                     rag_manager.reload_index()
                 else:
-                    print(f"❌ Shard merge 실패 (양식지: {form_type}, staged 상태 유지)\n")
+                    print(f"❌ Shard merge 실패 (폴더: {current_form_folder}, staged 상태 유지)\n")
                     continue
             else:
                 print(f"\n⚠️ 자동 merge가 비활성화되어 있습니다.")
                 print(f"   수동으로 merge하려면: rag_manager.merge_shard('{shard_identifier}')\n")
                 print(f"   merge 후 manifest.mark_pages_merged(db_pages)를 호출하세요.\n")
 
-            # 양식지별 결과 요약
+            # 결과 요약
             print("="*60)
-            print(f"📊 양식지 {form_type} 벡터 DB 구축 결과")
+            print(f"📊 폴더 '{current_form_folder}' 벡터 DB 구축 결과")
             print("="*60)
             print(f"✅ 처리된 페이지: {len(new_pages)}개")
             print(f"📈 기존 벡터 DB 예제 수: {existing_count}개")
@@ -459,12 +474,12 @@ def build_faiss_db(
             print("="*60)
             print()
         except Exception as e:
-            print(f"❌ 양식 폴더 '{current_form_folder}' 처리 중 오류 발생: {e}")
+            print(f"❌ 폴더 '{current_form_folder}' 처리 중 오류 발생: {e}")
             import traceback
             traceback.print_exc()
             continue
         finally:
-            # PDF 캐시 정리 (양식지별로 생성한 extractor 정리)
+            # PDF 캐시 정리
             text_extractor.close_all()
 
 
@@ -472,11 +487,11 @@ if __name__ == "__main__":
     import sys
     print("🚀 FAISS 벡터 DB 구축 시작\n")
 
-    # 명령줄 인자로 양식 폴더 지정 가능
+    # 명령줄 인자로 img 하위 폴더 하나만 지정 가능 (미지정 시 전체)
     form_folder = None
     if len(sys.argv) > 1:
         form_folder = sys.argv[1]
-        print(f"📁 지정된 양식 폴더: {form_folder}\n")
+        print(f"📁 지정된 폴더: {form_folder}\n")
 
     build_faiss_db(
         form_folder=form_folder,

@@ -1,6 +1,7 @@
 """
 검색 API
 """
+import asyncio
 from typing import List, Optional
 from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Depends, Query
@@ -32,6 +33,7 @@ async def search_by_customer(
             exact_match=exact_match,
             form_type=form_type
         )
+        print(f"🔍 [search/customer] query={customer_name!r}, items 결과={len(results)}건")
         
         # 파일명과 페이지별로 그룹화
         grouped_results = {}
@@ -49,9 +51,31 @@ async def search_by_customer(
                 }
             grouped_results[key]['items'].append(item)
         
+        # items 검색 결과가 0이면 page_data.page_meta(JSON 텍스트)에서 폴백 검색
+        if len(results) == 0 and customer_name.strip():
+            fallback_pages = db.search_pages_by_customer_in_page_meta(customer_name.strip())
+            print(f"🔍 [search/customer] items 0건 → page_meta 폴백 검색: {len(fallback_pages)}페이지")
+            for row in fallback_pages:
+                pdf_filename = row.get('pdf_filename')
+                page_number = row.get('page_number')
+                if not pdf_filename or not page_number:
+                    continue
+                key = (pdf_filename, page_number)
+                if key in grouped_results:
+                    continue
+                page_result = db.get_page_result(pdf_filename, page_number)
+                if page_result and page_result.get('items'):
+                    grouped_results[key] = {
+                        'pdf_filename': pdf_filename,
+                        'page_number': page_number,
+                        'items': page_result['items'],
+                        'form_type': row.get('form_type') or (page_result.get('form_type') if isinstance(page_result.get('form_type'), str) else None)
+                    }
+        
+        total_items = sum(len(g['items']) for g in grouped_results.values())
         return {
             "query": customer_name,
-            "total_items": len(results),
+            "total_items": total_items,
             "total_pages": len(grouped_results),
             "pages": list(grouped_results.values())
         }
@@ -126,5 +150,120 @@ async def get_page_image_url(
 
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _ocr_text_from_upstage_result(result: dict) -> str:
+    """Upstage OCR 응답 dict에서 전체 텍스트 추출."""
+    if not result or not isinstance(result, dict):
+        return ""
+    text = result.get("text") or result.get("result") or result.get("content")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    if "pages" in result:
+        pages = result.get("pages") or []
+        parts = []
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            pt = page.get("text") or page.get("content")
+            if isinstance(pt, str) and pt.strip():
+                parts.append(pt.strip())
+                continue
+            words = page.get("words") or []
+            if words:
+                parts.append(" ".join(w.get("text", "") for w in words if isinstance(w, dict)))
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+@router.get("/{pdf_filename}/pages/{page_number}/ocr-text")
+async def get_page_ocr_text(
+    pdf_filename: str,
+    page_number: int,
+    db=Depends(get_db)
+):
+    """
+    페이지 OCR 텍스트 조회 (정답지 생성 탭에서 이미지 아래 표시용)
+
+    1) debug2/{pdf_name}/page_{N}_ocr_text.txt (RAG 파싱 시 저장된 파일)
+    2) 저장된 페이지 이미지로 Upstage OCR 실행
+    3) PDF 세션 경로에서 추출
+    4) result/ 페이지 JSON의 text 필드 시도
+    """
+    try:
+        pdf_name = pdf_filename
+        if pdf_name.lower().endswith(".pdf"):
+            pdf_name = pdf_name[:-4]
+
+        ocr_text = ""
+
+        # 1) debug2/{pdf_name}/page_{N}_ocr_text.txt (RAG 파싱 시 저장된 OCR 텍스트)
+        try:
+            from pathlib import Path
+            from modules.utils.config import get_project_root
+
+            root = get_project_root()
+            debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
+            if debug2_file.exists():
+                ocr_text = debug2_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
+        # 2) 저장된 페이지 이미지로 OCR
+        if not ocr_text.strip():
+            try:
+                image_path = db.get_page_image_path(pdf_filename, page_number)
+                if image_path:
+                    from pathlib import Path
+                    from modules.utils.config import get_project_root
+
+                    root = get_project_root()
+                    full_path = Path(image_path) if Path(image_path).is_absolute() else root / image_path
+                    if full_path.exists():
+                        image_bytes = full_path.read_bytes()
+                        from modules.core.extractors.upstage_extractor import get_upstage_extractor
+                        extractor = get_upstage_extractor(enable_cache=False)
+                        raw = await asyncio.to_thread(
+                            extractor.extract_from_image_raw, image_bytes=image_bytes
+                        )
+                        if raw:
+                            ocr_text = _ocr_text_from_upstage_result(raw)
+            except Exception:
+                pass
+
+        # 3) PDF 파일에서 직접 추출 시도
+        if not ocr_text.strip():
+            try:
+                from pathlib import Path
+                from modules.utils.pdf_utils import find_pdf_path
+                from modules.utils.pdf_utils import PdfTextExtractor
+
+                pdf_path_str = find_pdf_path(pdf_name)
+                if pdf_path_str:
+                    def _extract_pdf_text():
+                        ext = PdfTextExtractor()
+                        try:
+                            return ext.extract_text(Path(pdf_path_str), page_number) or ""
+                        finally:
+                            ext.close_all()
+
+                    ocr_text = await asyncio.to_thread(_extract_pdf_text)
+            except Exception:
+                pass
+
+        # 4) result/ 페이지 JSON의 text 필드 시도
+        if not ocr_text.strip():
+            try:
+                from modules.core.storage import PageStorage
+                page_data = PageStorage.load_page(pdf_name, page_number)
+                if page_data and isinstance(page_data.get("text"), str):
+                    ocr_text = page_data["text"]
+            except Exception:
+                pass
+
+        return {"ocr_text": ocr_text or ""}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

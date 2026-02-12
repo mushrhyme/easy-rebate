@@ -2,7 +2,7 @@
  * React Data Grid 아이템 테이블 컴포넌트
  * 셀 편집 중 락 기능 포함
  */
-import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
+import { useMemo, useState, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { createPortal } from 'react-dom'
 import { DataGrid, type Column, type DataGridHandle } from 'react-data-grid'
 import 'react-data-grid/lib/styles.css'
@@ -20,21 +20,24 @@ interface ItemsGridRdgProps {
   formType: string | null
 }
 
+export interface ItemsGridRdgHandle {
+  /** Ctrl+S와 동일: 편집 중인 첫 행 저장 후 락 해제 */
+  save: () => void
+}
+
 interface GridRow {
   item_id: number
   item_order: number
-  customer: string | null
-  product_name: string | null
   first_review_checked: boolean
   second_review_checked: boolean
-  [key: string]: string | number | boolean | null | undefined // item_data 필드들 (동적 필드)
+  [key: string]: string | number | boolean | null | undefined // item_data 필드들 (예: 商品名)
 }
 
-export const ItemsGridRdg = ({
+export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(function ItemsGridRdg({
   pdfFilename,
   pageNumber,
   formType,
-}: ItemsGridRdgProps) => {
+}, ref) {
   const { data, isLoading, error } = useItems(pdfFilename, pageNumber)
   const { data: pageMetaData, isLoading: pageMetaLoading, error: pageMetaError } = usePageMeta(pdfFilename, pageNumber) // page_meta 조회
 
@@ -76,7 +79,7 @@ export const ItemsGridRdg = ({
     window.addEventListener('resize', updateWidth)
     return () => window.removeEventListener('resize', updateWidth)
   }, [])
-  
+
   // WebSocket을 통한 실시간 락 상태 구독 및 review_status 업데이트 처리
   const { isItemLocked, getLockedBy } = useItemLocks({
     pdfFilename,
@@ -149,13 +152,10 @@ export const ItemsGridRdg = ({
       const row: GridRow = {
         item_id: item.item_id,
         item_order: item.item_order,
-        customer: item.customer || null,
-        product_name: item.product_name || null,
         first_review_checked: item.review_status?.first_review?.checked || false,
         second_review_checked: item.review_status?.second_review?.checked || false,
       }
 
-      // item_data의 모든 키를 최상위 레벨에 추가
       if (item.item_data) {
         Object.keys(item.item_data).forEach((key) => {
           row[key] = item.item_data[key]
@@ -192,14 +192,10 @@ export const ItemsGridRdg = ({
       const row: GridRow = {
         item_id: item.item_id,
         item_order: item.item_order,
-        customer: item.customer || null,
-        product_name: item.product_name || null,
-        // 체크박스는 서버에 영구 저장되므로 서버에서 가져온 값을 사용
         first_review_checked: item.review_status?.first_review?.checked || false,
         second_review_checked: item.review_status?.second_review?.checked || false,
       }
 
-      // item_data의 모든 키를 최상위 레벨에 추가
       if (item.item_data) {
         Object.keys(item.item_data).forEach((key) => {
           row[key] = item.item_data[key]
@@ -272,10 +268,12 @@ export const ItemsGridRdg = ({
               prevRow.second_review_checked !== newRow.second_review_checked) {
             return true
           }
-          // 주요 필드 비교
-          return newRow.customer !== prevRow.customer ||
-            newRow.product_name !== prevRow.product_name ||
-            JSON.stringify(newRow.item_data) !== JSON.stringify(prevRow.item_data)
+          // 주요 필드 비교 (상품명은 row['商品名'] 등 동적 키로 있음)
+          const newData = { ...newRow } as Record<string, unknown>
+          const prevData = { ...prevRow } as Record<string, unknown>
+          delete newData.item_data
+          delete prevData.item_data
+          return JSON.stringify(newData) !== JSON.stringify(prevData)
         })
       
       return hasChanges ? newRows : prevRows
@@ -461,6 +459,9 @@ export const ItemsGridRdg = ({
     }
   }, [updateItem, sessionId, queryClient, pdfFilename, pageNumber])
 
+  // 검토 탭 컬럼 순서: API의 item_data_keys(RAG key_order) 우선 사용, 없으면 첫 행 item_data 키 순서
+  const itemDataKeysFromApi = data?.item_data_keys && data.item_data_keys.length > 0 ? data.item_data_keys : null
+
   // 컬럼 정의
   const columns = useMemo<Column<GridRow>[]>(() => {
     // items가 비어있어도 기본 컬럼은 표시
@@ -471,60 +472,102 @@ export const ItemsGridRdg = ({
     
     if (hasItems) {
       const firstItem = items[0]
-      
-      // 첫 번째 아이템의 item_data 키 순서를 기준으로 컬럼 생성 (DB 순서 유지)
-      itemDataKeys = firstItem.item_data ? Object.keys(firstItem.item_data) : []
-      
-      // 모든 아이템에서 존재하는 키 확인 (누락 방지)
-      const allKeysSet = new Set<string>(itemDataKeys)
+      // DB에 실제로 존재하는 키만 수집 (없는 컬럼 표시 방지)
+      const keysInDb = new Set<string>()
       items.forEach((item) => {
         if (item.item_data) {
-          Object.keys(item.item_data).forEach((key) => allKeysSet.add(key))
+          Object.keys(item.item_data).forEach((key) => keysInDb.add(key))
         }
       })
-      
-      // 첫 번째 아이템에 없는 키들을 뒤에 추가
-      const additionalKeys = Array.from(allKeysSet).filter(key => !itemDataKeys.includes(key))
-      orderedKeys = [...itemDataKeys, ...additionalKeys]
+
+      // 정렬 순서: API item_data_keys(RAG key_order) 우선, 없으면 첫 행 키 순서
+      if (itemDataKeysFromApi) {
+        itemDataKeys = [...itemDataKeysFromApi]
+      } else {
+        itemDataKeys = firstItem.item_data ? Object.keys(firstItem.item_data) : []
+      }
+
+      // 키 이름 정규화:
+      // - LLM / RAG 설정에서는 '得意先名' 으로 나오는데,
+      //   DB에는 '得意先' 으로 저장된 경우가 있어 순서가 밀리는 문제를 방지
+      const normalizeKey = (key: string): string => {
+        // customer 계열 필드: DB에 존재하는 쪽 이름으로 맞춘다
+        if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先')) {
+          return '得意先'
+        }
+        if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先名')) {
+          return '得意先名'
+        }
+        return key
+      }
+
+      const normalizedItemDataKeys = itemDataKeys.map(normalizeKey)
+
+      // key_order 순서를 유지하되, DB에 있는 키만 표시
+      const orderedFromApi = normalizedItemDataKeys.filter((key) => keysInDb.has(key))
+      const extraKeys = Array.from(keysInDb).filter((key) => !normalizedItemDataKeys.includes(key))
+      orderedKeys = [...orderedFromApi, ...extraKeys]
+
+      // 디버깅용: 참조 문서의 전체 key_order와 실제 컬럼 순서를 모두 출력
+      console.log('🔵 [ItemsGridRdg] itemDataKeysFromApi(API에서 받은 전체 key_order)=', itemDataKeysFromApi)
+      console.log('🔵 [ItemsGridRdg] normalizedItemDataKeys(정규화된 key_order)=', normalizedItemDataKeys)
+      console.log('🔵 [ItemsGridRdg] keysInDb(DB에 실제 존재하는 키 전체)=', Array.from(keysInDb))
+      console.log('🔵 [ItemsGridRdg] orderedFromApi(API 순서를 따른 실제 사용 키)=', orderedFromApi)
+      console.log('🔵 [ItemsGridRdg] extraKeys(API에는 없지만 DB에만 있는 키)=', extraKeys)
+      console.log('🔵 [ItemsGridRdg] orderedKeys(그리드에 표시되는 최종 컬럼 순서 전체)=', orderedKeys)
     }
 
-    // 컬럼 너비 계산 함수 (데이터 기반 자동 계산)
+    // 컬럼 너비 계산 (데이터/헤더 길이 기준)
+    // - 기본 컬럼은 비교적 타이트하게
+    // - 거래처/상품명/비고 같은 본문 계열 컬럼은 조금만 더 여유 있게
+    // - 너무 길어도 컬럼이 모니터 한 화면을 다 먹지 않도록 최대 폭을 둔다
+    const BASE_CHAR_PX = 9 // 기본: 1문자당 9px (타이트)
+    const WIDE_CHAR_PX = 11 // 본문 계열: 1문자당 11px (약간 여유)
+    const PADDING_PX = 18 // 셀 패딩·테두리 여유
+    const MIN_COL_WIDTH = 80 // 기본 컬럼 최소 너비
+    const WIDE_MIN_COL_WIDTH = 140 // 본문 계열 컬럼 최소 너비
+    const MAX_COL_WIDTH = 220 // 기본 컬럼 최대 너비
+    const WIDE_MAX_COL_WIDTH = 280 // 본문 계열 컬럼 최대 너비
+
+    // 넓게 잡아야 하는 필드들 (거래처/상품명/비고 등)
+    const wideFieldKeys = new Set([
+      '得意先',
+      '得意先名',
+      '商品名',
+      '備考',
+    ])
+
     const calculateColumnWidth = (key: string, name: string): number => {
-      // 헤더 길이 고려 (일본어/한글은 약 1.2배)
-      const headerLength = name.length
-      const headerWidth = headerLength * 10 // 헤더 너비 계산
-      
-      // 데이터 최대 길이 계산 (items가 있을 때만)
+      const isWide = wideFieldKeys.has(key)
+      const charPx = isWide ? WIDE_CHAR_PX : BASE_CHAR_PX
+      const minWidth = isWide ? WIDE_MIN_COL_WIDTH : MIN_COL_WIDTH
+      const maxWidth = isWide ? WIDE_MAX_COL_WIDTH : MAX_COL_WIDTH
+
+      const headerWidth = name.length * charPx + PADDING_PX
       let maxDataLength = 0
       if (hasItems) {
         items.forEach((item) => {
-          let value: any = null
-          if (item.item_data && item.item_data[key] !== undefined) {
-            value = item.item_data[key]
-          }
-          
-          if (value !== null && value !== undefined) {
-            const strValue = String(value)
-            maxDataLength = Math.max(maxDataLength, strValue.length)
+          const value = item.item_data?.[key]
+          if (value != null) {
+            const len = String(value).length
+            if (len > maxDataLength) maxDataLength = len
           }
         })
       }
-      
-      // 데이터 너비 계산
-      const dataWidth = maxDataLength * 8 // 데이터는 약간 여유있게
-      
-      // 헤더와 데이터 중 더 긴 것을 기준으로 너비 설정
-      const calculatedWidth = Math.max(headerWidth, dataWidth, 80) // 최소 80px
-      
-      // 최대 너비 제한 (너무 넓어지지 않도록)
-      return Math.min(calculatedWidth, 300)
+      const dataWidth = maxDataLength * charPx + PADDING_PX
+      // 헤더/데이터 길이/최소 너비 중 가장 큰 값 사용하되,
+      // 최대 폭을 넘어가면 잘라서 너무 넓어지지 않도록 함
+      const rawWidth = Math.max(headerWidth, dataWidth, minWidth)
+      return Math.min(rawWidth, maxWidth)
     }
 
     const cols: Column<GridRow>[] = [
       {
         key: 'item_order',
         name: 'No',
-        width: 30, // 35 → 30으로 축소
+        // 고정 컬럼: 항상 고정 픽셀 너비 사용
+        width: 36,
+        minWidth: 36,
         frozen: true,
         resizable: false,
       },
@@ -536,7 +579,8 @@ export const ItemsGridRdg = ({
       cols.push({
         key: 'actions',
         name: '操作',
-        width: 38, // 45 → 38로 축소
+        width: 45,
+        minWidth: 45,
         frozen: true,
         resizable: false,
         renderCell: ({ row }) => {
@@ -550,15 +594,12 @@ export const ItemsGridRdg = ({
 
           return (
             <ActionCellWithMenu
-              itemId={itemId}
               isHovered={isHovered}
               isEditing={isEditing}
               isLockedByOthers={isLockedByOthers}
               lockedBy={lockedBy}
               onMouseEnter={() => setHoveredRowId(itemId)}
               onMouseLeave={() => setHoveredRowId(null)}
-              onEdit={() => handleEdit(itemId)}
-              onSave={() => handleSaveAndUnlock(itemId)}
               onAdd={() => handleAddRow(itemId)}
               onDelete={() => handleDeleteRow(itemId)}
               createItemPending={createItem.isPending}
@@ -571,8 +612,10 @@ export const ItemsGridRdg = ({
       cols.push({
         key: 'first_review_checked',
         name: '1次',
-        width: 38, // 45 → 38로 축소
+        width: 40,
+        minWidth: 40,
         frozen: true,
+        resizable: false,
         editable: false, // 그리드 편집 기능 비활성화
         renderCell: ({ row }) => {
           const isChecked = row.first_review_checked || false
@@ -629,8 +672,10 @@ export const ItemsGridRdg = ({
       cols.push({
         key: 'second_review_checked',
         name: '2次',
-        width: 38, // 45 → 38로 축소
+        width: 40,
+        minWidth: 40,
         frozen: true,
+        resizable: false,
         editable: false, // 그리드 편집 기능 비활성화
         renderCell: ({ row }) => {
           const isChecked = row.second_review_checked || false
@@ -688,17 +733,23 @@ export const ItemsGridRdg = ({
       cols.push({
         key: 'タイプ',
         name: 'タイプ',
-        width: 85, // 100 → 85로 축소
+        width: 100,
+        minWidth: 100,
         frozen: true,
+        resizable: false,
         editable: false,
         renderCell: ({ row }) => {
           const currentValue = row['タイプ'] || null
           const isEditing = editingItemIds.has(row.item_id)
           
           if (isEditing) {
+            const selectValue =
+              typeof currentValue === 'string' || typeof currentValue === 'number'
+                ? currentValue
+                : ''
             return (
               <select
-                value={currentValue || ''}
+                value={selectValue}
                 onChange={(e) => {
                   const newValue = e.target.value === '' ? null : e.target.value
                   handleCellChange(row.item_id, 'タイプ', newValue)
@@ -713,9 +764,12 @@ export const ItemsGridRdg = ({
                 onClick={(e) => e.stopPropagation()}
               >
                 <option value="">Null</option>
-                <option value="aaa">aaa</option>
-                <option value="bbb">bbb</option>
-                <option value="ccc">ccc</option>
+                <option value="条件">条件</option>
+                <option value="販促費8%">販促費8%</option>
+                <option value="販促費10%">販促費10%</option>
+                <option value="CF8%">CF8%</option>
+                <option value="CF10%">CF10%</option>
+                <option value="非課税">非課税</option>
               </select>
             )
           }
@@ -728,9 +782,8 @@ export const ItemsGridRdg = ({
     // items가 있을 때만 item_data 필드 추가
     if (hasItems) {
       orderedKeys.forEach((key) => {
-        // customer, product_name, タイプ는 이미 별도 컬럼으로 처리되므로 item_data에 중복 추가하지 않음
-        // 단, 日本語 필드명(取引先, 商品名)은 그대로 표시
-        if (key !== 'customer' && key !== 'product_name' && key !== 'タイプ') {
+        // customer, タイプ는 별도 처리. 商品名 등은 item_data 키로 그대로 표시
+        if (key !== 'customer' && key !== 'タイプ') {
           // 복잡한 구조(객체/배열) 필드는 그리드에 표시하지 않음 (배지로 표시)
           // 첫 번째 아이템의 값으로 타입 확인
           const firstValue = items[0]?.item_data?.[key]
@@ -743,10 +796,12 @@ export const ItemsGridRdg = ({
             return
           }
           
+          const dataBasedWidth = calculateColumnWidth(key, key)
           cols.push({
             key,
             name: key,
-            width: calculateColumnWidth(key, key), // 자동 너비 계산
+            width: dataBasedWidth,
+            minWidth: Math.max(dataBasedWidth, MIN_COL_WIDTH),
             resizable: true,
             renderCell: ({ row }) => {
               const isEditing = editingItemIds.has(row.item_id)
@@ -769,55 +824,68 @@ export const ItemsGridRdg = ({
       })
     }
 
-    // 공통 필드 추가 (customer, product_name이 item_data에 있으면 이미 추가됨)
+    // 공통 필드 추가 (customer는 별도 컬럼, 商品名 등은 item_data 키로 표시됨)
     // 하지만 별도 컬럼으로도 표시할 수 있음 (필요시)
     // 현재는 item_data에 있는 필드만 사용
 
-    // 컬럼 너비 합계 계산 및 화면 너비에 맞게 조정 (화면 전체 사용)
-    const getColumnWidth = (col: Column<GridRow>): number => {
-      const width = col.width
-      if (typeof width === 'number') return width
-      if (typeof width === 'string') return parseInt(width, 10) || 100
-      return 100
+    // 컬럼 너비: 데이터/헤더 길이 기준 유지 (minWidth 보장, 가로 스크롤로 전체 확인)
+    const getColWidth = (col: Column<GridRow>): number => {
+      const w = col.width
+      if (typeof w === 'number') return w
+      if (typeof w === 'string') return parseInt(w, 10) || MIN_COL_WIDTH
+      return MIN_COL_WIDTH
     }
-    
-    // 컨테이너 너비 사용 (state로 관리됨)
-    const viewportWidth = containerWidth
-    
-    // frozen 컬럼과 non-frozen 컬럼 분리
-    const frozenCols = cols.filter(c => c.frozen)
-    const nonFrozenCols = cols.filter(c => !c.frozen)
-    
-    // frozen 컬럼 너비 합계
-    const frozenWidth = frozenCols.reduce((sum, c) => sum + getColumnWidth(c), 0)
-    
-    // 남은 공간 계산
-    const remainingWidth = Math.max(viewportWidth - frozenWidth - 20, 0) // 패딩/보더 여유
-    
-    // non-frozen 컬럼의 현재 너비 합계
-    const nonFrozenTotalWidth = nonFrozenCols.reduce((sum, c) => sum + getColumnWidth(c), 0)
-    
-    // 화면 너비에 맞게 모든 컬럼 조정 (새 배열 생성)
     const adjustedCols: Column<GridRow>[] = cols.map((col) => {
-      const currentWidth = getColumnWidth(col)
-      
-      if (col.frozen) {
-        // frozen 컬럼은 너비 유지
-        return { ...col, width: currentWidth }
-      } else {
-        // 일반 컬럼은 남은 공간에 비례하여 확장/축소
-        if (nonFrozenTotalWidth > 0 && remainingWidth > 0) {
-          const scaleFactor = remainingWidth / nonFrozenTotalWidth
-          const newWidth = Math.max(Math.floor(currentWidth * scaleFactor), 80) // 최소 80px 유지
-          return { ...col, width: newWidth }
-        }
-        
-        return { ...col, width: currentWidth }
-      }
+      const w = getColWidth(col)
+      const existingMin = col.minWidth
+      const minW = existingMin != null ? existingMin : (col.frozen ? w : Math.max(w, MIN_COL_WIDTH))
+      return { ...col, width: w, minWidth: minW }
     })
 
+    // 전체 컬럼 너비가 컨테이너보다 좁으면,
+    // 고정(frozen) 컬럼은 그대로 두고, 나머지 컬럼들을 스케일업해서 오른쪽 여백을 최대한 제거
+    const totalWidth = adjustedCols.reduce((sum, col) => sum + getColWidth(col), 0)
+    const availableWidth = containerWidth || totalWidth
+
+    if (availableWidth > 0 && totalWidth < availableWidth) {
+      const frozenCols = adjustedCols.filter((col) => col.frozen)
+      const flexibleCols = adjustedCols.filter((col) => !col.frozen)
+
+      const frozenWidth = frozenCols.reduce((sum, col) => sum + getColWidth(col), 0)
+      const flexibleWidth = flexibleCols.reduce((sum, col) => sum + getColWidth(col), 0)
+
+      const targetFlexibleWidth = Math.max(flexibleWidth, availableWidth - frozenWidth)
+
+      if (flexibleWidth > 0 && targetFlexibleWidth > flexibleWidth) {
+        const scale = targetFlexibleWidth / flexibleWidth
+        let remaining = availableWidth - frozenWidth
+
+        const scaled = adjustedCols.map((col, idx) => {
+          if (col.frozen) {
+            return col
+          }
+          const w = getColWidth(col)
+          let newWidth = Math.max(col.minWidth ?? MIN_COL_WIDTH, Math.floor(w * scale))
+
+          // 마지막 flexible 컬럼에 남은 여유를 몰아서 줘서 합이 딱 맞도록 조정
+          const isLastFlexible = adjustedCols
+            .slice(idx + 1)
+            .every((nextCol) => nextCol.frozen)
+
+          if (isLastFlexible) {
+            newWidth = Math.max(newWidth, remaining)
+          }
+
+          remaining -= newWidth
+          return { ...col, width: newWidth }
+        })
+
+        return scaled
+      }
+    }
+
     return adjustedCols
-  }, [items, editingItemIds, handleCellChange, handleCheckboxUpdate, containerWidth, isItemLocked, getLockedBy, sessionId])
+  }, [items, itemDataKeysFromApi, editingItemIds, handleCellChange, handleCheckboxUpdate, containerWidth, isItemLocked, getLockedBy, sessionId])
 
 
   // 행 편집 시작 (락 획득)
@@ -884,6 +952,18 @@ export const ItemsGridRdg = ({
     }
   }
 
+  // 셀 더블클릭으로 해당 행 편집 모드 진입
+  const handleCellDoubleClick = (args: any) => {
+    const row: GridRow | undefined = args?.row
+    if (!row) return
+
+    const itemId = row.item_id
+    if (typeof itemId !== 'number') return
+
+    // 기존 편집 버튼과 동일한 로직 사용
+    void handleEdit(itemId)
+  }
+  
   /**
    * 저장 및 락 해제: 현재 rowData를 저장한 후 락 해제
    */
@@ -924,7 +1004,6 @@ export const ItemsGridRdg = ({
         key !== 'item_id' &&
         key !== 'item_order' &&
         key !== 'customer' &&
-        key !== 'product_name' &&
         key !== 'first_review_checked' &&
         key !== 'second_review_checked'
       ) {
@@ -1040,7 +1119,6 @@ export const ItemsGridRdg = ({
       await createItem.mutateAsync({
         itemData: emptyItemData,
         customer: '',
-        productName: '',
         afterItemId: afterItemId,
       })
 
@@ -1094,7 +1172,7 @@ export const ItemsGridRdg = ({
     items.forEach((item) => {
       if (item.item_data) {
         Object.keys(item.item_data).forEach((key) => {
-          if (key !== 'customer' && key !== 'product_name') {
+          if (key !== 'customer') {
             const value = item.item_data[key]
             const isComplexType = value !== null && 
               value !== undefined && 
@@ -1205,6 +1283,47 @@ export const ItemsGridRdg = ({
     setSelectedComplexField(null)
   }, [pdfFilename, pageNumber])
 
+  // Ctrl+S / Cmd+S 로 현재 편집 중인 행 저장
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isSaveShortcut =
+        (event.ctrlKey || event.metaKey) &&
+        (event.key === 's' || event.key === 'S')
+
+      if (!isSaveShortcut) return
+
+      // 브라우저 기본 저장 단축키 막기
+      event.preventDefault()
+
+      const editingIds = Array.from(editingItemIdsRef.current.values())
+      if (editingIds.length === 0) return
+
+      const firstEditingId = editingIds[0]
+      if (typeof firstEditingId === 'number') {
+        void handleSaveAndUnlock(firstEditingId)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [handleSaveAndUnlock])
+
+  // 부모에서 저장 버튼 등으로 호출할 수 있도록 노출 (Ctrl+S와 동일 동작)
+  useImperativeHandle(ref, () => ({
+    save() {
+      const editingIds = Array.from(editingItemIdsRef.current.values())
+      if (editingIds.length === 0) return
+      const firstEditingId = editingIds[0]
+      if (typeof firstEditingId === 'number') {
+        void handleSaveAndUnlock(firstEditingId)
+      }
+    },
+  }), [handleSaveAndUnlock])
+
   if (isLoading || pageMetaLoading) {
     return <div className="grid-loading">読み込み中...</div>
   }
@@ -1270,6 +1389,7 @@ export const ItemsGridRdg = ({
             columns={columns}
             rows={rows}
             onRowsChange={onRowsChange}
+            onCellDoubleClick={handleCellDoubleClick}
             rowKeyGetter={(row: GridRow) => row.item_id} // 행 고유 키 지정
             rowClass={(row: GridRow) => {
               // 편집 모드인 행에 클래스 추가
@@ -1331,22 +1451,19 @@ export const ItemsGridRdg = ({
       )}
     </div>
   )
-}
+})
 
 /**
  * 액션 메뉴가 있는 셀 컴포넌트
  * 메뉴 위치를 동적으로 계산하여 버튼 아래에 정확히 표시
  */
 interface ActionCellWithMenuProps {
-  itemId: number
   isHovered: boolean
   isEditing: boolean
   isLockedByOthers: boolean
   lockedBy: string | null
   onMouseEnter: () => void
   onMouseLeave: () => void
-  onEdit: () => void
-  onSave: () => void
   onAdd: () => void
   onDelete: () => void
   createItemPending: boolean
@@ -1354,15 +1471,12 @@ interface ActionCellWithMenuProps {
 }
 
 const ActionCellWithMenu = ({
-  itemId,
   isHovered,
   isEditing,
   isLockedByOthers,
   lockedBy,
   onMouseEnter,
   onMouseLeave,
-  onEdit,
-  onSave,
   onAdd,
   onDelete,
   createItemPending,
@@ -1442,35 +1556,7 @@ const ActionCellWithMenu = ({
           >
             ➕ 追加
           </button>
-          
-          {/* 편집/저장 버튼 */}
-          {isEditing ? (
-            <button
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                onSave()
-              }}
-              className="action-menu-item action-menu-save"
-              title="保存して編集を終了"
-            >
-              💾 保存
-            </button>
-          ) : (
-            <button
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                onEdit()
-              }}
-              className="action-menu-item action-menu-edit"
-              disabled={isLockedByOthers}
-              title={isLockedByOthers ? `編集中: ${lockedBy}` : '編集を開始'}
-            >
-              {isLockedByOthers ? '🔒 編集中' : '✏️ 編集'}
-            </button>
-          )}
-          
+
           {/* 삭제 버튼 */}
           <button
             onClick={(e) => {

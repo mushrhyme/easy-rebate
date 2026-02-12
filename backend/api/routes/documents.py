@@ -2,10 +2,12 @@
 문서 업로드 및 관리 API
 """
 import asyncio
+import base64
 import re
 import json
 import time
 from pathlib import Path
+from io import BytesIO
 from typing import List, Optional, Tuple
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
@@ -15,7 +17,7 @@ from pydantic import BaseModel
 from database.registry import get_db
 from database.table_selector import get_table_name, get_table_suffix
 from modules.core.processor import PdfProcessor
-from modules.utils.config import rag_config
+from modules.utils.config import rag_config, get_project_root
 from backend.core.session import SessionManager
 from backend.core.config import settings
 from backend.core.auth import get_current_user_id
@@ -24,9 +26,17 @@ from backend.api.routes.websocket import manager
 router = APIRouter()
 
 
+def _answer_key_debug_dir(pdf_filename: str) -> Path:
+    """정답지 생성 디버깅용: debug/answer_key/{문서명}/ 경로 반환 (폴더는 호출측에서 생성)."""
+    stem = Path(pdf_filename).stem
+    safe_name = stem.replace("\\", "_").replace("/", "_").strip() or "unknown"
+    return get_project_root() / "debug" / "answer_key" / safe_name
+
+
 def query_documents_table(
     db,
     form_type: Optional[str] = None,
+    upload_channel: Optional[str] = None,
     year: Optional[int] = None,
     month: Optional[int] = None
 ) -> List[Tuple]:
@@ -52,45 +62,55 @@ def query_documents_table(
             table_suffix = get_table_suffix(year, month)
             documents_table = f"documents_{table_suffix}"
             
-            if form_type:
+            filter_cond = upload_channel or form_type
+            if filter_cond:
+                col, val = ("upload_channel", upload_channel) if upload_channel else ("form_type", form_type)
                 cursor.execute(f"""
-                    SELECT pdf_filename, total_pages, form_type, created_at, data_year, data_month
+                    SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
+                           COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
-                    WHERE form_type = %s
+                    WHERE {col} = %s
                     ORDER BY created_at DESC
-                """, (form_type,))
+                """, (val,))
             else:
                 cursor.execute(f"""
-                    SELECT pdf_filename, total_pages, form_type, created_at, data_year, data_month
+                    SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
+                           COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
                     ORDER BY created_at DESC
                 """)
             rows = cursor.fetchall()
-            query_label = f"documents_{table_suffix}" + (f" (form_type={form_type})" if form_type else " (전체)")
+            query_label = f"documents_{table_suffix}" + (f" (filter={filter_cond})" if filter_cond else " (전체)")
         else:
             # current + archive 모두 조회
-            if form_type:
-                cursor.execute("""
-                    SELECT pdf_filename, total_pages, form_type, created_at, data_year, data_month
+            filter_cond = upload_channel or form_type
+            col, val = ("upload_channel", upload_channel) if upload_channel else ("form_type", form_type)
+            if filter_cond:
+                cursor.execute(f"""
+                    SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
+                           COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
-                    WHERE form_type = %s
+                    WHERE {col} = %s
                     UNION ALL
-                    SELECT pdf_filename, total_pages, form_type, created_at, data_year, data_month
+                    SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
+                           COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
-                    WHERE form_type = %s
+                    WHERE {col} = %s
                     ORDER BY created_at DESC
-                """, (form_type, form_type))
+                """, (val, val))
             else:
                 cursor.execute("""
-                    SELECT pdf_filename, total_pages, form_type, created_at, data_year, data_month
+                    SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
+                           COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
                     UNION ALL
-                    SELECT pdf_filename, total_pages, form_type, created_at, data_year, data_month
+                    SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
+                           COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
                     ORDER BY created_at DESC
                 """)
             rows = cursor.fetchall()
-            query_label = "documents (current+archive)" + (f" (form_type={form_type})" if form_type else " (전체)")
+            query_label = "documents (current+archive)" + (f" (filter={filter_cond})" if filter_cond else " (전체)")
     
     return rows
 
@@ -268,10 +288,12 @@ class DocumentResponse(BaseModel):
     pdf_filename: str
     total_pages: int
     form_type: Optional[str] = None
+    upload_channel: Optional[str] = None
     status: str
     created_at: Optional[str] = None  # 업로드 날짜 (ISO 형식)
     data_year: Optional[int] = None  # 문서 데이터 연도 (請求年月에서 추출)
     data_month: Optional[int] = None  # 문서 데이터 월 (請求年月에서 추출)
+    is_answer_key_document: bool = False  # 정답지 생성 대상 여부 (true면 검토 탭에서 제외)
 
 
 class DocumentListResponse(BaseModel):
@@ -282,7 +304,8 @@ class DocumentListResponse(BaseModel):
 
 @router.post("/upload", response_model=dict)
 async def upload_documents(
-    form_type: str = Form(...),
+    upload_channel: Optional[str] = Form(None, alias="upload_channel"),
+    form_type: Optional[str] = Form(None, alias="form_type"),  # 하위 호환 (더 이상 upload_channel 결정에 사용하지 않음)
     files: List[UploadFile] = File(...),
     year: Optional[int] = Form(None),
     month: Optional[int] = Form(None),
@@ -294,15 +317,19 @@ async def upload_documents(
     PDF 파일 업로드 및 처리
     
     Args:
-        form_type: 양식지 타입 ("01"~"06")
+        upload_channel: finet(엑셀) | mail(Upstage OCR)
+        form_type: 하위 호환 (01-06, 더 이상 upload_channel 추론에는 사용하지 않음)
         files: 업로드된 PDF 파일 리스트
         year: 연도 (선택사항)
         month: 월 (선택사항, 1-12)
-        background_tasks: 백그라운드 작업
-        db: 데이터베이스 인스턴스
     """
-    if form_type not in ["01", "02", "03", "04", "05", "06"]:
-        raise HTTPException(status_code=400, detail="Invalid form_type. Must be 01-06")
+    # 옵션 1: 텍스트 추출 방식은 upload_channel 기준으로만 결정.
+    # form_type만으로 channel을 추론하는 것은 지원하지 않는다.
+    if not upload_channel or upload_channel not in ("finet", "mail"):
+        raise HTTPException(
+            status_code=400,
+            detail="upload_channel (finet|mail) is required. form_type 파라미터만 보내는 방식은 더 이상 지원하지 않습니다.",
+        )
     
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
@@ -335,24 +362,22 @@ async def upload_documents(
             doc_info = db.check_document_exists(pdf_filename)
             
             if doc_info['exists']:
-                # form_type 업데이트 (null인 경우) - current와 archive 모두 업데이트
-                if doc_info.get('form_type') is None:
-                    try:
-                        with db.get_connection() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute("""
-                                UPDATE documents_current 
-                                SET form_type = %s 
-                                WHERE pdf_filename = %s
-                            """, (form_type, pdf_filename))
-                            cursor.execute("""
-                                UPDATE documents_archive 
-                                SET form_type = %s 
-                                WHERE pdf_filename = %s
-                            """, (form_type, pdf_filename))
-                            conn.commit()
-                    except Exception:
-                        pass
+                try:
+                    with db.get_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE documents_current 
+                            SET upload_channel = %s 
+                            WHERE pdf_filename = %s
+                        """, (upload_channel, pdf_filename))
+                        cursor.execute("""
+                            UPDATE documents_archive 
+                            SET upload_channel = %s 
+                            WHERE pdf_filename = %s
+                        """, (upload_channel, pdf_filename))
+                        conn.commit()
+                except Exception:
+                    pass
                 
                 results.append({
                     "filename": uploaded_file.filename,
@@ -373,6 +398,7 @@ async def upload_documents(
                         process_pdf_background,
                         file_bytes=file_bytes,
                         pdf_name=pdf_name,
+                        upload_channel=upload_channel,
                         form_type=form_type,
                         session_id=session_id,
                         user_id=current_user_id,
@@ -396,7 +422,8 @@ async def upload_documents(
 
 @router.post("/upload-with-bbox", response_model=dict)
 async def upload_documents_with_bbox(
-    form_type: str = Form(...),
+    upload_channel: Optional[str] = Form(None, alias="upload_channel"),
+    form_type: Optional[str] = Form(None, alias="form_type"),  # 하위 호환 (더 이상 upload_channel 결정에 사용하지 않음)
     files: List[UploadFile] = File(...),
     year: Optional[int] = Form(None),
     month: Optional[int] = Form(None),
@@ -405,11 +432,14 @@ async def upload_documents_with_bbox(
     db=Depends(get_db)
 ):
     """
-    PDF 업로드 후 좌표 포함 파싱 (새 탭 전용).
-    form_type 03/04일 때 Upstage 단어 좌표 + LLM _word_indices → _bbox 부여.
+    PDF 업로드 후 좌표 포함 파싱. mail 채널에서 Upstage 단어 좌표 + LLM _word_indices → _bbox 부여.
     """
-    if form_type not in ["01", "02", "03", "04", "05", "06"]:
-        raise HTTPException(status_code=400, detail="Invalid form_type. Must be 01-06")
+    # 옵션 1: 무조건 upload_channel로만 동작
+    if not upload_channel or upload_channel not in ("finet", "mail"):
+        raise HTTPException(
+            status_code=400,
+            detail="upload_channel (finet|mail) is required. form_type 파라미터만 보내는 방식은 더 이상 지원하지 않습니다.",
+        )
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
     if month is not None and not (1 <= month <= 12):
@@ -447,7 +477,8 @@ async def upload_documents_with_bbox(
                         process_pdf_background,
                         file_bytes=file_bytes,
                         pdf_name=pdf_name,
-                        form_type=form_type,
+                        upload_channel=upload_channel,
+                        form_type=None,
                         session_id=session_id,
                         user_id=current_user_id,
                         data_year=year,
@@ -470,7 +501,8 @@ async def upload_documents_with_bbox(
 async def process_pdf_background(
     file_bytes: bytes,
     pdf_name: str,
-    form_type: str,
+    upload_channel: str,
+    form_type: Optional[str],
     session_id: str,
     user_id: int,
     data_year: Optional[int] = None,
@@ -531,6 +563,7 @@ async def process_pdf_background(
                 dpi=rag_config.dpi,
                 progress_callback=progress_callback,
                 form_type=form_type,
+                upload_channel=upload_channel,
                 user_id=user_id,
                 data_year=data_year,
                 data_month=data_month,
@@ -539,7 +572,6 @@ async def process_pdf_background(
         )
         
         if success:
-            # form_type 및 지정한 년월 업데이트
             pdf_filename = f"{pdf_name}.pdf"
             try:
                 from database.registry import get_db
@@ -547,20 +579,20 @@ async def process_pdf_background(
                 db = get_db()
                 with db.get_connection() as conn:
                     cursor = conn.cursor()
-                    # 지정한 년월이 있으면 created_at을 해당 년월 1일로 설정
+                    # form_type은 processor에서 RAG 참조 기준으로 저장됨. 여기서 덮어쓰지 않음.
                     if data_year and data_month:
                         created_at = datetime(data_year, data_month, 1)
                         cursor.execute("""
                             UPDATE documents_current 
-                            SET form_type = %s, created_at = %s, data_year = %s, data_month = %s
+                            SET upload_channel = %s, created_at = %s, data_year = %s, data_month = %s
                             WHERE pdf_filename = %s
-                        """, (form_type, created_at, data_year, data_month, pdf_filename))
+                        """, (upload_channel, created_at, data_year, data_month, pdf_filename))
                     else:
                         cursor.execute("""
                             UPDATE documents_current 
-                            SET form_type = %s 
+                            SET upload_channel = %s 
                             WHERE pdf_filename = %s
-                        """, (form_type, pdf_filename))
+                        """, (upload_channel, pdf_filename))
                     conn.commit()
             except Exception:
                 pass
@@ -628,6 +660,7 @@ async def process_pdf_background(
 @router.get("/", response_model=DocumentListResponse)
 async def get_documents(
     form_type: Optional[str] = None,
+    upload_channel: Optional[str] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
     db=Depends(get_db)
@@ -636,16 +669,16 @@ async def get_documents(
     문서 목록 조회 (current/archive 테이블 사용)
     
     Args:
-        form_type: 양식지 타입 필터 (선택사항)
-        year: 연도 (선택사항, 없으면 current + archive 모두 조회)
-        month: 월 (선택사항, 없으면 current + archive 모두 조회)
+        form_type: 양식지 타입 필터 (하위 호환)
+        upload_channel: 업로드 채널 필터 (finet | mail)
+        year: 연도 (선택사항)
+        month: 월 (선택사항)
         db: 데이터베이스 인스턴스
     """
-    total_start = time.perf_counter()  # 전체 엔드포인트 시간 측정 시작
+    total_start = time.perf_counter()
     
     try:
-        # documents 테이블 조회 (헬퍼 함수 사용)
-        rows = query_documents_table(db, form_type=form_type, year=year, month=month)
+        rows = query_documents_table(db, form_type=form_type, upload_channel=upload_channel, year=year, month=month)
         
         # 배치로 첫 페이지의 page_meta 일괄 조회 (N+1 쿼리 문제 해결)
         pdf_filenames = [row[0] for row in rows]
@@ -657,10 +690,12 @@ async def get_documents(
         for row in rows:
             pdf_filename = row[0]
             total_pages = row[1]
-            form_type = row[2]
-            created_at = row[3]
-            data_year = row[4] if len(row) > 4 else None
-            data_month = row[5] if len(row) > 5 else None
+            row_form_type = row[2]
+            row_upload_channel = row[3] if len(row) > 3 else None
+            created_at = row[4] if len(row) > 4 else row[3] if len(row) == 4 else None
+            data_year = row[5] if len(row) > 5 else (row[4] if len(row) > 4 else None)
+            data_month = row[6] if len(row) > 6 else (row[5] if len(row) > 5 else None)
+            is_answer_key_document = bool(row[7]) if len(row) > 7 else False
             
             # created_at을 ISO 형식 문자열로 변환
             created_at_str = None
@@ -707,11 +742,13 @@ async def get_documents(
             documents.append(DocumentResponse(
                 pdf_filename=pdf_filename,
                 total_pages=total_pages,
-                form_type=form_type,
+                form_type=row_form_type,
+                upload_channel=row_upload_channel,
                 status="completed",
                 created_at=created_at_str,
                 data_year=data_year,
-                data_month=data_month
+                data_month=data_month,
+                is_answer_key_document=is_answer_key_document
             ))
         
         return DocumentListResponse(
@@ -761,16 +798,533 @@ async def get_document(
         data_year = year_month[0] if year_month else None
         data_month = year_month[1] if year_month else None
         
+        is_answer_key = bool(doc.get('is_answer_key_document', False))
         return DocumentResponse(
             pdf_filename=doc['pdf_filename'],
             total_pages=doc['total_pages'],
             form_type=doc.get('form_type'),
+            upload_channel=doc.get('upload_channel'),
             status="completed",
             created_at=created_at_str,
             data_year=data_year,
-            data_month=data_month
+            data_month=data_month,
+            is_answer_key_document=is_answer_key
         )
     
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{pdf_filename}/answer-key-designate")
+async def designate_document_as_answer_key(
+    pdf_filename: str,
+    db=Depends(get_db)
+):
+    """
+    문서를 정답지 생성 대상으로 지정 (검토 탭에서 제외, 정답지 생성 탭에서만 표시)
+    - documents_current 또는 documents_archive의 is_answer_key_document = TRUE
+    - 해당 문서의 모든 페이지에 page_data의 is_rag_candidate = TRUE
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE documents_current
+                SET is_answer_key_document = TRUE, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (pdf_filename,))
+            if cursor.rowcount > 0:
+                cursor.execute("""
+                    UPDATE page_data_current
+                    SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+            else:
+                cursor.execute("""
+                    UPDATE documents_archive
+                    SET is_answer_key_document = TRUE, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+                if cursor.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Document not found in current or archive table")
+                cursor.execute("""
+                    UPDATE page_data_archive
+                    SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+            conn.commit()
+        return {"success": True, "message": "Document designated for answer key creation"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{pdf_filename}/answer-key-revoke")
+async def revoke_document_answer_key(
+    pdf_filename: str,
+    db=Depends(get_db)
+):
+    """
+    문서의 정답지 생성 대상 지정 해제 (검토 탭에서 다시 표시됨)
+    - documents_current 또는 documents_archive의 is_answer_key_document = FALSE
+    - 해당 문서의 모든 페이지에 page_data의 is_rag_candidate = FALSE
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE documents_current
+                SET is_answer_key_document = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (pdf_filename,))
+            if cursor.rowcount > 0:
+                cursor.execute("""
+                    UPDATE page_data_current
+                    SET is_rag_candidate = FALSE, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+            else:
+                cursor.execute("""
+                    UPDATE documents_archive
+                    SET is_answer_key_document = FALSE, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+                if cursor.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Document not found in current or archive table")
+                cursor.execute("""
+                    UPDATE page_data_archive
+                    SET is_rag_candidate = FALSE, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+            conn.commit()
+        return {"success": True, "message": "Document revoked from answer key creation"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{pdf_filename}/pages/{page_number:int}/generate-answer")
+async def generate_answer_with_gemini(
+    pdf_filename: str,
+    page_number: int,
+    db=Depends(get_db)
+):
+    """
+    Gemini Vision zero-shot으로 해당 페이지의 정답지(items) 생성.
+    페이지 이미지를 Gemini에 전달하여 구조화된 JSON을 추출합니다.
+    """
+    try:
+        from PIL import Image
+        from modules.core.extractors.gemini_extractor import GeminiVisionParser
+
+        image_path = db.get_page_image_path(pdf_filename, page_number)
+        if not image_path or not Path(image_path).exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+
+        image = Image.open(image_path).convert("RGB")
+        debug_dir = _answer_key_debug_dir(pdf_filename)
+        # 정답지 생성용 Gemini 모델은 전역 설정(rag_config.gemini_extractor_model)에 따라 동작
+        parser = GeminiVisionParser(model_name=getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
+        result = await asyncio.to_thread(
+            parser.parse_image,
+            image,
+            max_size=1200,
+            debug_dir=str(debug_dir),
+            page_number=page_number,
+        )
+
+        items = result.get("items")
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            items = []
+
+        # 디버깅: 영문 키 생성 위치 추적 — Gemini가 반환한 첫 item의 키를 로그
+        try:
+            from modules.utils.config import get_gemini_prompt_path
+            _prompt_name = get_gemini_prompt_path().name
+            _first_keys = list(items[0].keys()) if items and isinstance(items[0], dict) else []
+            print(f"[generate_answer_with_gemini] prompt_file={_prompt_name} first_item_keys={_first_keys}")
+        except Exception:
+            pass
+
+        page_role = result.get("page_role") or "detail"
+        # page_meta: items, page_role 제외한 나머지 키 (document_ref 등)
+        page_meta = {
+            k: v for k, v in result.items()
+            if k not in ("items", "page_role") and v is not None
+        }
+
+        return {
+            "success": True,
+            "page_number": page_number,
+            "page_role": page_role,
+            "page_meta": page_meta if page_meta else None,
+            "items": items,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        if "GEMINI_API_KEY" in str(e):
+            raise HTTPException(status_code=503, detail="GEMINI_API_KEY가 설정되지 않았습니다.")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{pdf_filename}/pages/{page_number:int}/generate-answer-gpt")
+async def generate_answer_with_gpt(
+    pdf_filename: str,
+    page_number: int,
+    db=Depends(get_db),
+    model: str = "gpt-5.2-2025-12-11",
+):
+    """
+    동일한 프롬프트(prompt_v3.txt)로 GPT Vision에 이미지를 넘겨 정답지(items) 생성.
+    정답지 생성 탭에서는 Gemini 3 Pro Preview 또는 GPT 5.2만 사용.
+    """
+    try:
+        from PIL import Image
+        from openai import OpenAI
+        from modules.utils.config import load_gemini_prompt, get_gemini_prompt_path
+
+        image_path = db.get_page_image_path(pdf_filename, page_number)
+        if not image_path or not Path(image_path).exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+
+        image = Image.open(image_path).convert("RGB")
+        # API 크기 제한 고려해 리사이즈 (1200 기준)
+        max_size = 1200
+        w, h = image.size
+        if w > max_size or h > max_size:
+            ratio = min(max_size / w, max_size / h)
+            image = image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+        buf = BytesIO()
+        image.save(buf, format="JPEG", quality=85)
+        b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+
+        prompt = load_gemini_prompt()
+        api_key = getattr(settings, "openai_api_key", None) or __import__("os").getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+
+        client = OpenAI(api_key=api_key)
+        response = await asyncio.to_thread(
+            lambda: client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                        ],
+                    }
+                ],
+                max_completion_tokens=4096,
+            )
+        )
+        raw_text = (response.choices[0].message.content or "").strip()
+        if not raw_text:
+            raise HTTPException(status_code=502, detail="GPT returned empty content")
+
+        # 디버깅: debug/answer_key/{문서명}/ 에 프롬프트·원문·파싱 결과 저장
+        try:
+            debug_path = _answer_key_debug_dir(pdf_filename)
+            debug_path.mkdir(parents=True, exist_ok=True)
+            (debug_path / f"page_{page_number}_prompt.txt").write_text(prompt, encoding="utf-8")
+            (debug_path / f"page_{page_number}_response.txt").write_text(raw_text, encoding="utf-8")
+        except Exception as e:
+            print(f"[generate_answer_with_gpt] debug 저장 실패: {e}")
+
+        json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if not json_match:
+            raise HTTPException(status_code=502, detail="GPT response did not contain JSON")
+        result = json.loads(json_match.group())
+
+        try:
+            debug_path = _answer_key_debug_dir(pdf_filename)
+            (debug_path / f"page_{page_number}_response_parsed.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            print(f"[generate_answer_with_gpt] debug parsed 저장 실패: {e}")
+
+        items = result.get("items")
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            items = []
+
+        try:
+            _prompt_name = get_gemini_prompt_path().name
+            _first_keys = list(items[0].keys()) if items and isinstance(items[0], dict) else []
+            print(f"[generate_answer_with_gpt] model={model} prompt_file={_prompt_name} first_item_keys={_first_keys}")
+        except Exception:
+            pass
+
+        page_role = result.get("page_role") or "detail"
+        page_meta = {
+            k: v for k, v in result.items()
+            if k not in ("items", "page_role") and v is not None
+        }
+        return {
+            "success": True,
+            "page_number": page_number,
+            "page_role": page_role,
+            "page_meta": page_meta if page_meta else None,
+            "items": items,
+            "provider": "gpt",
+            "model": model,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        if "OPENAI_API_KEY" in str(e):
+            raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CreateItemsFromAnswerRequest(BaseModel):
+    """Gemini 생성 결과로 items 생성 요청"""
+    items: list
+    page_role: Optional[str] = "detail"
+    page_meta: Optional[dict] = None
+
+
+class GenerateItemsFromTemplateRequest(BaseModel):
+    """첫 행(템플릿)으로 나머지 행 LLM 생성 요청"""
+    template_item: dict  # 한 행의 키-값 (키 추가/삭제/편집 가능)
+
+
+@router.post("/{pdf_filename}/pages/{page_number:int}/generate-items-from-template")
+async def generate_items_from_template(
+    pdf_filename: str,
+    page_number: int,
+    body: GenerateItemsFromTemplateRequest,
+    db=Depends(get_db)
+):
+    """
+    첫 행(템플릿)만 사용자가 편집한 뒤, LLM으로 같은 키 구조의 나머지 행을 생성하여 페이지 전체 items로 교체.
+    """
+    import json
+    try:
+        from PIL import Image
+        from modules.core.extractors.gemini_extractor import GeminiVisionParser
+
+        template_item = body.template_item if isinstance(body.template_item, dict) else {}
+        if not template_item:
+            raise HTTPException(status_code=400, detail="template_item is required")
+
+        image_path = db.get_page_image_path(pdf_filename, page_number)
+        if not image_path or not Path(image_path).exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+
+        image = Image.open(image_path).convert("RGB")
+        # 템플릿 기반 생성도 동일한 Gemini 모델(rag_config.gemini_extractor_model)을 사용
+        parser = GeminiVisionParser(model_name=getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
+        result = await asyncio.to_thread(
+            parser.parse_image_with_template, image, template_item, max_size=1200
+        )
+
+        items = result.get("items") or []
+        if not isinstance(items, list):
+            items = []
+        page_role = result.get("page_role") or "detail"
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                (pdf_filename,)
+            )
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            cursor.execute(
+                "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
+                (pdf_filename, page_number)
+            )
+
+            cursor.execute("""
+                INSERT INTO page_data_current (pdf_filename, page_number, page_role)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (pdf_filename, page_number)
+                DO UPDATE SET page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role)
+            """, (pdf_filename, page_number, page_role))
+
+            cursor.execute(
+                "SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                (pdf_filename,)
+            )
+            row = cursor.fetchone()
+            form_type = row[0] if row and row[0] else None
+            for item_order, item_dict in enumerate(items, 1):
+                if not isinstance(item_dict, dict):
+                    continue
+                separated = db._separate_item_fields(item_dict, form_type=form_type)
+                item_data = separated.get("item_data") or {}
+                cursor.execute("""
+                    INSERT INTO items_current (
+                        pdf_filename, page_number, item_order,
+                        first_review_checked, second_review_checked,
+                        item_data
+                    )
+                    VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+                """, (
+                    pdf_filename, page_number, item_order,
+                    json.dumps(item_data, ensure_ascii=False)
+                ))
+
+        return {
+            "success": True,
+            "page_number": page_number,
+            "items_count": len(items),
+            "items": items,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        if "GEMINI_API_KEY" in str(e):
+            raise HTTPException(status_code=503, detail="GEMINI_API_KEY가 설정되지 않았습니다.")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{pdf_filename}/pages/{page_number:int}/create-items-from-answer")
+async def create_items_from_answer(
+    pdf_filename: str,
+    page_number: int,
+    body: CreateItemsFromAnswerRequest,
+    db=Depends(get_db)
+):
+    """
+    Gemini 생성 결과(items)로 해당 페이지에 items를 새로 생성.
+    page_data가 없으면 생성하고, items를 순서대로 INSERT합니다.
+    """
+    import json
+    try:
+        items = body.items if isinstance(body.items, list) else []
+        page_role = body.page_role or "detail"
+        page_meta = body.page_meta if isinstance(body.page_meta, dict) else None
+        page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 1. 문서 존재 확인
+            cursor.execute(
+                "SELECT 1 FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                (pdf_filename,)
+            )
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            # 2. page_data 생성/갱신 (page_role, page_meta 포함)
+            if page_meta_json:
+                cursor.execute("""
+                    INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    ON CONFLICT (pdf_filename, page_number)
+                    DO UPDATE SET
+                        page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role),
+                        page_meta = COALESCE(EXCLUDED.page_meta, page_data_current.page_meta)
+                """, (pdf_filename, page_number, page_role, page_meta_json))
+            else:
+                cursor.execute("""
+                    INSERT INTO page_data_current (pdf_filename, page_number, page_role)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (pdf_filename, page_number)
+                    DO UPDATE SET page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role)
+                """, (pdf_filename, page_number, page_role))
+
+            # 3. 공통 필드 분리 후 items INSERT (표준 키 得意先, 商品名)
+            cursor.execute(
+                "SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                (pdf_filename,)
+            )
+            row = cursor.fetchone()
+            form_type = row[0] if row and row[0] else None
+            for item_order, item_dict in enumerate(items, 1):
+                if not isinstance(item_dict, dict):
+                    continue
+                separated = db._separate_item_fields(item_dict, form_type=form_type)
+                item_data = separated.get("item_data") or {}
+                customer = separated.get("customer")
+
+                cursor.execute("""
+                    INSERT INTO items_current (
+                        pdf_filename, page_number, item_order,
+                        customer,
+                        first_review_checked, second_review_checked,
+                        item_data
+                    )
+                    VALUES (%s, %s, %s, %s, FALSE, FALSE, %s::jsonb)
+                """, (
+                    pdf_filename, page_number, item_order,
+                    customer,
+                    json.dumps(item_data, ensure_ascii=False)
+                ))
+
+            # 4. document_metadata.item_data_keys 갱신 — 저장 후 refetch 시 RAG 영문 key_order가 아닌 이 문서의 키 순서 사용
+            if items and isinstance(items[0], dict):
+                item_data_keys = list(items[0].keys())
+                if item_data_keys:
+                    cursor.execute("""
+                        UPDATE documents_current
+                        SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
+                        WHERE pdf_filename = %s
+                    """, (json.dumps({"item_data_keys": item_data_keys}, ensure_ascii=False), pdf_filename))
+
+        return {
+            "success": True,
+            "created_count": len(items),
+            "page_number": page_number,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class FormTypeUpdateRequest(BaseModel):
+    """양식지 타입 변경 요청"""
+    form_type: str
+
+
+@router.patch("/{pdf_filename}/form-type")
+async def update_document_form_type(
+    pdf_filename: str,
+    body: FormTypeUpdateRequest,
+    db=Depends(get_db)
+):
+    """
+    문서의 양식지 타입(form_type) 변경
+    검토 탭에서 참조 양식지를 수동으로 수정할 때 사용
+    """
+    form_type = body.form_type.strip()
+    if not form_type or len(form_type) > 10:
+        raise HTTPException(status_code=400, detail="form_type must be 1-10 characters (e.g. 01, 02, 07)")
+
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE documents_current 
+                SET form_type = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (form_type, pdf_filename))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Document not found")
+            conn.commit()
+        return {"form_type": form_type, "message": "Form type updated"}
     except HTTPException:
         raise
     except Exception as e:
@@ -883,6 +1437,46 @@ async def get_page_meta(
             "page_meta": page_meta
         }
     
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PageMetaUpdateRequest(BaseModel):
+    """page_meta 업데이트 요청"""
+    page_meta: dict
+
+
+@router.patch("/{pdf_filename}/pages/{page_number}/meta")
+async def update_page_meta(
+    pdf_filename: str,
+    page_number: int,
+    body: PageMetaUpdateRequest,
+    db=Depends(get_db)
+):
+    """
+    특정 페이지의 page_meta 업데이트 (정답지 생성 탭에서 편집 저장용)
+    """
+    try:
+        page_meta_json = json.dumps(body.page_meta, ensure_ascii=False) if body.page_meta else "{}"
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE page_data_current
+                SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s AND page_number = %s
+            """, (page_meta_json, pdf_filename, page_number))
+            if cursor.rowcount > 0:
+                return {"success": True, "message": "page_meta updated"}
+            cursor.execute("""
+                UPDATE page_data_archive
+                SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s AND page_number = %s
+            """, (page_meta_json, pdf_filename, page_number))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Page not found")
+        return {"success": True, "message": "page_meta updated"}
     except HTTPException:
         raise
     except Exception as e:

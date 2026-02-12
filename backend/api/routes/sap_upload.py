@@ -1,10 +1,12 @@
 """
 SAP 업로드 엑셀 파일 생성 API
+- 데이터 입력/수식은 data/sap_upload_formulas.json 설정을 읽어 적용 (단일 소스)
 """
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from io import BytesIO
+import re
 import pandas as pd
 from openpyxl import load_workbook, Workbook
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -14,6 +16,103 @@ import json
 from database.registry import get_db
 
 router = APIRouter()
+
+
+# ---------- 설정 기반 규칙 해석 (rule → 값) ----------
+# 필드별 대체 키 (예: 得意先名 없으면 得意先 사용)
+_FIELD_FALLBACK = {"得意先名": "得意先"}
+
+
+def _safe_eval_expr(expr: str, item_data: Dict[str, Any]) -> Any:
+    """
+    item_data 필드명만 사용하는 수식 안전 계산.
+    예: "条件+条件小数部*0.01" → item_data["条件"] + item_data["条件小数部"]*0.01
+    """
+    if not expr or not expr.strip():
+        return ""
+    expr = expr.strip()
+    tokens = re.findall(r"[^\d\s\+\-\*\/\(\)\.\,\=\>\<\'\"]+", expr)
+    locals_map = {}
+    for t in set(tokens):
+        if t in ("and", "or", "not", "True", "False"):
+            continue
+        v = item_data.get(t)
+        if v is None or v == "" and t in _FIELD_FALLBACK:
+            v = item_data.get(_FIELD_FALLBACK[t])
+        if v is None or v == "":
+            v = 0
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            v = str(v) if v else ""
+        locals_map[t] = v
+    try:
+        work = expr
+        for k, v in sorted(locals_map.items(), key=lambda x: -len(x[0])):
+            if isinstance(v, str):
+                work = work.replace(k, repr(v))
+            else:
+                work = work.replace(k, str(v))
+        return eval(work)
+    except Exception:
+        return ""
+
+
+def _apply_data_rule(rule_spec: Any, item_data: Dict[str, Any]) -> Any:
+    """
+    설정의 rule 한 건을 item_data에 적용해 값 반환.
+    rule_spec: 문자열(필드명) | {"field": "필드명"} | {"cond": [...]} | {"expr": "수식"}
+    """
+    if rule_spec is None:
+        return ""
+    if isinstance(rule_spec, str):
+        return item_data.get(rule_spec, "") or ""
+    if not isinstance(rule_spec, dict):
+        return ""
+    # {"field": "필드명"}
+    if "field" in rule_spec:
+        return item_data.get(rule_spec["field"], "") or ""
+    # {"field_digits": "필드명"} → 필드값에서 숫자만 추출
+    if "field_digits" in rule_spec:
+        val = item_data.get(rule_spec["field_digits"], "") or ""
+        if isinstance(val, str):
+            numbers = re.findall(r"\d+", val.replace(",", ""))
+            return "".join(numbers) if numbers else ""
+        return str(val) if val else ""
+    # {"cond": [ {"if_field":"A", "if_eq":"個", "then_field":"B"} | {"then_expr":"..."} }, ...]}
+    if "cond" in rule_spec:
+        for c in rule_spec["cond"]:
+            if_field = c.get("if_field")
+            if_eq = c.get("if_eq")
+            if if_field is None:
+                continue
+            if str(item_data.get(if_field, "")) != str(if_eq):
+                continue
+            if "then_field" in c:
+                return item_data.get(c["then_field"], "") or ""
+            if "then_expr" in c:
+                return _safe_eval_expr(c["then_expr"], item_data)
+        return ""
+    # {"expr": "수식"}
+    if "expr" in rule_spec:
+        return _safe_eval_expr(rule_spec["expr"], item_data)
+    return ""
+
+
+def _get_rule_from_by_form(by_form_value: Any) -> Any:
+    """byForm[form] 값에서 실행용 rule만 추출 (문자열이면 field 규칙으로 취급)"""
+    if by_form_value is None:
+        return None
+    if isinstance(by_form_value, str):
+        return {"field": by_form_value} if by_form_value.strip() else None
+    if isinstance(by_form_value, dict) and "rule" in by_form_value:
+        return by_form_value["rule"]
+    if isinstance(by_form_value, dict) and (
+        "field" in by_form_value or "field_digits" in by_form_value
+        or "cond" in by_form_value or "expr" in by_form_value
+    ):
+        return by_form_value
+    return None
 
 
 def get_all_items_current(db) -> List[Dict[str, Any]]:
@@ -35,8 +134,6 @@ def get_all_items_current(db) -> List[Dict[str, Any]]:
                     i.pdf_filename,
                     i.page_number,
                     i.item_order,
-                    i.customer,
-                    i.product_name,
                     i.item_data::text as item_data,
                     d.form_type
                 FROM items_current i
@@ -68,149 +165,60 @@ def get_all_items_current(db) -> List[Dict[str, Any]]:
         raise
 
 
-def process_item_for_sap(item: Dict[str, Any], form_type: Optional[str]) -> Dict[str, Any]:
+def _load_formulas_config() -> Dict[str, Any]:
+    """sap_upload_formulas.json 로드 (없으면 기본값)."""
+    path = _get_formulas_path()
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"❌ [formulas config] 읽기 오류: {e}")
+    return _default_formulas()
+
+
+def process_item_for_sap(
+    item: Dict[str, Any],
+    form_type: Optional[str],
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
-    아이템 데이터를 SAP 양식에 맞게 가공
-    
-    Args:
-        item: 아이템 데이터 (item_data 포함)
-        form_type: 양식지 종류 (01~05)
-    
-    Returns:
-        SAP 양식에 맞게 가공된 데이터 (열별 값)
+    아이템 데이터를 SAP 양식에 맞게 가공.
+    config(sap_upload_formulas.json)의 dataInputColumns 규칙을 적용.
     """
     item_data = item.get('item_data', {})
     if isinstance(item_data, str):
         try:
             item_data = json.loads(item_data)
-        except:
+        except Exception:
             item_data = {}
-    
-    form_type = form_type or '01'
-    
-    result = {
-        'K': '',  # 得意先 관련
-        'L': '',  # 商品名
-        'P': '',  # ケース数量
-        'T': '',  # 数量 관련
-        'Z': '',  # 条件 관련
-        'AD': '', # 単価
-        'AL': '', # 金額 관련
-    }
-    
-    # [K열] - 양식별 로직
-    if form_type == '01':
-        # 01: 得意先名 + " " + 得意先コード
-        得意先名 = item_data.get('得意先名', '') or item.get('customer', '')
-        得意先コード = item_data.get('得意先コード', '')
-        result['K'] = f"{得意先名} {得意先コード}".strip()
-    elif form_type == '02':
-        # 02: 得意先様
-        result['K'] = item_data.get('得意先様', '') or item.get('customer', '')
-    elif form_type == '03':
-        # 03: 得意先名
-        result['K'] = item_data.get('得意先名', '') or item.get('customer', '')
-    elif form_type in ['04', '05']:
-        # 04, 05: 得意先
-        result['K'] = item_data.get('得意先', '') or item.get('customer', '')
-    
-    # [L열] - 모든 양식: 商品名
-    result['L'] = item_data.get('商品名', '') or item.get('product_name', '')
-    
-    # [P열] - 03만: ケース数量
-    if form_type == '03':
-        result['P'] = item_data.get('ケース数量', '')
-    
-    # [T열] - 양식별 로직
-    if form_type == '01':
-        # 01: IF 数量単位="個" → 数量, IF 数量単位="CS" → ケース入数*数量
-        数量単位 = item_data.get('数量単位', '')
-        数量 = item_data.get('数量', '')
-        if 数量単位 == '個':
-            result['T'] = 数量
-        elif 数量単位 == 'CS':
-            ケース入数 = item_data.get('ケース入数', 0) or 0
-            try:
-                result['T'] = float(ケース入数) * float(数量) if 数量 else ''
-            except:
-                result['T'] = ''
-    elif form_type == '02':
-        # 02: 取引数量合計（総数:内数）
-        result['T'] = item_data.get('取引数量合計（総数:内数）', '')
-    elif form_type == '03':
-        # 03: バラ数量
-        result['T'] = item_data.get('バラ数量', '')
-    elif form_type == '04':
-        # 04: 対象数量又は金額
-        # '個' 등의 문자를 제거하고 숫자만 추출하여 표시
-        import re
-        t_value = item_data.get('対象数量又は金額', '')
-        if isinstance(t_value, str):
-            numbers = re.findall(r'\d+', t_value.replace(',', ''))
-            result['T'] = ''.join(numbers) if numbers else ''
-        else:
-            result['T'] = t_value
-    
-    # [Z열] - 양식별 로직
-    if form_type == '01':
-        # 01: IF 条件区分="個" → 条件, IF 条件区分="CS" → 金額/ケース入数*数量
-        条件区分 = item_data.get('条件区分', '')
-        if 条件区分 == '個':
-            result['Z'] = item_data.get('条件', '')
-        elif 条件区分 == 'CS':
-            金額 = item_data.get('金額', 0) or 0
-            ケース入数 = item_data.get('ケース入数', 0) or 0
-            数量 = item_data.get('数量', 0) or 0
-            try:
-                if ケース入数 and 数量:
-                    result['Z'] = float(金額) / (float(ケース入数) * float(数量))
-                else:
-                    result['Z'] = ''
-            except:
-                result['Z'] = ''
-    elif form_type == '03':
-        # 03: 条件+条件小数部*0.01
-        条件 = item_data.get('条件', 0) or 0
-        条件小数部 = item_data.get('条件小数部', 0) or 0
-        try:
-            result['Z'] = float(条件) + float(条件小数部) * 0.01
-        except:
-            result['Z'] = ''
-    elif form_type == '04':
-        # 04: 未収条件+未収条件小数部*0.01
-        未収条件 = item_data.get('未収条件', 0) or 0
-        未収条件小数部 = item_data.get('未収条件小数部', 0) or 0
-        try:
-            result['Z'] = float(未収条件) + float(未収条件小数部) * 0.01
-        except:
-            result['Z'] = ''
-    
-    # [AD열] - 03만: 単価+単価小数部*0.01
-    if form_type == '03':
-        単価 = item_data.get('単価', 0) or 0
-        単価小数部 = item_data.get('単価小数部', 0) or 0
-        try:
-            result['AD'] = float(単価) + float(単価小数部) * 0.01
-        except:
-            result['AD'] = ''
-    
-    # [AL열] - 양식별 로직
-    if form_type == '01':
-        # 01: 金額
-        result['AL'] = item_data.get('金額', '')
-    elif form_type == '02':
-        # 02: リベート金額（税別）
-        result['AL'] = item_data.get('リベート金額（税別）', '')
-    elif form_type == '03':
-        # 03: 請求金額
-        result['AL'] = item_data.get('請求金額', '')
-    elif form_type == '04':
-        # 04: 金額
-        result['AL'] = item_data.get('金額', '')
-    elif form_type == '05':
-        # 05: 請求合計額
-        result['AL'] = item_data.get('請求合計額', '')
-    
+    if not isinstance(item_data, dict):
+        item_data = {}
+
+    form_type = (form_type or "01").strip()
+    if form_type not in ("01", "02", "03", "04", "05"):
+        form_type = "01"
+
+    if config is None:
+        config = _load_formulas_config()
+
+    data_columns = config.get("dataInputColumns") or []
+    result = {}
+    for col_spec in data_columns:
+        col = col_spec.get("column")
+        if not col:
+            continue
+        by_form = col_spec.get("byForm") or {}
+        raw = by_form.get(form_type)
+        rule = _get_rule_from_by_form(raw)
+        if rule is None:
+            result[col] = ""
+            continue
+        val = _apply_data_rule(rule, item_data)
+        if val is None:
+            val = ""
+        result[col] = val
+
     return result
 
 
@@ -265,69 +273,35 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
         for col_letter in all_columns:
             ws[f'{col_letter}{data_start_row}'] = ''
     
-    # 데이터 행 생성
+    config = _load_formulas_config()
+    data_columns = [c["column"] for c in (config.get("dataInputColumns") or [])]
+    formula_columns = config.get("excelFormulaColumns") or []
+
+    # 수식 템플릿에서 행 번호 치환 (3 → 실제 row_num). 예: =P3*N3 → =P{row}*N{row}
+    def formula_for_row(formula_tpl: str, row_num: int) -> str:
+        if not formula_tpl or not str(formula_tpl).strip().startswith("="):
+            return formula_tpl
+        return re.sub(r"([A-Z]+)\d+", lambda m: m.group(1) + str(row_num), formula_tpl)
+
     row_num = data_start_row
     for item in items:
-        form_type = item.get('form_type', '01')
-        processed = process_item_for_sap(item, form_type)
-        
-        # 필요한 열에 값 설정 (나머지는 자동으로 공란)
-        # K열
-        if processed['K']:
-            ws[f'K{row_num}'] = processed['K']
-        # L열
-        if processed['L']:
-            ws[f'L{row_num}'] = processed['L']
-        # P열
-        if processed['P']:
-            ws[f'P{row_num}'] = processed['P']
-        # T열
-        if processed['T']:
-            ws[f'T{row_num}'] = processed['T']
-        # Z열
-        if processed['Z']:
-            ws[f'Z{row_num}'] = processed['Z']
-        # AD열
-        if processed['AD']:
-            ws[f'AD{row_num}'] = processed['AD']
-        # AL열
-        if processed['AL']:
-            ws[f'AL{row_num}'] = processed['AL']
-        
-        # 엑셀 수식 추가 (항상 추가)
-        # [U열] =P3*N3 + R3*O3 + T3
-        ws[f'U{row_num}'] = f'=P{row_num}*N{row_num} + R{row_num}*O{row_num} + T{row_num}'
-        
-        # [V열] =U3 / N3
-        ws[f'V{row_num}'] = f'=U{row_num} / N{row_num}'
-        
-        # [AF열] =Z3 + AB3/O3 + AD3/N3
-        ws[f'AF{row_num}'] = f'=Z{row_num} + AB{row_num}/O{row_num} + AD{row_num}/N{row_num}'
-        
-        # [AG열] =AA3 + AC3/O3 + AE3/N3
-        ws[f'AG{row_num}'] = f'=AA{row_num} + AC{row_num}/O{row_num} + AE{row_num}/N{row_num}'
-        
-        # [AH열] =X3 - AF3 - AG3
-        ws[f'AH{row_num}'] = f'=X{row_num} - AF{row_num} - AG{row_num}'
-        
-        # [AI열] =AF3 * U3
-        ws[f'AI{row_num}'] = f'=AF{row_num} * U{row_num}'
-        
-        # [AJ열] =AG3 * U3
-        ws[f'AJ{row_num}'] = f'=AG{row_num} * U{row_num}'
-        
-        # [AK열] =AL3 - AJ3 - AI3
-        ws[f'AK{row_num}'] = f'=AL{row_num} - AJ{row_num} - AI{row_num}'
-        
-        # [AM열] =AH3 / 0.85
-        ws[f'AM{row_num}'] = f'=AH{row_num} / 0.85'
-        
-        # [AP열] =AH3 - AM3*AN3*0.01 - AM3*AO3*0.01
-        ws[f'AP{row_num}'] = f'=AH{row_num} - AM{row_num}*AN{row_num}*0.01 - AM{row_num}*AO{row_num}*0.01'
-        
-        # [AT열] =X3 - AP3
-        ws[f'AT{row_num}'] = f'=X{row_num} - AP{row_num}'
-        
+        form_type = item.get("form_type", "01")
+        processed = process_item_for_sap(item, form_type, config)
+
+        for col in data_columns:
+            val = processed.get(col)
+            if val is not None and val != "":
+                try:
+                    ws[f"{col}{row_num}"] = val
+                except Exception:
+                    pass
+
+        for fc in formula_columns:
+            col = fc.get("column")
+            formula_tpl = fc.get("formula")
+            if col and formula_tpl:
+                ws[f"{col}{row_num}"] = formula_for_row(formula_tpl, row_num)
+
         row_num += 1
     
     # 파일을 메모리에 저장
@@ -383,43 +357,23 @@ async def preview_sap_excel(
                 "message": "データがありません"
             }
         
-        # 처음 50개 아이템만 미리보기
+        config = _load_formulas_config()
         preview_items = items[:50]
         preview_data = []
-        
+
         for item in preview_items:
-            form_type = item.get('form_type', '01')
-            processed = process_item_for_sap(item, form_type)
-            
-            # 모든 컬럼에 대한 데이터 생성
+            form_type = item.get("form_type", "01")
+            processed = process_item_for_sap(item, form_type, config)
+
             row_data: Dict[str, Any] = {
-                'pdf_filename': item.get('pdf_filename', ''),
-                'page_number': item.get('page_number', 0),
-                'form_type': form_type,
+                "pdf_filename": item.get("pdf_filename", ""),
+                "page_number": item.get("page_number", 0),
+                "form_type": form_type,
             }
-            
-            # A~BB까지 모든 열에 대한 값 설정
             all_columns = get_column_letters_a_to_bb()
             for col_letter in all_columns:
-                # 필요한 열만 값 설정
-                if col_letter == 'K':
-                    row_data[col_letter] = processed['K']
-                elif col_letter == 'L':
-                    row_data[col_letter] = processed['L']
-                elif col_letter == 'P':
-                    row_data[col_letter] = processed['P']
-                elif col_letter == 'T':
-                    row_data[col_letter] = processed['T']
-                elif col_letter == 'Z':
-                    row_data[col_letter] = processed['Z']
-                elif col_letter == 'AD':
-                    row_data[col_letter] = processed['AD']
-                elif col_letter == 'AL':
-                    row_data[col_letter] = processed['AL']
-                else:
-                    # 나머지는 공란
-                    row_data[col_letter] = ''
-            
+                row_data[col_letter] = processed.get(col_letter, "")
+
             preview_data.append(row_data)
         
         return {
@@ -478,4 +432,151 @@ async def download_sap_excel(
         print(f"❌ [download_sap_excel] 오류: {e}")
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/column-names")
+async def get_sap_column_names():
+    """
+    SAP 업로드 템플릿(sap_upload.xlsx) 1행에서 컬럼명 목록 반환.
+    산식 표시 시 실제 컬럼명 표시용.
+    """
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    template_path = project_root / "static" / "sap_upload.xlsx"
+    column_names = []
+    if template_path.exists():
+        wb = load_workbook(template_path, read_only=True)
+        ws = wb.active
+        for col_idx in range(1, ws.max_column + 1):
+            cell_value = ws.cell(row=1, column=col_idx).value
+            if cell_value:
+                column_names.append(str(cell_value))
+            else:
+                column_names.append("")
+        wb.close()
+    else:
+        column_names = get_column_letters_a_to_bb()
+    return {"column_names": column_names}
+
+
+# ========== SAP 산식 설정 (양식지별 편집용) ==========
+def _get_formulas_path() -> "Path":
+    from pathlib import Path
+    project_root = Path(__file__).resolve().parent.parent.parent.parent
+    data_dir = project_root / "data"
+    data_dir.mkdir(exist_ok=True)
+    return data_dir / "sap_upload_formulas.json"
+
+
+def _default_formulas() -> Dict[str, Any]:
+    """
+    sap_upload.md 기반 기본 산식 (양식지 01~05별).
+    byForm 값: 문자열=필드명(field), 객체=rule(field/cond/expr). 백엔드가 이 규칙을 해석해 적용.
+    """
+    return {
+        "dataInputColumns": [
+            {"column": "B", "byForm": {"01": {"field": "판매처"}, "02": "", "03": "", "04": "", "05": ""}},
+            {"column": "C", "byForm": {"01": {"field": "판매처コード"}, "02": "", "03": "", "04": "", "05": ""}},
+            {"column": "D", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},
+            {"column": "I", "byForm": {"01": {"field": "得意先"}, "02": {"field": "得意先"}, "03": {"field": "得意先"}, "04": {"field": "得意先"}, "05": {"field": "得意先"}}},
+            {"column": "J", "byForm": {"01": {"field": "得意先"}, "02": {"field": "得意先"}, "03": {"field": "得意先"}, "04": {"field": "得意先"}, "05": {"field": "得意先"}}},
+            {
+                "column": "K",
+                "byForm": {
+                    "01": {"expr": "得意先名 + ' ' + 得意先コード"},
+                    "02": {"field": "得意先様"},
+                    "03": {"field": "得意先名"},
+                    "04": {"field": "得意先"},
+                    "05": {"field": "得意先"},
+                },
+            },
+            {"column": "L", "byForm": {"01": {"field": "商品名"}, "02": {"field": "商品名"}, "03": {"field": "商品名"}, "04": {"field": "商品名"}, "05": {"field": "商品名"}}},
+            {"column": "P", "byForm": {"01": "", "02": "", "03": {"field": "ケース数量"}, "04": "", "05": ""}},
+            {
+                "column": "T",
+                "byForm": {
+                    "01": {
+                        "cond": [
+                            {"if_field": "数量単位", "if_eq": "個", "then_field": "数量"},
+                            {"if_field": "数量単位", "if_eq": "CS", "then_expr": "ケース入数*数量"},
+                        ]
+                    },
+                    "02": {"field": "取引数量合計（総数:内数）"},
+                    "03": {"field": "バラ数量"},
+                    "04": {"field_digits": "対象数量又は金額"},
+                    "05": "",
+                },
+            },
+            {
+                "column": "Z",
+                "byForm": {
+                    "01": {
+                        "cond": [
+                            {"if_field": "条件区分", "if_eq": "個", "then_field": "条件"},
+                            {"if_field": "条件区分", "if_eq": "CS", "then_expr": "金額/(ケース入数*数量)"},
+                        ]
+                    },
+                    "02": "",
+                    "03": {"expr": "条件+条件小数部*0.01"},
+                    "04": {"expr": "未収条件+未収条件小数部*0.01"},
+                    "05": "",
+                },
+            },
+            {"column": "AD", "byForm": {"01": "", "02": "", "03": {"expr": "単価+単価小数部*0.01"}, "04": "", "05": ""}},
+            {
+                "column": "AL",
+                "byForm": {
+                    "01": {"field": "金額"},
+                    "02": {"field": "リベート金額（税別）"},
+                    "03": {"field": "請求金額"},
+                    "04": {"field": "金額"},
+                    "05": {"field": "請求合計額"},
+                },
+            },
+        ],
+        "excelFormulaColumns": [
+            {"column": "U", "formula": "=P3*N3 + R3*O3 + T3", "description": "P×N + R×O + T"},
+            {"column": "V", "formula": "=U3 / N3", "description": "U ÷ N"},
+            {"column": "AF", "formula": "=Z3 + AB3/O3 + AD3/N3", "description": "Z + AB/O + AD/N"},
+            {"column": "AG", "formula": "=AA3 + AC3/O3 + AE3/N3", "description": "AA + AC/O + AE/N"},
+            {"column": "AH", "formula": "=X3 - AF3 - AG3", "description": "X - AF - AG"},
+            {"column": "AI", "formula": "=AF3 * U3", "description": "AF × U"},
+            {"column": "AJ", "formula": "=AG3 * U3", "description": "AG × U"},
+            {"column": "AK", "formula": "=AL3 - AJ3 - AI3", "description": "AL - AJ - AI"},
+            {"column": "AM", "formula": "=AH3 / 0.85", "description": "AH ÷ 0.85"},
+            {"column": "AP", "formula": "=AH3 - AM3*AN3*0.01 - AM3*AO3*0.01", "description": "AH - AM×AN×0.01 - AM×AO×0.01"},
+            {"column": "AT", "formula": "=X3 - AP3", "description": "X - AP"},
+        ],
+    }
+
+
+@router.get("/formulas")
+async def get_sap_formulas():
+    """
+    SAP 산식 설정 조회 (양식지 01~05별 데이터 입력, 엑셀 수식).
+    파일 없으면 기본값 반환.
+    """
+    path = _get_formulas_path()
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"❌ [get_sap_formulas] 읽기 오류: {e}")
+    return _default_formulas()
+
+
+@router.put("/formulas")
+async def put_sap_formulas(body: Dict[str, Any]):
+    """
+    SAP 산식 설정 저장 (양식지별 편집 결과).
+    """
+    path = _get_formulas_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2)
+        return {"ok": True}
+    except Exception as e:
+        print(f"❌ [put_sap_formulas] 저장 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -2,7 +2,7 @@
 학습 데이터 자동 저장 관리 모듈
 
 PDF 분석 완료 후 자동으로 img 폴더에 저장하는 기능을 제공합니다.
-구조: img/{form_type}/{year}-{month}/{pdf_name}/
+구조: img/{upload_channel}/{year}-{month}/{pdf_name}/  (upload_channel: finet | mail)
 """
 import os
 import shutil
@@ -25,32 +25,35 @@ class TrainingManager:
     """
     
     @staticmethod
-    def get_training_dir(form_type: str, year: Optional[int] = None, month: Optional[int] = None) -> Path:
+    def get_training_dir(
+        upload_channel: Optional[str] = None,
+        form_type: Optional[str] = None,
+        year: Optional[int] = None,
+        month: Optional[int] = None
+    ) -> Path:
         """
         학습 데이터 저장 디렉토리 경로 반환
         
         Args:
-            form_type: 양식지 번호 (01, 02, 03, 04, 05)
+            upload_channel: 업로드 채널 (finet | mail). 우선 사용
+            form_type: 양식지 번호 (하위 호환, upload_channel 없을 때)
             year: 연도 (None이면 현재 연도)
             month: 월 (None이면 현재 월)
         
         Returns:
-            img/{form_type}/{year}-{month}/ 경로
+            img/{upload_channel}/{year}-{month}/ 경로
         """
         project_root = get_project_root()
         img_dir = project_root / "img"
-        
-        # form_type 폴더
-        form_dir = img_dir / form_type
-        
-        # 날짜 폴더명 생성
+        # 옵션 1: 텍스트 추출 및 학습 데이터 경로는 upload_channel 기준으로만 관리
+        channel = upload_channel or "mail"
+        form_dir = img_dir / channel
         if year and month:
-            date_folder = f"{year}-{month:02d}"  # 예: 2025-01
+            date_folder = f"{year}-{month:02d}"
         else:
             from datetime import datetime
             now = datetime.now()
             date_folder = f"{now.year}-{now.month:02d}"
-        
         return form_dir / date_folder
     
     @staticmethod
@@ -58,6 +61,7 @@ class TrainingManager:
         pdf_name: str,
         pdf_path: Optional[Path] = None,
         form_type: Optional[str] = None,
+        upload_channel: Optional[str] = None,
         data_year: Optional[int] = None,
         data_month: Optional[int] = None,
         pdf_bytes: Optional[bytes] = None
@@ -68,7 +72,8 @@ class TrainingManager:
         Args:
             pdf_name: PDF 파일명 (확장자 제외)
             pdf_path: PDF 파일 경로 (pdf_bytes가 없을 때 사용)
-            form_type: 양식지 번호 (None이면 DB에서 조회)
+            form_type: 양식지 번호 (하위 호환)
+            upload_channel: 업로드 채널 (finet | mail). 경로에 사용
             data_year: 연도 (None이면 DB에서 조회 또는 현재 연도)
             data_month: 월 (None이면 DB에서 조회 또는 현재 월)
             pdf_bytes: PDF 파일 바이트 데이터 (우선 사용)
@@ -77,19 +82,15 @@ class TrainingManager:
             (성공 여부, 메시지)
         """
         try:
-            # 1. DB에서 정보 조회 (form_type, data_year, data_month)
             db_manager = get_db()
             pdf_filename = f"{pdf_name}.pdf"
-            
             doc = db_manager.get_document(pdf_filename)
             if not doc:
                 return False, f"DB에서 문서를 찾을 수 없습니다: {pdf_name}"
             
-            # form_type이 없으면 DB에서 가져오기
-            if not form_type:
-                form_type = doc.get('form_type')
-                if not form_type:
-                    return False, f"양식지 번호를 찾을 수 없습니다: {pdf_name}"
+            # 옵션 1: upload_channel만을 기준으로 사용하고, 없으면 기본값 'mail' 사용
+            if not upload_channel:
+                upload_channel = doc.get('upload_channel') or "mail"
             
             # data_year, data_month가 없으면 DB에서 가져오기
             if not data_year or not data_month:
@@ -104,12 +105,16 @@ class TrainingManager:
                     data_month = data_month or now.month
             
             # 2. 저장 디렉토리 생성
-            training_dir = TrainingManager.get_training_dir(form_type, data_year, data_month)
+            training_dir = TrainingManager.get_training_dir(
+                upload_channel=upload_channel,
+                year=data_year,
+                month=data_month
+            )
             pdf_folder = training_dir / pdf_name
             pdf_folder.mkdir(parents=True, exist_ok=True)
             
             print(f"📁 학습 데이터 저장 경로: {pdf_folder}")
-            print(f"   - 양식지: {form_type}")
+            print(f"   - 채널: {upload_channel}")
             print(f"   - 날짜: {data_year}-{data_month:02d}")
             
             # 3. PDF 파일 저장

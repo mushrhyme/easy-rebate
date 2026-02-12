@@ -13,17 +13,28 @@ from database.table_selector import get_table_name, get_table_suffix
 class ItemsMixin:
     """항목 데이터 저장/조회 Mixin"""
     
-    def _separate_item_fields(self, item_dict: dict) -> dict:
+    def _separate_item_fields(self, item_dict: dict, form_type: Optional[str] = None) -> dict:
         """
-        item을 저장할 때 공통 필드와 양식지별 필드로 분리
-        
+        item을 저장할 때 공통 필드와 양식지별 필드로 분리.
+
+        현재 스키마에서는 answer.json 내부 컬럼명을
+        양식지와 무관하게 다음과 같이 통일해서 사용한다.
+        - 청구번호: 請求番号
+        - 거래처명: 得意先
+        - 비고: 備考
+        - 세액/세액합계: 税額
+
+        따라서 양식지별 form_field_mapping 기반 매핑은 더 이상 사용하지 않고,
+        표준화된 일본어 키를 그대로 item_data에 둔다.
+        DB 공통 컬럼(customer)은 더 이상 사용하지 않으며, 필요한 모든 정보는
+        item_data 내부의 표준 일본어 키(특히 得意先)에서만 읽는다.
+
         Args:
-            item_dict: 원본 item 딕셔너리 (양식지별 필드명 포함)
+            item_dict: 원본 item 딕셔너리 (answer.json 한 행)
+            form_type: 양식지 코드 (01, 02, ...). 현재 로직에서는 사용하지 않음(호환성용).
             
         Returns:
             {
-                "customer": "...",  # 공통 필드 (컬럼)
-                "product_name": "...",
                 "first_review_checked": False,
                 "second_review_checked": False,
                 "first_reviewed_at": None,
@@ -31,29 +42,16 @@ class ItemsMixin:
                 "item_data": {...}  # 양식지별 필드 (JSONB)
             }
         """
-        # 공통 필드 매핑 (양식지별 필드명 → 통일된 컬럼명)
-        field_mapping = {
-            "customer": ["得意先名", "得意先様", "得意先", "取引先"],
-            "product_name": ["商品名"],
-        }
-        
-        # 공통 필드 추출
-        common_fields = {}
-        for common_name, possible_names in field_mapping.items():
-            for possible_name in possible_names:
-                if possible_name in item_dict:
-                    common_fields[common_name] = item_dict[possible_name]
-                    break
-        
-        # 양식지별 필드 추출 (공통 필드 제외)
-        item_data = {}
-        all_mapped_fields = []
-        for possible_names in field_mapping.values():
-            all_mapped_fields.extend(possible_names)
-        
+        # 공통 필드 (DB 컬럼용)는 더 이상 사용하지 않는다.
+        # 모든 비즈니스 로직은 item_data 내부의 표준 일본어 키(예: 得意先)를 직접 참조한다.
+        common_fields: Dict[str, Any] = {}
+
+        # 양식지별 필드 추출
+        # - 이제는 별도의 양식지별 매핑 없이 answer.json 의 키를 그대로 저장한다.
+        # - review_status 관련 필드만 일반 컬럼으로 빼고 나머지는 모두 item_data 에 둔다.
+        item_data: Dict[str, Any] = {}
         for key, value in item_dict.items():
-            # 공통 필드가 아니고, review_status 관련 필드가 아니면 item_data에 포함
-            if key not in all_mapped_fields and not key.startswith("review_"):
+            if not key.startswith("review_"):
                 item_data[key] = value
         
         # 검토 상태 필드 추출 (일반 컬럼으로 저장)
@@ -77,6 +75,7 @@ class ItemsMixin:
         page_results: List[Dict[str, Any]],
         image_data_list: Optional[List[bytes]] = None,
         form_type: Optional[str] = None,
+        upload_channel: Optional[str] = None,
         notes: Optional[str] = None,
         user_id: Optional[int] = None,
         data_year: Optional[int] = None,
@@ -98,9 +97,18 @@ class ItemsMixin:
         if not page_results:
             raise ValueError("page_results가 비어있습니다.")
         
+        # 이 문서가 파싱할 때 사용한 RAG 예제의 키 순서 저장 (표시 시 form_type이 아닌 이 문서 기준으로 key_order 사용)
+        document_metadata = {}
+        first_page_with_items = next((p for p in page_results if p.get("items") and len(p["items"]) > 0), None)
+        if first_page_with_items and isinstance(first_page_with_items["items"][0], dict):
+            item_data_keys = list(first_page_with_items["items"][0].keys())
+            if item_data_keys:
+                document_metadata["item_data_keys"] = item_data_keys
+        
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                doc_meta_json = json.dumps(document_metadata, ensure_ascii=False) if document_metadata else None
                 
                 # 1. 문서 생성 (항상 documents_current에 저장 - 현재 연월이므로)
                 total_pages = len(page_results)
@@ -109,35 +117,33 @@ class ItemsMixin:
                 if data_year and data_month:
                     created_at = datetime(data_year, data_month, 1)
                     cursor.execute("""
-                        INSERT INTO documents_current (pdf_filename, total_pages, form_type, notes, created_by_user_id, updated_by_user_id, created_at, data_year, data_month)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, notes, created_by_user_id, updated_by_user_id, created_at, data_year, data_month, document_metadata)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                         ON CONFLICT (pdf_filename) DO UPDATE SET
                             total_pages = EXCLUDED.total_pages,
-                            form_type = CASE
-                                WHEN EXCLUDED.form_type IS NOT NULL THEN EXCLUDED.form_type
-                                ELSE documents_current.form_type
-                            END,
+                            form_type = COALESCE(EXCLUDED.form_type, documents_current.form_type),
+                            upload_channel = COALESCE(EXCLUDED.upload_channel, documents_current.upload_channel),
                             notes = EXCLUDED.notes,
                             updated_by_user_id = EXCLUDED.updated_by_user_id,
                             updated_at = CURRENT_TIMESTAMP,
                             created_at = EXCLUDED.created_at,
                             data_year = EXCLUDED.data_year,
-                            data_month = EXCLUDED.data_month
-                    """, (pdf_filename, total_pages, form_type, notes, user_id, user_id, created_at, data_year, data_month))
+                            data_month = EXCLUDED.data_month,
+                            document_metadata = COALESCE(EXCLUDED.document_metadata, documents_current.document_metadata)
+                    """, (pdf_filename, total_pages, form_type, upload_channel, notes, user_id, user_id, created_at, data_year, data_month, doc_meta_json))
                 else:
                     cursor.execute("""
-                        INSERT INTO documents_current (pdf_filename, total_pages, form_type, notes, created_by_user_id, updated_by_user_id)
-                        VALUES (%s, %s, %s, %s, %s, %s)
+                        INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, notes, created_by_user_id, updated_by_user_id, document_metadata)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                         ON CONFLICT (pdf_filename) DO UPDATE SET
                             total_pages = EXCLUDED.total_pages,
-                            form_type = CASE
-                                WHEN EXCLUDED.form_type IS NOT NULL THEN EXCLUDED.form_type
-                                ELSE documents_current.form_type
-                            END,
+                            form_type = COALESCE(EXCLUDED.form_type, documents_current.form_type),
+                            upload_channel = COALESCE(EXCLUDED.upload_channel, documents_current.upload_channel),
                             notes = EXCLUDED.notes,
                             updated_by_user_id = EXCLUDED.updated_by_user_id,
-                            updated_at = CURRENT_TIMESTAMP
-                    """, (pdf_filename, total_pages, form_type, notes, user_id, user_id))
+                            updated_at = CURRENT_TIMESTAMP,
+                            document_metadata = COALESCE(EXCLUDED.document_metadata, documents_current.document_metadata)
+                    """, (pdf_filename, total_pages, form_type, upload_channel, notes, user_id, user_id, doc_meta_json))
                 
                 # 2. 기존 데이터 삭제 (재파싱 시) - current 테이블에서만
                 cursor.execute("""
@@ -191,24 +197,21 @@ class ItemsMixin:
                         if not isinstance(item_dict, dict):
                             continue
                         
-                        # 공통 필드와 양식지별 필드 분리
-                        separated = self._separate_item_fields(item_dict)
+                    # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
+                        separated = self._separate_item_fields(item_dict, form_type=form_type)
                         
                         cursor.execute("""
                             INSERT INTO items_current (
                                 pdf_filename, page_number, item_order,
-                                customer, product_name,
                                 first_review_checked, second_review_checked,
                                 first_reviewed_at, second_reviewed_at,
                                 item_data
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                         """, (
                             pdf_filename,
                             page_number,
                             item_order,
-                            separated.get("customer"),
-                            separated.get("product_name"),
                             separated.get("first_review_checked", False),
                             separated.get("second_review_checked", False),
                             separated.get("first_reviewed_at"),
@@ -290,8 +293,6 @@ class ItemsMixin:
                                 pdf_filename,
                                 page_number,
                                 item_order,
-                                customer,
-                                product_name,
                                 first_review_checked,
                                 second_review_checked,
                                 first_reviewed_at,
@@ -309,8 +310,6 @@ class ItemsMixin:
                                 pdf_filename,
                                 page_number,
                                 item_order,
-                                customer,
-                                product_name,
                                 first_review_checked,
                                 second_review_checked,
                                 first_reviewed_at,
@@ -333,8 +332,6 @@ class ItemsMixin:
                                 pdf_filename,
                                 page_number,
                                 item_order,
-                                customer,
-                                product_name,
                                 first_review_checked,
                                 second_review_checked,
                                 first_reviewed_at,
@@ -355,8 +352,6 @@ class ItemsMixin:
                                     pdf_filename,
                                     page_number,
                                     item_order,
-                                    customer,
-                                    product_name,
                                     first_review_checked,
                                     second_review_checked,
                                     first_reviewed_at,
@@ -376,8 +371,6 @@ class ItemsMixin:
                                 pdf_filename,
                                 page_number,
                                 item_order,
-                                customer,
-                                product_name,
                                 first_review_checked,
                                 second_review_checked,
                                 first_reviewed_at,
@@ -392,8 +385,6 @@ class ItemsMixin:
                                 pdf_filename,
                                 page_number,
                                 item_order,
-                                customer,
-                                product_name,
                                 first_review_checked,
                                 second_review_checked,
                                 first_reviewed_at,
@@ -406,16 +397,22 @@ class ItemsMixin:
                         """, (pdf_filename, pdf_filename))
                         rows = cursor.fetchall()
                 
-                # form_type 조회 (키 순서 정렬용, 미제공 시에만 조회)
-                if form_type is None:
+                # form_type·키 순서: 이 문서가 파싱할 때 사용한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
+                if form_type is None or item_key_order is None:
                     try:
                         doc_info = self.get_document(pdf_filename)
                         if doc_info:
-                            form_type = doc_info.get("form_type")
+                            if form_type is None:
+                                form_type = doc_info.get("form_type")
+                            # 이 문서가 파싱 시 참조한 RAG 예제의 키 순서 (4번 양식지 등 다른 문서 key_order 사용 방지)
+                            if item_key_order is None:
+                                doc_meta = doc_info.get("document_metadata")
+                                if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
+                                    item_key_order = doc_meta["item_data_keys"]
+                                    print(f"[db_items get_items] 문서 자체 key_order 사용(파싱 시 참조한 RAG 기준) 개수={len(item_key_order)}")
                     except Exception:
                         pass
                 
-                # 벡터 DB에서 키 순서 가져오기 (미제공 시에만 조회)
                 if item_key_order is None and form_type:
                     try:
                         from modules.core.rag_manager import get_rag_manager
@@ -423,8 +420,14 @@ class ItemsMixin:
                         key_order = rag_manager.get_key_order_by_form_type(form_type)
                         if key_order:
                             item_key_order = key_order.get("item_keys")
-                    except Exception:
+                            print(f"[db_items get_items] form_type={form_type} RAG key_order 적용 개수={len(item_key_order) if item_key_order else 0} 순서={item_key_order}")
+                        else:
+                            print(f"[db_items get_items] form_type={form_type} key_order 없음 -> 재정렬 안 함")
+                    except Exception as e:
+                        print(f"[db_items get_items] key_order 조회 예외: {e}")
                         pass
+                elif item_key_order is None:
+                    print(f"[db_items get_items] form_type 없음 -> 재정렬 안 함")
                 
                 results = []
                 for row in rows:
@@ -458,19 +461,13 @@ class ItemsMixin:
                         'version': row_dict['version'],
                     }
                     
-                    # 공통 필드 추가 (item_data에 이미 있으면 덮어쓰지 않음, 원본 필드명 유지)
-                    if row_dict.get('customer'):
-                        # 원본 필드명 찾기 (form_type 기반)
-                        if form_type:
-                            from modules.utils.config import rag_config
-                            customer_fields = rag_config.form_field_mapping.get("customer", {}) if rag_config.form_field_mapping else {}
-                            customer_field_name = customer_fields.get(form_type, "customer")
-                        else:
-                            customer_field_name = "customer"
-                        merged_item[customer_field_name] = row_dict['customer']
-                    
-                    if row_dict.get('product_name'):
-                        merged_item["商品名"] = row_dict['product_name']
+                    # 공통 필드: item_data의 표준 키(得意先)를 사용한다.
+                    customer_value = item_data.get('得意先')
+                    if customer_value is not None:
+                        merged_item['得意先'] = customer_value
+                    # 상품명: item_data 내 商品名만 사용 (DB 컬럼 product_name 제거됨)
+                    if item_data.get('商品名') is not None:
+                        merged_item['商品名'] = item_data['商品名']
                     
                     # 검토 상태 추가
                     merged_item['review_status'] = {
@@ -487,6 +484,7 @@ class ItemsMixin:
                     # 키 순서 정렬
                     if item_key_order:
                         try:
+                            before_keys = list(merged_item.keys())[:10]  # 처음 10개만 로그
                             reordered_item = {}
                             for item_key in item_key_order:
                                 if item_key in merged_item:
@@ -495,7 +493,12 @@ class ItemsMixin:
                                 if item_key not in item_key_order:
                                     reordered_item[item_key] = merged_item[item_key]
                             merged_item = reordered_item
-                        except Exception:
+                            if len(results) == 0:  # 첫 행만 로그
+                                after_keys = list(merged_item.keys())[:10]
+                                print(f"[db_items get_items] 첫 행 재정렬 전 키(앞 10개)={before_keys}")
+                                print(f"[db_items get_items] 첫 행 재정렬 후 키(앞 10개)={after_keys}")
+                        except Exception as e:
+                            print(f"[db_items get_items] 재정렬 예외: {e}")
                             pass
                     
                     results.append(merged_item)
@@ -570,9 +573,13 @@ class ItemsMixin:
                         page_row = cursor.fetchone()
             
                     
-            # 3. 키 순서 조회 (벡터 DB)
+            # 3. 키 순서: 이 문서가 파싱 시 참조한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
             item_key_order = None
-            if form_type:
+            if doc_info:
+                doc_meta = doc_info.get("document_metadata")
+                if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
+                    item_key_order = doc_meta["item_data_keys"]
+            if item_key_order is None and form_type:
                 try:
                     from modules.core.rag_manager import get_rag_manager
                     rag_manager = get_rag_manager()
@@ -615,25 +622,6 @@ class ItemsMixin:
                     except Exception:
                         page_meta = {}
             
-            # 7. 페이지 레벨 customer 추출
-            page_customer = None
-            if items:
-                # 양식지별 거래처명 필드명 조회 (이미 조회한 form_type 사용)
-                from modules.utils.config import rag_config
-                customer_field_name = None
-                if form_type and rag_config.form_field_mapping:
-                    customer_fields = rag_config.form_field_mapping.get("customer", {})
-                    customer_field_name = customer_fields.get(form_type)
-                
-                if customer_field_name:
-                    page_customer = items[0].get(customer_field_name)
-                else:
-                    possible_fields = ["customer", "得意先", "得意先名", "取引先", "取引先名"]
-                    for field_name in possible_fields:
-                        if field_name in items[0]:
-                            page_customer = items[0].get(field_name)
-                            break
-            
             # 8. 페이지별 JSON 구조 생성 (page_data + items 병합)
             page_json = {
                 'page_number': page_num,
@@ -641,9 +629,6 @@ class ItemsMixin:
                 **page_meta,  # page_meta의 모든 필드 추가
                 'items': items  # 빈 리스트일 수 있음
             }
-            
-            if page_customer:
-                page_json['customer'] = page_customer
             
             # 원본 answer.json 파일 기준으로 키 순서 재정렬 (이미 조회한 키 순서 재사용)
             # item_key_order가 None이 아니면 이미 조회한 것이므로 재사용
@@ -739,7 +724,6 @@ class ItemsMixin:
         page_number: int,
         item_data: Dict[str, Any],
         customer: Optional[str] = None,
-        product_name: Optional[str] = None,
         after_item_id: Optional[int] = None
     ) -> int:
         """
@@ -748,9 +732,8 @@ class ItemsMixin:
         Args:
             pdf_filename: PDF 파일명
             page_number: 페이지 번호
-            item_data: 아이템 데이터 (양식지별 필드들)
+            item_data: 아이템 데이터 (양식지별 필드들, 상품명은 商品名 키 사용)
             customer: 거래처명
-            product_name: 상품명
             after_item_id: 특정 행 아래에 추가할 경우 해당 행의 item_id (None이면 맨 아래에 추가)
 
         Returns:
@@ -822,15 +805,15 @@ class ItemsMixin:
                 cursor.execute("""
                     INSERT INTO items_current (
                         pdf_filename, page_number, item_order,
-                        customer, product_name, item_data,
+                        customer, item_data,
                         first_review_checked, second_review_checked,
                         version, created_at, updated_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     RETURNING item_id
                 """, (
                     pdf_filename, page_number, next_item_order,
-                    customer, product_name, Json(item_data),
+                    customer, Json(item_data),
                     False, False, 1
                 ))
 
