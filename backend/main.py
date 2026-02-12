@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test
+from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test, settings as settings_routes, form_types as form_types_routes
 from backend.core.config import settings
 from backend.core.scheduler import setup_archive_scheduler
 from database.registry import close_db
@@ -138,6 +138,8 @@ app.include_router(performance.router, prefix="/api/performance", tags=["perform
 app.include_router(sap_upload.router, prefix="/api/sap-upload", tags=["sap-upload"])
 app.include_router(rag_admin.router, prefix="/api/rag-admin", tags=["rag-admin"])
 app.include_router(ocr_test.router, prefix="/api/ocr-test", tags=["ocr-test"])
+app.include_router(settings_routes.router, prefix="/api/settings", tags=["settings"])
+app.include_router(form_types_routes.router, prefix="/api/form-types", tags=["form-types"])
 
 
 @app.get("/")

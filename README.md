@@ -1,292 +1,188 @@
 # React Rebate - 조건청구서 업로드·처리 시스템
 
-조건청구서 PDF 파일을 업로드하고 AI를 활용하여 자동으로 파싱·관리하는 웹 애플리케이션입니다.
+조건청구서 PDF를 업로드해서 **자동 파싱 → 검토/수정 → SAP 업로드용 엑셀 생성**까지 처리하는 풀스택 시스템입니다.  
+현재 코드 기준으로 **아키텍처, form_type, RAG 구조**를 반영해 정리한 최종 README입니다.
 
-## 📋 목차
+---
 
-- [기술 스택](#기술-스택)
-- [주요 기능](#주요-기능)
-- [프로젝트 구조](#프로젝트-구조)
-- [시작하기](#시작하기)
-- [환경 설정](#환경-설정)
-- [실행 방법](#실행-방법)
-- [API 문서](#api-문서)
-- [추가 문서](#추가-문서)
-- [문제 해결](#문제-해결)
+## 1. 시스템 개요
 
-## 🛠 기술 스택
+- **프론트엔드**: `frontend/`  
+  - React + Vite 기반 SPA  
+  - 조건청구서 목록 조회, 페이지별 그리드 편집, RAG 예제/추천 확인, SAP 엑셀 다운로드 UI 제공
+- **백엔드**: `backend/`  
+  - FastAPI (`backend/main.py`)  
+  - PDF 업로드/처리, RAG 검색, DB 연동, SAP 엑셀 생성, WebSocket 진행률 알림 담당
+- **핵심 모듈**: `modules/`  
+  - `modules/core/processor.py`, `modules/core/extractors/pdf_processor.py`: PDF → 이미지/텍스트 변환, 회전 보정  
+  - `modules/core/rag_manager.py`: FAISS 기반 글로벌 RAG 인덱스 관리  
+  - `modules/core/extractors/`: OCR/RAG/LLM 조합으로 페이지별 JSON 추출 (Upstage, Gemini 등)  
+  - `modules/utils/`: 설정, 세션, 텍스트 정규화, 이미지 회전 유틸
+- **DB 레이어**: `database/`  
+  - PostgreSQL 스키마는 `database/SCHEMA.md`, `database/init_database.sql` 참고  
+  - 현재월/아카이브 분리(`*_current`, `*_archive`), RAG 인덱스(`rag_vector_index`) 등
 
-### 백엔드
-- **FastAPI** - Python 웹 프레임워크
-- **PostgreSQL** - 관계형 데이터베이스
-- **WebSocket** - 실시간 통신
-- **RAG (Retrieval-Augmented Generation)** - AI 기반 문서 파싱
-- **FAISS** - 벡터 검색
+**한 줄 요약**:  
+PDF 업로드 → 글로벌 RAG + LLM으로 구조화 JSON → 양식별 후처리·key_order 정렬 → DB 저장·그리드 편집 → master_code 추천/RAG로 코드 매핑 → SAP 업로드용 엑셀 생성.
 
-### 프론트엔드
-- **React 18** + **TypeScript**
-- **Vite** - 빌드 도구
-- **Zustand** - 상태 관리
-- **React Query** - 서버 상태 관리
-- **react-data-grid** - 데이터 그리드
+---
 
-## ✨ 주요 기능
+## 2. 실행 방법 (개발 환경)
 
-1. **PDF 업로드 및 처리**
-   - 양식지별(01~05) PDF 파일 업로드
-   - 다중 파일 업로드 지원
-   - WebSocket을 통한 실시간 처리 진행률 표시
-   - AI 기반 자동 파싱 (Gemini, OpenAI, Upstage)
+### 2.1 공통
 
-2. **문서 관리**
-   - 문서 목록 조회 및 검색
-   - 페이지별 데이터 조회
-   - 문서 삭제
+- Python 3.10+  
+- Node.js (Vite 기준 18+ 권장)  
+- PostgreSQL (스키마는 `database/init_database.sql` 사용)
 
-3. **데이터 편집**
-   - 행 단위 데이터 편집
-   - 낙관적 락을 통한 동시 편집 충돌 방지
-   - 검토 상태 관리 (1차/2차 검토)
-
-4. **검색 기능**
-   - 거래처명으로 검색 (부분 일치/완전 일치)
-   - 양식지별 필터링
-   - 검색 결과 페이지별 표시
-
-5. **SAP 업로드**
-   - 파싱된 데이터를 SAP 양식에 맞게 엑셀 파일 생성
-
-## 📁 프로젝트 구조
-
-```
-react_rebate/
-├── backend/                 # FastAPI 백엔드
-│   ├── api/
-│   │   └── routes/          # API 라우트
-│   │       ├── documents.py # 문서 관리
-│   │       ├── items.py     # 아이템 CRUD
-│   │       ├── search.py    # 검색
-│   │       └── websocket.py # WebSocket
-│   ├── core/                # 핵심 모듈
-│   │   ├── config.py        # 설정
-│   │   ├── scheduler.py     # 스케줄러
-│   │   └── session.py       # 세션 관리
-│   └── main.py              # FastAPI 앱 진입점
-│
-├── frontend/                # React 프론트엔드
-│   ├── src/
-│   │   ├── components/      # React 컴포넌트
-│   │   ├── hooks/           # 커스텀 훅
-│   │   ├── stores/          # Zustand 스토어
-│   │   ├── api/             # API 클라이언트
-│   │   └── types/           # TypeScript 타입
-│   └── package.json
-│
-├── modules/                  # 공통 모듈
-│   ├── core/                # 핵심 로직
-│   │   ├── extractors/      # PDF 파서 (Gemini, Upstage, RAG)
-│   │   ├── processor.py     # 문서 처리
-│   │   ├── rag_manager.py   # RAG 관리
-│   │   └── storage.py       # 저장소 관리
-│   └── utils/               # 유틸리티
-│
-├── database/                # 데이터베이스
-│   ├── init_database.sql    # 초기 스키마
-│   ├── db_manager.py        # DB 매니저
-│   └── migrations/          # 마이그레이션
-│
-├── prompts/                 # AI 프롬프트
-├── static/                  # 정적 파일 (이미지 등)
-└── requirements.txt         # Python 의존성
-```
-
-## 🚀 시작하기
-
-### 사전 요구사항
-
-- Python 3.9+
-- Node.js 18+
-- PostgreSQL 12+
-- npm 또는 yarn
-
-### 1. 저장소 클론
-
-```bash
-git clone <repository-url>
-cd react_rebate
-```
-
-### 2. 의존성 설치
-
-#### Python 의존성
+#### Python 의존성 설치
 
 ```bash
 pip install -r requirements.txt
 ```
 
-#### Node.js 의존성
+#### DB 초기화
+
+```bash
+psql -U postgres -d rebate_db -f database/init_database.sql
+```
+
+### 2.2 백엔드(FastAPI)
+
+```bash
+# 프로젝트 루트에서
+python -m uvicorn backend.main:app --reload
+```
+
+- 기본 설정은 `backend/core/config.py` 의 `settings`를 따릅니다.  
+- `/health` 로 헬스 체크, `/api/*` 및 `/ws/*` 라우트는 `backend/api/` 하위 라우터 참고.
+
+### 2.3 프론트엔드(React + Vite)
 
 ```bash
 cd frontend
 npm install
-cd ..
-```
-
-### 3. 데이터베이스 설정
-
-```bash
-# PostgreSQL 데이터베이스 생성
-createdb rebate_db
-
-# 스키마 초기화
-psql -U postgres -d rebate_db -f database/init_database.sql
-
-# 기본 사용자 복원 (선택사항)
-psql -U postgres -d rebate_db -f database/restore_users.sql
-```
-
-## ⚙️ 환경 설정
-
-프로젝트 루트에 `.env` 파일을 생성하고 다음 변수를 설정하세요:
-
-```env
-# 데이터베이스 설정
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=rebate_db
-DB_USER=postgres
-DB_PASSWORD=your_password
-
-# API 서버 설정
-API_HOST=0.0.0.0
-API_PORT=8000
-DEBUG=False
-
-# AI API 키 (필요한 것만 설정)
-OPENAI_API_KEY=your_openai_api_key
-GEMINI_API_KEY=your_gemini_api_key
-UPSTAGE_API_KEY=your_upstage_api_key
-AZURE_API_KEY=your_azure_api_key
-AZURE_API_ENDPOINT=your_azure_endpoint
-
-# 로컬 IP (WebSocket용)
-LOCAL_IP=172.17.173.27
-```
-
-## ▶️ 실행 방법
-
-### 개발 모드
-
-#### 1. 백엔드 실행
-
-```bash
-# 프로젝트 루트에서
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-또는
-
-```bash
-python -m backend.main
-```
-
-백엔드 API 문서: http://localhost:8000/docs
-
-#### 2. 프론트엔드 실행
-
-```bash
-cd frontend
 npm run dev
 ```
 
-프론트엔드: http://localhost:3000
+- 개발 시 CORS는 `backend/main.py` 에서 로컬 네트워크/포트 패턴을 허용하도록 설정되어 있습니다.  
+- `.env` 또는 Vite 설정에서 API 호스트(`VITE_API_BASE_URL` 등)가 백엔드 주소를 가리키도록 맞춰줍니다.
 
-### 프로덕션 모드
+---
 
-#### 백엔드
+## 3. PDF → DB 저장까지의 처리 흐름
 
-```bash
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
+### 3.1 업로드 & 세션 관리
 
-#### 프론트엔드
+- 사용자는 연월을 선택한 뒤, 파일 업로더로 **1개 이상 PDF**를 업로드합니다.
+- 백엔드는:
+  - 파일 크기/양식지 유효성 검사
+  - 이미 등록된 문서(`documents_current`/`documents_archive`)인지 중복 체크
+  - 전부 신규일 때만 **세션 ID/작업 ID**를 발급하고, 임시 PDF 파일로 저장
+- 프론트는 **WebSocket(`/ws/processing/{task_id}`)** 으로 진행률 이벤트를 구독합니다.
 
-```bash
-cd frontend
-npm run build
-# 빌드 결과물: frontend/dist/
-```
+### 3.2 PDF → 이미지/텍스트
 
-## 📚 API 문서
+- `PdfProcessor` 가 백그라운드에서 각 PDF를 처리합니다.
+- 공통 처리:
+  - 페이지 단위 이미지 생성 (기본 300 DPI)
+  - 이미지 회전 보정(`image_rotation_utils`)으로 기울어진 스캔 교정
+- 텍스트 추출 방식은:
+  - `upload_channel` (finet | mail)에 따라 텍스트 추출 방법을 결정합니다 (finet→excel, mail→upstage),
+  - 없을 경우 설정 파일(`config`) fallback 을 사용합니다.
 
-### 주요 엔드포인트
+### 3.3 OCR/RAG/LLM에 의한 페이지별 JSON 추출
 
-#### 문서 관리
-- `POST /api/documents/upload` - PDF 파일 업로드
-- `GET /api/documents` - 문서 목록 조회
-- `GET /api/documents/{pdf_filename}` - 문서 정보 조회
-- `DELETE /api/documents/{pdf_filename}` - 문서 삭제
+- **이미 DB에 파싱 결과가 있는 페이지**는 그대로 재사용 (`items_current`, `page_data_current` 등).  
+- 새로 파싱해야 하는 페이지에 대해서만:
+  - OCR 결과(또는 PyMuPDF 텍스트)를 전각/반각 정규화 후 RAG 입력으로 사용
+  - `modules/core/rag_manager.RAGManager` 가 관리하는 **글로벌 FAISS 인덱스**에서 유사 예제 검색
+  - 검색된 예제의 `answer_json`·`key_order`·메타데이터를 LLM 프롬프트에 포함
+  - 현재 페이지 텍스트를 입력해 **`{ items: [...], page_role, ... }` 형태의 JSON**을 생성
+- 여러 페이지는 비동기/병렬로 처리되며, 필요 시 Upstage OCR을 사용해 bbox 기반 좌표 정보를 함께 취득합니다.
 
-#### 아이템 관리
-- `GET /api/items/{pdf_filename}/pages/{page_number}` - 페이지 아이템 조회
-- `PUT /api/items/{item_id}` - 아이템 업데이트
-- `POST /api/items/{item_id}/lock` - 아이템 락 획득
-- `DELETE /api/items/{item_id}/lock` - 아이템 락 해제
+### 3.4 key_order 기반 정렬 및 후처리
 
-#### 검색
-- `GET /api/search/customer` - 거래처명 검색
-- `GET /api/search/{pdf_filename}/pages/{page_number}/image` - 페이지 이미지
+- `rag_manager._extract_key_order(answer_json)` 이 **page_keys / item_keys** 를 계산해 메타데이터에 저장합니다.
+- 이후:
+  - RAG 예시 기준 key 순서를 유지하도록 `_reorder_json_by_key_order` 로 LLM 결과 JSON을 정렬
+  - `database/db_items.py`, `database/db_manager.py` 에서도 `get_key_order_by_form_type` 으로 불러온 `item_keys` 로 재정렬
+- 양식별 후처리:
+  - 빈 거래처명/코드/관리번호/摘要 등은 동일 페이지/이전 페이지/다음 페이지 값을 참조하여 채움
+  - 양식 02 전용 규칙(예: 리ベート計算条件이 「納価条件」인 행은 특정 수량 필드를 0으로 세팅 등)을 적용
 
-#### WebSocket
-- `WS /ws/processing/{task_id}` - 처리 진행률 실시간 수신
+### 3.5 DB 저장 구조
 
-자세한 API 사용 예제는 [`backend/API_EXAMPLES.md`](backend/API_EXAMPLES.md)를 참고하세요.
+주요 테이블은 `database/SCHEMA.md` 에 상세히 정리되어 있습니다. 핵심만 요약하면:
 
-## 📖 추가 문서
+- `documents_current` / `documents_archive`
+  - PDF 파일 단위 메타데이터 (파일명, form_type, 연월 등)
+- `page_data_current` / `page_data_archive`
+  - 페이지 역할(`page_role`), 페이지별 메타(JSONB)
+- `items_current` / `items_archive`
+  - 행 단위 데이터 (`item_data` JSONB + 공통 컬럼 + 검토 상태 + 버전)
+- `page_images_current` / `page_images_archive`
+  - 페이지 이미지 경로/데이터
+- `rag_learning_status_*`
+  - 각 페이지의 RAG 학습 상태 및 shard 정보
+- `rag_vector_index`
+  - **글로벌 인덱스 1개(`index_name='base', form_type NULL/''**) + shard_*  
+  - `metadata_json` 안에 `metadata[doc_id] = { ocr_text, answer_json, metadata(form_type 등), key_order }`
 
-### 백엔드
-- [`backend/README.md`](backend/README.md) - 백엔드 상세 문서
-- [`backend/API_EXAMPLES.md`](backend/API_EXAMPLES.md) - API 사용 예제
+아카이브 마이그레이션(`database/archive_migration.py`)은 `*_current` → `*_archive` 이동만 처리하며,  
+`rag_vector_index` 의 메타데이터(key_order 포함)는 별도로 유지/관리됩니다.
 
-### 프론트엔드
-- [`frontend/README.md`](frontend/README.md) - 프론트엔드 상세 문서
+---
 
-### 데이터베이스
-- [`database/SCHEMA.md`](database/SCHEMA.md) - 데이터베이스 스키마 문서
-- [`database/ITEMS_TABLE_DESIGN.md`](database/ITEMS_TABLE_DESIGN.md) - Items 테이블 설계 문서
-- [`database/PERFORMANCE_ANALYSIS.md`](database/PERFORMANCE_ANALYSIS.md) - 성능 분석 및 개선 방안
+## 4. form_type 및 양식 마스터 구조
 
-### 기능 문서
-- [`sap_upload.md`](sap_upload.md) - SAP 업로드 엑셀 양식 가이드
-- [`PERFORMANCE_DIAGNOSIS.md`](PERFORMANCE_DIAGNOSIS.md) - 성능 진단 가이드
+- **form_type** 은:
+  - 각 조건청구서 양식을 구분하는 코드(예: `"01"`, `"02"`, `"03"`, `"04"`, `"05"` 등)로,
+  - `documents_*`, `rag_learning_status_*`, 예제 메타데이터 내에서 공통적으로 사용됩니다.
+- 벡터 인덱스는 **단일 글로벌 인덱스**를 사용합니다.
+  - `rag_vector_index.index_name = 'base'`, `form_type IS NULL OR form_type = ''`  
+  - 실제 예제별 양식 구분은 `metadata[doc_id]['metadata']['form_type']` 로 관리합니다.
+- 새로운 양식 추가 시:
+  - img 폴더 구조는 `upload_channel` (finet 또는 mail) 또는 form_type (01-06)으로 구성할 수 있으며, 자동으로 `upload_channel`로 매핑됩니다.
+  - 학습용 예제(`img/` 하위 answer_json 등)를 준비한 뒤,
+  - `python build_faiss_db.py [form_folder]` 로 인덱스를 재빌드합니다 (실제 로직은 `modules/core/build_faiss_db.py`).
 
-## 🔧 문제 해결
+형식→참조 RAG, master_code 추천/RAG, B열/D열 매핑 자동화에 대한 자세한 설계는 `sap_upload.md` 를 참고하세요.
 
-### CORS 오류
-백엔드 `backend/core/config.py`에서 `CORS_ORIGINS`에 프론트엔드 URL을 추가하세요.
+---
 
-### WebSocket 연결 실패
-- 백엔드 서버가 실행 중인지 확인
-- 프론트엔드 `vite.config.ts`의 프록시 설정 확인
+## 5. 조회·편집·검색·SAP 엑셀 생성
 
-### 데이터베이스 연결 오류
-- PostgreSQL 서버가 실행 중인지 확인
-- `.env` 파일의 DB 설정이 올바른지 확인
+### 5.1 문서/행 조회·편집
 
-### 타입 오류 (프론트엔드)
-```bash
-cd frontend
-npm run build  # 타입 체크
-```
+- 프론트는 `documents` API로 문서 목록을, `items` API로 페이지별/문서별 행 데이터를 조회합니다.
+- 그리드에서 행 단위 수정 시:
+  - 해당 `item_id` 에 **락(item_locks_current)** 을 걸어 동시 편집 충돌을 방지
+  - 저장 시 `items_current` 의 `item_data` 및 공통 컬럼, 버전이 갱신
 
-### 성능 문제
-- [`PERFORMANCE_DIAGNOSIS.md`](PERFORMANCE_DIAGNOSIS.md) 참고
-- [`database/PERFORMANCE_ANALYSIS.md`](database/PERFORMANCE_ANALYSIS.md) 참고
+### 5.2 검색
 
-## 📝 라이선스
+- 거래처명, 상품명 등으로 `items_*` 를 검색할 수 있으며,
+- 필요 시 대응 페이지 이미지는 `page_images_*` 에서 경로/데이터를 조회해 화면에 표시합니다.
 
-이 프로젝트는 내부 사용을 위한 것입니다.
+### 5.3 SAP 업로드용 엑셀 생성
 
-## 👥 기여
+- 검토·수정이 끝난 행 단위 데이터(`items_current`)를 양식별 매핑 규칙에 따라 **SAP 업로드 포맷**으로 변환합니다.
+- 템플릿 파일은 `static/sap_upload.xlsx` 를 사용하며:
+  - B열(판매처), C/D/I/J/K(거래처·코드), L(상품명), P/T/Z/AD/AL 등 입력 컬럼은 값으로 채우고,
+  - U열 등 계산 컬럼은 엑셀 수식을 활용합니다.
+- `sap_upload.md` 에 각 컬럼 매핑·후처리 규칙이 상세히 정리되어 있습니다.  
+  프론트에서 생성 API를 호출하면, 다운로드 가능한 엑셀 파일로 반환됩니다.
 
-프로젝트 개선 제안이나 버그 리포트는 이슈로 등록해주세요.
+---
+
+## 6. 참고 문서
+
+- `database/SCHEMA.md`  
+  - 전체 DB 스키마 설명
+- `PERFORMANCE_DIAGNOSIS.md`  
+  - 성능 진단 및 최적화 관련 메모
+
+이 README는 **현재 코드 기준**으로 정리되어 있습니다.  
+새로운 양식 추가나 RAG 인덱스 구조 변경 시 이 파일을 함께 업데이트하는 것을 권장합니다.
+

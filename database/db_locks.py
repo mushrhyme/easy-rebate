@@ -443,8 +443,6 @@ class LocksMixin:
                         i.pdf_filename,
                         i.page_number,
                         i.item_order,
-                        i.customer,
-                        i.product_name,
                         i.first_review_checked,
                         i.second_review_checked,
                         i.first_reviewed_at,

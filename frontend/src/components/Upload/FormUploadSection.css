@@ -1,48 +1,87 @@
 .form-upload-section {
-  padding: 1.5rem 1.75rem;
-  border-radius: 12px;
-  background-color: #ffffff;
+  padding: 1.25rem 1.5rem;
+  border-radius: 10px;
+  background: #ffffff;
   margin-bottom: 0;
-  border-top: 4px solid;
+  border: 1px solid #e2e8f0;
+  border-top: 3px solid;
   display: flex;
   flex-direction: column;
-  gap: 1rem; /* 섹션 간 여백 */
-  height: auto; /* 기본적으로 자동 높이 */
-  max-height: fit-content; /* 기본적으로 내용에 맞는 높이 */
-  min-height: 0; /* flex 스크롤 활성화 */
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
-  transition: box-shadow 0.3s ease, transform 0.2s ease, max-height 0.3s ease;
-  border: 1px solid #e5e7eb;
-  overflow: visible; /* 툴팁이 섹션 밖으로 나갈 수 있도록 설정 */
-  align-self: start; /* 기본적으로 위쪽 정렬 */
+  gap: 1rem;
+  height: auto;
+  max-height: fit-content;
+  min-height: 0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  overflow: visible;
+  align-self: start;
 }
 
-/* 파일이 업로드되었을 때 높이 확장 */
 .form-upload-section.has-files {
-  max-height: none; /* 높이 제한 해제 */
-  height: 100%; /* 그리드 셀의 전체 높이 사용 */
-  align-self: stretch; /* 그리드에서 전체 높이 차지 */
+  max-height: none;
+  height: 100%;
+  align-self: stretch;
 }
 
 .form-upload-section:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
-  transform: translateY(-2px);
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .form-header {
   text-align: left;
   font-weight: 600;
   font-size: 1rem;
-  margin-bottom: 0.25rem;
-  flex-shrink: 0; /* 고정 크기 */
-  letter-spacing: 0.3px;
+  margin-bottom: 0;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  overflow: visible; /* 툴팁이 헤더 밖으로 나갈 수 있도록 설정 */
-  position: relative; /* stacking context 생성 */
-  z-index: 1; /* 기본 z-index 설정 */
+  overflow: visible;
+  position: relative;
+  z-index: 1;
+}
+
+.form-header-label {
+  font-weight: 500;
+  font-size: 0.8125rem;
+  color: #64748b;
+  margin-left: 0.25rem;
+}
+
+.form-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.form-header-list-btn {
+  padding: 0.25rem 0.625rem;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  color: #475569;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.form-header-list-btn:hover {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.form-upload-section-selected {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+  background: linear-gradient(to bottom, rgba(59, 130, 246, 0.06), #ffffff);
+  border-color: #3b82f6 !important;
+}
+.form-upload-section-selected .form-header span:first-child {
+  color: #1d4ed8;
 }
 
 .hover-info-container {
@@ -55,19 +94,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  background-color: #3b82f6;
+  width: 18px;
+  height: 18px;
+  background-color: #94a3b8;
   color: white;
   border-radius: 50%;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   font-weight: 600;
   cursor: help;
   transition: background-color 0.2s ease;
 }
 
 .hover-info:hover {
-  background-color: #2563eb;
+  background-color: #64748b;
 }
 
 /* 호버링 툴팁 스타일 - Portal로 body에 렌더링되므로 fixed positioning 사용 */
@@ -119,68 +158,44 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.75rem;
-  padding: 2.2rem 1.75rem;
-  border: 2px solid #e5e7eb;
-  border-radius: 12px;
+  gap: 0.625rem;
+  padding: 1.75rem 1.5rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
   flex-shrink: 0;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  position: relative;
-  overflow: hidden;
+  background: #f8fafc;
   margin-top: 0;
-  min-height: 0;
-}
-
-.file-input-label::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(147, 51, 234, 0.05) 100%);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
+  min-height: 120px;
 }
 
 .file-input-label:hover {
-  border-color: #3b82f6;
-  background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15), 0 0 0 3px rgba(59, 130, 246, 0.1);
-  transform: translateY(-2px);
-}
-
-.file-input-label:hover::before {
-  opacity: 1;
+  border-color: #94a3b8;
+  background: #f1f5f9;
 }
 
 .file-input-label.drag-over {
-  border-color: #3b82f6;
-  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-  box-shadow: 0 6px 20px rgba(59, 130, 246, 0.25), 0 0 0 4px rgba(59, 130, 246, 0.15);
-  transform: scale(1.02);
+  border-color: #64748b;
+  border-style: solid;
+  background: #e2e8f0;
 }
 
 .file-upload-icon {
-  color: #3b82f6;
-  transition: all 0.3s ease;
+  color: #64748b;
+  transition: color 0.2s ease;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .file-input-label:hover .file-upload-icon {
-  color: #2563eb;
-  transform: translateY(-2px);
+  color: #475569;
 }
 
 .file-input-label.drag-over .file-upload-icon {
-  color: #2563eb;
-  transform: scale(1.1) translateY(-2px);
+  color: #475569;
 }
 
 /* 완료 후 파일 입력 영역 강조 */
@@ -212,27 +227,17 @@
 }
 
 .file-upload-main-text {
-  font-size: 1rem;
-  font-weight: 600;
-  color: #1f2937;
-  letter-spacing: 0.3px;
-  transition: color 0.3s ease;
-}
-
-.file-input-label:hover .file-upload-main-text {
-  color: #111827;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: #334155;
+  letter-spacing: 0.02em;
 }
 
 .file-upload-sub-text {
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 400;
-  color: #6b7280;
-  letter-spacing: 0.2px;
-  transition: color 0.3s ease;
-}
-
-.file-input-label:hover .file-upload-sub-text {
-  color: #4b5563;
+  color: #94a3b8;
+  letter-spacing: 0.02em;
 }
 
 .file-list {
@@ -341,6 +346,66 @@
   border-radius: 3px;
 }
 
+/* 날짜 필터 + 분석 버튼 한 줄, 폭 줄여서 한 줄에 수납 */
+.form-date-and-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.75rem;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.form-date-and-actions .year-month-selector {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.form-date-and-actions .button-group {
+  margin: 0;
+  gap: 0.5rem;
+  width: auto !important;
+  max-width: none !important;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.form-date-and-actions .year-selector,
+.form-date-and-actions .month-selector {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 0.5rem;
+  min-width: 58px;
+  font-size: 0.8125rem;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.form-date-and-actions .btn-primary,
+.form-date-and-actions .btn-secondary {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 0.75rem;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8125rem;
+}
+
+.form-date-and-actions .btn-primary {
+  min-width: 0;
+  max-width: none;
+}
+
 .button-group {
   display: flex !important;
   flex-direction: row !important;
@@ -359,38 +424,32 @@
   min-width: 120px;
   max-width: 200px !important;
   width: auto !important;
-  padding: 0.6rem 1rem;
+  padding: 0.5rem 1rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: #334155;
   color: white;
   border: none;
-  border-radius: 8px;
-  font-weight: 600;
+  border-radius: 6px;
+  font-weight: 500;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
-  letter-spacing: 0.3px;
+  transition: background-color 0.2s ease;
+  letter-spacing: 0.02em;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
-  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
-  transform: translateY(-1px);
+  background: #1e293b;
 }
 
 .btn-primary:active:not(:disabled) {
-  transform: translateY(0);
-  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+  background: #0f172a;
 }
 
 .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
 }
 
 .btn-secondary {
@@ -398,23 +457,21 @@
   min-width: auto;
   max-width: none !important;
   width: auto !important;
-  padding: 0.75rem 1.25rem;
-  background-color: #ffffff;
-  color: #4b5563;
-  border: 1.5px solid #e5e7eb;
-  border-radius: 8px;
-  font-weight: 600;
+  padding: 0.5rem 1rem;
+  background-color: #fff;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-weight: 500;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.3s ease;
-  letter-spacing: 0.3px;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background-color: #f9fafb;
-  border-color: #d1d5db;
-  color: #374151;
-  transform: translateY(-1px);
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
+  color: #334155;
 }
 
 .btn-secondary:active:not(:disabled) {
@@ -427,21 +484,10 @@
   transform: none;
 }
 
-/* 년월 선택 섹션 */
 .year-month-selector {
   margin-top: 0.25rem;
   margin-bottom: 0.25rem;
-  padding: 0.9rem 1rem;
-  background-color: #f8fafc;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-
-.selector-group {
-  display: flex;
-  align-items: center;
-  justify-content: center; /* 가운데 정렬 */
-  gap: 0.75rem;
+  padding: 0.5rem 0;
 }
 
 .selector-label {
@@ -453,28 +499,27 @@
 
 .year-selector,
 .month-selector {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid #d1d5db;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid #e2e8f0;
   border-radius: 6px;
-  background-color: #ffffff;
-  font-size: 0.875rem;
+  background: #fff;
+  font-size: 0.8125rem;
   font-weight: 500;
-  color: #374151;
+  color: #334155;
   cursor: pointer;
-  transition: all 0.2s ease;
-  min-width: 80px;
+  transition: border-color 0.2s ease;
+  min-width: 72px;
 }
 
 .year-selector:focus,
 .month-selector:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  border-color: #94a3b8;
 }
 
 .year-selector:hover,
 .month-selector:hover {
-  border-color: #9ca3af;
+  border-color: #cbd5e1;
 }
 
 /* 새 파일 업로드 버튼 */
@@ -486,26 +531,21 @@
 }
 
 .btn-new-upload {
-  padding: 0.75rem 1.5rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 0.5rem 1.25rem;
+  background: #334155;
   color: white;
   border: none;
-  border-radius: 8px;
-  font-weight: 600;
+  border-radius: 6px;
+  font-weight: 500;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
-  letter-spacing: 0.3px;
+  transition: background-color 0.2s ease;
 }
 
 .btn-new-upload:hover {
-  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
-  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
-  transform: translateY(-1px);
+  background: #1e293b;
 }
 
 .btn-new-upload:active {
-  transform: translateY(0);
-  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+  background: #0f172a;
 }

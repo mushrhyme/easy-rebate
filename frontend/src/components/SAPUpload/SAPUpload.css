@@ -211,6 +211,257 @@
   border-radius: 12px;
 }
 
+/* 컬럼별 산식 시각화 섹션 */
+.sap-upload-formulas-section {
+  background: white;
+  border-radius: 12px;
+  padding: 2rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.formulas-section-header {
+  border-bottom: 2px solid #e5e7eb;
+  padding-bottom: 1rem;
+}
+
+.formulas-section-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 0 0 0.5rem 0;
+}
+
+.formulas-section-note {
+  font-size: 0.875rem;
+  color: #6b7280;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.formulas-edit-btn {
+  margin-top: 0.75rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid #667eea;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.formulas-edit-btn:hover {
+  background: rgba(102, 126, 234, 0.2);
+}
+
+.formulas-edit-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.formulas-cancel-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.formulas-cancel-btn:hover {
+  background: #e5e7eb;
+}
+
+.formulas-save-btn {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.formulas-save-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.formulas-save-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.formulas-loading {
+  padding: 2rem;
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.875rem;
+}
+
+.formulas-edit-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.formulas-edit-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.formulas-edit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.formulas-edit-table th,
+.formulas-edit-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: top;
+}
+
+.formulas-edit-table thead th {
+  background: #f9fafb;
+  font-weight: 600;
+  color: #374151;
+}
+
+.formulas-edit-table .formulas-edit-col-letter {
+  font-weight: 700;
+  color: #1f2937;
+  white-space: nowrap;
+  width: 4rem;
+}
+
+.formulas-edit-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8125rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: white;
+  color: #374151;
+}
+
+.formulas-edit-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.formulas-edit-input::placeholder {
+  color: #9ca3af;
+}
+
+.formula-input-expr {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+}
+
+.formulas-edit-table-formula .formulas-edit-col-letter {
+  min-width: 8rem;
+}
+
+.formulas-edit-table-formula td:nth-child(2) {
+  min-width: 200px;
+}
+
+.formula-empty {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.formulas-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.formulas-block {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.formulas-block-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #374151;
+  margin: 0;
+  padding: 0.5rem 0;
+  border-left: 4px solid #667eea;
+  padding-left: 0.75rem;
+}
+
+.formulas-edit-hint {
+  font-size: 0.8125rem;
+  color: #6b7280;
+  margin: 0 0 0.75rem 0;
+  line-height: 1.4;
+}
+
+.formulas-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.formula-card {
+  background: #f9fafb;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  border: 1px solid #e5e7eb;
+  transition: box-shadow 0.2s ease;
+}
+
+.formula-card:hover {
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.formula-card-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.formula-column-name {
+  font-weight: 700;
+  font-size: 0.9375rem;
+  color: #1f2937;
+}
+
+.formula-description {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.8125rem;
+  color: #4b5563;
+  line-height: 1.5;
+}
+
+.formula-description li {
+  margin-bottom: 0.25rem;
+}
+
+.formula-description li:last-child {
+  margin-bottom: 0;
+}
+
 /* 다운로드 섹션 */
 .sap-upload-download-section {
   background: white;
@@ -348,7 +599,14 @@
 .preview-info {
   font-size: 0.875rem;
   color: #6b7280;
+  margin: 0 0 0.5rem 0;
+}
+
+.preview-empty-note {
+  font-size: 0.8125rem;
+  color: #9ca3af;
   margin: 0 0 1rem 0;
+  font-style: italic;
 }
 
 .preview-filter {

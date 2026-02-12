@@ -2,8 +2,11 @@
  * OCR 테스트 탭: 이미지 업로드 → Upstage OCR / 구조化JSON 입력 → 필드 클릭 시 해당 영역 하이라이트
  */
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { ocrTestApi, type OcrTestResponse, type OcrWord } from '@/api/client'
+import { ocrTestApi, type OcrTestResponse, type OcrWord, type OcrSuggestRow } from '@/api/client'
 import './OcrTestTab.css'
+
+/** キーイン対象フィールド（固定） */
+const KEYIN_FIELDS = ['受注先', 'スーパー'] as const
 
 function verticesToRect(vertices: Array<{ x: number; y: number }>) {
   if (!vertices?.length) return null
@@ -16,253 +19,166 @@ function verticesToRect(vertices: Array<{ x: number; y: number }>) {
   return { left, top, width: right - left, height: bottom - top }
 }
 
-/** 구조화 JSON에서 leaf 문자열만 path/key/value 로 평탄화; _bbox 있으면 bbox 포함 */
-export type StructuredField = {
-  path: string
-  key: string
-  value: string
-  bbox?: { left: number; top: number; width: number; height: number }
-}
-
-function flattenStructuredJson(obj: unknown, prefix = ''): StructuredField[] {
-  const out: StructuredField[] = []
-  if (obj === null || obj === undefined) return out
-  if (typeof obj === 'string') {
-    if (prefix) {
-      const lastDot = prefix.lastIndexOf('.')
-      const path = lastDot >= 0 ? prefix.slice(0, lastDot) : prefix
-      const key = lastDot >= 0 ? prefix.slice(lastDot + 1) : prefix
-      out.push({ path, key, value: obj })
-    }
-    return out
-  }
-  if (Array.isArray(obj)) {
-    obj.forEach((item, i) => {
-      out.push(...flattenStructuredJson(item, `${prefix}[${i}]`))
-    })
-    return out
-  }
-  if (typeof obj === 'object') {
-    for (const [k, v] of Object.entries(obj)) {
-      const nextPrefix = prefix ? `${prefix}.${k}` : k
-      out.push(...flattenStructuredJson(v, nextPrefix))
-    }
-    return out
-  }
-  return out
-}
-
-/** API 구조화 결과용: _bbox 키를 해당 필드에 붙여서 평탄화 (_page_bbox 등 제외) */
-function flattenWithBbox(obj: unknown, prefix = '', parentObj?: Record<string, unknown>): StructuredField[] {
-  const out: StructuredField[] = []
-  if (obj === null || obj === undefined) return out
-  if (typeof obj === 'string') {
-    if (prefix && parentObj) {
-      const lastDot = prefix.lastIndexOf('.')
-      const path = lastDot >= 0 ? prefix.slice(0, lastDot) : prefix
-      const key = lastDot >= 0 ? prefix.slice(lastDot + 1) : prefix
-      const bboxKey = `${key}_bbox`
-      const bbox = parentObj[bboxKey] as { left?: number; top?: number; width?: number; height?: number } | undefined
-      const bboxVal =
-        bbox && typeof bbox === 'object' && typeof bbox.left === 'number' && typeof bbox.top === 'number'
-          ? { left: bbox.left, top: bbox.top, width: (bbox.width as number) ?? 0, height: (bbox.height as number) ?? 0 }
-          : undefined
-      out.push({ path, key, value: obj, bbox: bboxVal })
-    }
-    return out
-  }
-  if (Array.isArray(obj)) {
-    obj.forEach((item, i) => {
-      const nextParent = typeof item === 'object' && item && !Array.isArray(item) ? (item as Record<string, unknown>) : undefined
-      out.push(...flattenWithBbox(item, `${prefix}[${i}]`, nextParent))
-    })
-    return out
-  }
-  if (typeof obj === 'object') {
-    const rec = obj as Record<string, unknown>
-    for (const [k, v] of Object.entries(obj)) {
-      if (k === '_page_bbox' || k.endsWith('_bbox') || k === '_word_indices' || (k.startsWith('_') && k.length > 1)) continue
-      const nextPrefix = prefix ? `${prefix}.${k}` : k
-      out.push(...flattenWithBbox(v, nextPrefix, rec))
-    }
-    return out
-  }
-  return out
-}
-
-/** 텍스트 정규화: 공백 정리, 전각→반각 등 (매칭용) */
-function normalizeForMatch(s: string): string {
-  return s
-    .replace(/\s+/g, ' ')
-    .replace(/　/g, ' ')
-    .trim()
-}
-
-/** 값 문자열이 OCR 단어 어디에 해당하는지 찾아 bbox(union) 반환. 페이지 픽셀 좌표. */
-function findValueBbox(
-  value: string,
-  words: OcrWord[],
-  pageWidth: number,
-  pageHeight: number
-): { left: number; top: number; width: number; height: number } | null {
-  const norm = normalizeForMatch(value)
-  if (!norm || !words.length) return null
-
-  const withRect = words
-    .map((w) => {
-      const rect = w.boundingBox?.vertices ? verticesToRect(w.boundingBox.vertices) : null
-      return { word: w, rect }
-    })
-    .filter((x): x is { word: OcrWord; rect: NonNullable<ReturnType<typeof verticesToRect>> } => x.rect != null)
-
-  if (!withRect.length) return null
-
-  const normValueNoSpace = norm.replace(/\s/g, '')
-  let best: { start: number; end: number } | null = null
-
-  for (let start = 0; start < withRect.length; start++) {
-    let acc = ''
-    for (let end = start; end < withRect.length; end++) {
-      acc += normalizeForMatch(withRect[end].word.text).replace(/\s/g, '')
-      if (acc.length > normValueNoSpace.length * 3) break
-      if (
-        acc === normValueNoSpace ||
-        (normValueNoSpace.length >= 1 && (acc.includes(normValueNoSpace) || normValueNoSpace.includes(acc)))
-      ) {
-        const candidate = { start, end }
-        if (!best || end - start < best.end - best.start) best = candidate
-        break
-      }
-    }
-  }
-  if (!best && normValueNoSpace.length >= 2) {
-    const fullNoSpace = withRect.map((x) => normalizeForMatch(x.word.text).replace(/\s/g, '')).join('')
-    if (fullNoSpace.includes(normValueNoSpace)) {
-      const idx = fullNoSpace.indexOf(normValueNoSpace)
-      let charCount = 0
-      let start = 0
-      let end = 0
-      for (let i = 0; i < withRect.length; i++) {
-        const len = normalizeForMatch(withRect[i].word.text).replace(/\s/g, '').length
-        if (charCount <= idx && idx < charCount + len) start = i
-        if (charCount < idx + normValueNoSpace.length && idx + normValueNoSpace.length <= charCount + len) {
-          end = i
-          break
-        }
-        charCount += len
-      }
-      best = { start, end }
-    }
-  }
-  if (!best) return null
-
-  const subset = withRect.slice(best.start, best.end + 1)
-  const left = Math.min(...subset.map((s) => s.rect.left))
-  const top = Math.min(...subset.map((s) => s.rect.top))
-  const right = Math.max(...subset.map((s) => s.rect.left + s.rect.width))
-  const bottom = Math.max(...subset.map((s) => s.rect.top + s.rect.height))
-  return { left, top, width: right - left, height: bottom - top }
-}
-
 type HighlightRect = { left: number; top: number; width: number; height: number }
 
 export function OcrTestTab() {
   const [file, setFile] = useState<File | null>(null)
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null)
-  const [ocrResult, setOcrResult] = useState<OcrTestResponse | null>(null)
+  const [pdfUploadId, setPdfUploadId] = useState<string | null>(null)
+  const [numPages, setNumPages] = useState(0)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [ocrResultByPage, setOcrResultByPage] = useState<Record<number, OcrTestResponse>>({})
   const [loading, setLoading] = useState(false)
-  const [structureLoading, setStructureLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [structuredJsonText, setStructuredJsonText] = useState<string>('')
-  const [structuredFromApi, setStructuredFromApi] = useState<Record<string, unknown> | null>(null)
   const [highlightRect, setHighlightRect] = useState<HighlightRect | null>(null)
+  const [selectedWordIndex, setSelectedWordIndex] = useState<number | null>(null)
+  const [showWordBoxes, setShowWordBoxes] = useState(true)
+  const [selectedFieldKey, setSelectedFieldKey] = useState<string | null>(null)
+  const [keyedValues, setKeyedValues] = useState<Record<string, string>>({})
+  const [appendMode, setAppendMode] = useState(false)
+  /** どのフィールドの「保存」でコード候補を表示中か */
+  const [suggestFieldKey, setSuggestFieldKey] = useState<string | null>(null)
+  /** 今回の検索に使ったキーワード（モーダル・マッチ結果表示用） */
+  const [suggestKeyword, setSuggestKeyword] = useState<string>('')
+  const [suggestLoading, setSuggestLoading] = useState(false)
+  const [suggestions, setSuggestions] = useState<OcrSuggestRow[]>([])
+  /** master_codeから選択したペア（B列→受注先, D列→スーパー）を一覧表示用 */
+  const [lastMatchedPair, setLastMatchedPair] = useState<{
+    keyword: string
+    field: string
+    b: string
+    d: string
+  } | null>(null)
   const imageContainerRef = useRef<HTMLDivElement>(null)
 
+  const ocrResult = ocrResultByPage[currentPage] ?? null
   const page = ocrResult?.pages?.[0]
   const words = page?.words ?? []
   const pageWidth = page?.width ?? 1
   const pageHeight = page?.height ?? 1
 
-  const structuredFields = useMemo(() => {
-    if (structuredFromApi) return flattenWithBbox(structuredFromApi)
-    if (!structuredJsonText.trim()) return []
-    try {
-      const obj = JSON.parse(structuredJsonText) as unknown
-      return flattenStructuredJson(obj)
-    } catch {
-      return []
-    }
-  }, [structuredFromApi, structuredJsonText])
+  const pageImageUrl = pdfUploadId && numPages >= 1
+    ? ocrTestApi.getPdfPageImageUrl(pdfUploadId, currentPage)
+    : null
 
-  const hasStructure = structuredFields.length > 0
+  /** OCR 단어별 bbox (페이지 좌표). 이미지에 박스 그리기·클릭 시 텍스트 표시용 */
+  const wordRects = useMemo(() => {
+    return words
+      .map((w) => {
+        const rect = w.boundingBox?.vertices ? verticesToRect(w.boundingBox.vertices) : null
+        return rect ? { word: w, rect } : null
+      })
+      .filter((x): x is { word: OcrWord; rect: NonNullable<ReturnType<typeof verticesToRect>> } => x != null)
+  }, [words])
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl)
     setFile(f ?? null)
-    setImagePreviewUrl(f ? URL.createObjectURL(f) : null)
-    setOcrResult(null)
-    setStructuredFromApi(null)
+    setPdfUploadId(null)
+    setNumPages(0)
+    setCurrentPage(1)
+    setOcrResultByPage({})
     setHighlightRect(null)
+    setSelectedWordIndex(null)
+    setKeyedValues({})
+    setSelectedFieldKey(null)
+    setSuggestFieldKey(null)
+    setSuggestKeyword('')
+    setSuggestions([])
+    setLastMatchedPair(null)
     setError(null)
-  }, [imagePreviewUrl])
-
-  const runOcr = useCallback(async () => {
-    if (!file) return
+    if (!f || !f.name.toLowerCase().endsWith('.pdf')) return
     setLoading(true)
     setError(null)
-    setStructuredFromApi(null)
     try {
-      const result = await ocrTestApi.ocrImage(file)
-      setOcrResult(result)
-      setHighlightRect(null)
+      const { upload_id, num_pages } = await ocrTestApi.uploadPdf(f)
+      setPdfUploadId(upload_id)
+      setNumPages(num_pages)
+      setCurrentPage(1)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'OCR failed')
+      setError(e instanceof Error ? e.message : 'PDFアップロードに失敗しました')
     } finally {
       setLoading(false)
     }
-  }, [file])
+  }, [])
 
-  const runStructure = useCallback(async () => {
-    if (!page?.text || !words.length) return
-    setStructureLoading(true)
+  const runOcr = useCallback(async () => {
+    if (!pdfUploadId) return
+    setLoading(true)
     setError(null)
     try {
-      const result = await ocrTestApi.structure({
-        ocr_text: page.text,
-        words,
-        page_width: pageWidth,
-        page_height: pageHeight,
-        form_type: '04',
-      })
-      setStructuredFromApi(result as Record<string, unknown>)
-      setStructuredJsonText('')
+      const result = await ocrTestApi.ocrPdfPage(pdfUploadId, currentPage)
+      setOcrResultByPage((prev) => ({ ...prev, [currentPage]: result }))
       setHighlightRect(null)
+      setSelectedWordIndex(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '構造化 failed')
+      setError(e instanceof Error ? e.message : 'OCRに失敗しました')
     } finally {
-      setStructureLoading(false)
+      setLoading(false)
     }
-  }, [page, words, pageWidth, pageHeight])
+  }, [pdfUploadId, currentPage])
 
-  const handleStructuredFieldClick = useCallback(
-    (field: StructuredField) => {
-      const bbox = field.bbox ?? findValueBbox(field.value, words, pageWidth, pageHeight)
-      setHighlightRect(bbox)
-      if (bbox && imageContainerRef.current) {
-        const container = imageContainerRef.current
-        const img = container.querySelector('img')
-        if (img) {
-          const scaleX = img.offsetWidth / pageWidth
-          const scaleY = img.offsetHeight / pageHeight
-          const centerY = (bbox.top + bbox.height / 2) * scaleY
-          const centerX = (bbox.left + bbox.width / 2) * scaleX
-          container.scrollTop = Math.max(0, centerY - container.clientHeight / 2)
-          container.scrollLeft = Math.max(0, centerX - container.clientWidth / 2)
+  /** 画像のボックスをクリック: フィールド選択中ならそのフィールドにキーイン（追加モード時はつなげる） */
+  const handleWordBoxClick = useCallback(
+    (index: number, rect: HighlightRect) => {
+      setSelectedWordIndex(index)
+      setHighlightRect(rect)
+      const text = words[index]?.text ?? ''
+      if (selectedFieldKey && text) {
+        if (appendMode) {
+          setKeyedValues((prev) => ({
+            ...prev,
+            [selectedFieldKey]: (prev[selectedFieldKey] ?? '') + text,
+          }))
+        } else {
+          setKeyedValues((prev) => ({ ...prev, [selectedFieldKey]: text }))
         }
       }
     },
-    [words, pageWidth, pageHeight]
+    [words, selectedFieldKey, appendMode]
+  )
+
+  /** 行の「保存」クリック → 検索キーワード保存 → master_codeから類似3件取得 → モーダル表示 */
+  const handleSaveForField = useCallback(
+    async (fieldKey: string) => {
+      const value = keyedValues[fieldKey] ?? ''
+      setSuggestFieldKey(fieldKey)
+      setSuggestKeyword(value)
+      setSuggestLoading(true)
+      setSuggestions([])
+      try {
+        const { suggestions: list } = await ocrTestApi.suggestCodes(value, fieldKey)
+        setSuggestions(list ?? [])
+      } catch (e) {
+        setSuggestions([])
+        setError(e instanceof Error ? e.message : 'コード候補の取得に失敗しました')
+      } finally {
+        setSuggestLoading(false)
+      }
+    },
+    [keyedValues]
+  )
+
+  /** 候補行を選択: B列→受注先・D列→スーパーを反映し、マッチ結果を記録 */
+  const handleSelectSuggestion = useCallback(
+    (row: OcrSuggestRow) => {
+      if (suggestFieldKey) {
+        setKeyedValues((prev) => ({
+          ...prev,
+          [suggestFieldKey]: row.b,
+          'スーパー': row.d || prev['スーパー'],
+        }))
+        setLastMatchedPair({
+          keyword: suggestKeyword,
+          field: suggestFieldKey,
+          b: row.b,
+          d: row.d,
+        })
+        setSuggestFieldKey(null)
+        setSuggestKeyword('')
+        setSuggestions([])
+      }
+    },
+    [suggestFieldKey, suggestKeyword]
   )
 
   useEffect(() => {
@@ -279,42 +195,33 @@ export function OcrTestTab() {
   }, [highlightRect, pageWidth, pageHeight])
 
   useEffect(() => {
-    return () => {
-      if (imagePreviewUrl) URL.revokeObjectURL(imagePreviewUrl)
-    }
-  }, [imagePreviewUrl])
+    setHighlightRect(null)
+    setSelectedWordIndex(null)
+  }, [currentPage])
 
   return (
     <div className="ocr-test-tab">
       <div className="ocr-test-header">
-        <h2 className="ocr-test-title">OCRテスト（Upstage・構造ハイライト）</h2>
+        <h2 className="ocr-test-title">OCRテスト（キーイン・保存）</h2>
         <p className="ocr-test-desc">
-          画像をアップロード → OCR実行 → 「構造化（座標付き）」でLLMが座標付きで構造化（DB保存なし・テスト用）。またはJSONを貼り付けてフィールドクリックでハイライト。
+          PDFをアップロード → ページ移動・OCR実行でボックス表示。右でフィールドを選択してから画像のボックスをクリックでキーイン → 保存（入力はページを替えても維持）。
         </p>
       </div>
 
       <div className="ocr-test-upload-row">
         <input
           type="file"
-          accept="image/*"
+          accept=".pdf,application/pdf"
           onChange={handleFileChange}
           className="ocr-test-file-input"
         />
         <button
           type="button"
           onClick={runOcr}
-          disabled={!file || loading}
+          disabled={!pdfUploadId || loading}
           className="ocr-test-run-btn"
         >
           {loading ? 'OCR実行中...' : 'OCR実行'}
-        </button>
-        <button
-          type="button"
-          onClick={runStructure}
-          disabled={!page?.text || !words.length || structureLoading}
-          className="ocr-test-run-btn"
-        >
-          {structureLoading ? '構造化中...' : '構造化（座標付き）'}
         </button>
       </div>
 
@@ -322,13 +229,58 @@ export function OcrTestTab() {
 
       <div className="ocr-test-main">
         <div className="ocr-test-image-panel">
+          {pdfUploadId && numPages >= 1 && (
+            <div className="ocr-test-page-nav">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="ocr-test-nav-btn"
+              >
+                ‹
+              </button>
+              <span className="ocr-test-page-info">
+                {currentPage} / {numPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
+                disabled={currentPage >= numPages}
+                className="ocr-test-nav-btn"
+              >
+                ›
+              </button>
+            </div>
+          )}
           <div
             ref={imageContainerRef}
             className="ocr-test-image-container"
           >
-            {imagePreviewUrl && (
+            {pageImageUrl && (
               <div className="ocr-test-image-wrapper">
-                <img src={imagePreviewUrl} alt="Preview" />
+                <img src={pageImageUrl} alt={`Page ${currentPage}`} />
+                {page && showWordBoxes && wordRects.length > 0 && (
+                  <div className="ocr-test-boxes-overlay" aria-hidden>
+                    {wordRects.map(({ word, rect }, index) => (
+                      <button
+                        key={word.id ?? index}
+                        type="button"
+                        className={`ocr-test-word-box ${selectedWordIndex === index ? 'ocr-test-word-box-selected' : ''}`}
+                        style={{
+                          left: `${(rect.left / pageWidth) * 100}%`,
+                          top: `${(rect.top / pageHeight) * 100}%`,
+                          width: `${(rect.width / pageWidth) * 100}%`,
+                          height: `${(rect.height / pageHeight) * 100}%`,
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleWordBoxClick(index, rect)
+                        }}
+                        title={word.text}
+                      />
+                    ))}
+                  </div>
+                )}
                 {page && highlightRect && (
                   <div className="ocr-test-overlay">
                     <div
@@ -348,49 +300,137 @@ export function OcrTestTab() {
         </div>
 
         <div className="ocr-test-words-panel">
-          <div className="ocr-test-structured-section">
-            <div className="ocr-test-words-label">構造化JSON（分析結果を貼り付け）</div>
-            <textarea
-              className="ocr-test-json-input"
-              placeholder='{"document_meta": {...}, "party": {...}, ...}'
-              value={structuredJsonText}
-              onChange={(e) => {
-                setStructuredJsonText(e.target.value)
-                setStructuredFromApi(null)
-                setHighlightRect(null)
-              }}
-              rows={4}
-            />
-          </div>
-
-          {hasStructure && (
+          {pdfUploadId && numPages >= 1 && (
             <>
-              <div className="ocr-test-words-label">フィールドをクリック → 画像上でハイライト</div>
-              <div className="ocr-test-structure-list">
-                {structuredFields.map((field, index) => (
-                  <button
-                    key={`${field.path}.${field.key}-${index}`}
-                    type="button"
-                    className="ocr-test-structure-row"
-                    onClick={() => handleStructuredFieldClick(field)}
-                  >
-                    <span className="ocr-test-structure-key">{field.key}:</span>
-                    <span className="ocr-test-structure-value">{field.value}</span>
-                  </button>
+              <div className="ocr-test-words-label">キーイン（ページを替えても維持）・保存でmaster_codeから類似候補を選択</div>
+              <div className="ocr-test-keyin-fields">
+                {KEYIN_FIELDS.map((key) => (
+                  <div key={key} className="ocr-test-keyin-row">
+                    <button
+                      type="button"
+                      className={`ocr-test-keyin-key ${selectedFieldKey === key ? 'ocr-test-keyin-key-selected' : ''}`}
+                      onClick={() => setSelectedFieldKey(key)}
+                    >
+                      {key}
+                    </button>
+                    <span className="ocr-test-keyin-value">{keyedValues[key] ?? '—'}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSaveForField(key)}
+                      disabled={suggestLoading && suggestFieldKey === key}
+                      className="ocr-test-save-btn-inline"
+                      title={key === 'スーパー' ? 'master_code D列から類似3件' : 'master_code B列から類似3件'}
+                    >
+                      {suggestLoading && suggestFieldKey === key ? '...' : '保存'}
+                    </button>
+                  </div>
                 ))}
               </div>
+              {suggestFieldKey && (
+                <div className="ocr-test-suggest-modal" role="dialog" aria-label="コード候補">
+                  <div className="ocr-test-suggest-modal-inner">
+                    <div className="ocr-test-suggest-modal-title">
+                      {suggestFieldKey}：master_code A~F列（{suggestFieldKey === 'スーパー' ? 'D列' : 'B列'}基準で類似・選択でB列→受注先・D列→スーパーに反映）
+                    </div>
+                    <div className="ocr-test-suggest-keyword">
+                      検索キーワード: <strong>{suggestKeyword || '—'}</strong>
+                      <span className="ocr-test-suggest-keyword-hint">
+                        （{suggestFieldKey === 'スーパー' ? 'D列' : 'B列'}でマッチ）
+                      </span>
+                    </div>
+                    {suggestLoading ? (
+                      <div className="ocr-test-suggest-loading">取得中...</div>
+                    ) : suggestions.length === 0 ? (
+                      <div className="ocr-test-suggest-empty">候補がありません</div>
+                    ) : (
+                      <div className="ocr-test-suggest-table-wrap">
+                        <table className="ocr-test-suggest-table">
+                          <thead>
+                            <tr>
+                              <th>A</th>
+                              <th>B</th>
+                              <th>C</th>
+                              <th>D</th>
+                              <th>E</th>
+                              <th>F</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {suggestions.map((row, i) => (
+                              <tr
+                                key={i}
+                                className="ocr-test-suggest-row"
+                                onClick={() => handleSelectSuggestion(row)}
+                              >
+                                <td>{row.a}</td>
+                                <td>{row.b}</td>
+                                <td>{row.c}</td>
+                                <td>{row.d}</td>
+                                <td>{row.e}</td>
+                                <td>{row.f}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="ocr-test-suggest-cancel"
+                      onClick={() => { setSuggestFieldKey(null); setSuggestions([]) }}
+                    >
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              )}
+              {lastMatchedPair && (
+                <div className="ocr-test-matched-result">
+                  <div className="ocr-test-matched-result-title">マッチ結果（master_codeから選択したペア）</div>
+                  <div className="ocr-test-matched-result-keyword">
+                    検索に使用: <strong>{lastMatchedPair.keyword || '—'}</strong>
+                    <span className="ocr-test-matched-result-hint">
+                      （{lastMatchedPair.field === 'スーパー' ? 'D列' : 'B列'}でマッチ）
+                    </span>
+                  </div>
+                  <div className="ocr-test-matched-result-pair">
+                    <span className="ocr-test-matched-result-b">B列 → 受注先: {lastMatchedPair.b}</span>
+                    <span className="ocr-test-matched-result-d">D列 → スーパー: {lastMatchedPair.d}</span>
+                  </div>
+                </div>
+              )}
+              <div className="ocr-test-divider" />
+              <div className="ocr-test-words-label">フィールドを選択 → 画像のボックスをクリックで値を設定（ページを替えても入力可能）</div>
+              <label className="ocr-test-show-boxes-label">
+                <input
+                  type="checkbox"
+                  checked={showWordBoxes}
+                  onChange={(e) => setShowWordBoxes(e.target.checked)}
+                />
+                画像にボックスを表示
+              </label>
+              <label className="ocr-test-show-boxes-label">
+                <input
+                  type="checkbox"
+                  checked={appendMode}
+                  onChange={(e) => setAppendMode(e.target.checked)}
+                />
+                複数選択で連結（クリックした順に文字をつなげる）
+              </label>
+              {page && selectedWordIndex != null && words[selectedWordIndex] && (
+                <div className="ocr-test-selected-word">
+                  <span className="ocr-test-selected-word-label">クリックしたテキスト:</span>
+                  <span className="ocr-test-selected-word-value">{words[selectedWordIndex].text}</span>
+                </div>
+              )}
+              <div className="ocr-test-divider" />
             </>
           )}
 
-          {page?.text && (
-            <div className="ocr-test-full-text">
-              <div className="ocr-test-full-text-label">OCR全文</div>
-              <pre className="ocr-test-full-text-content">{page.text}</pre>
-            </div>
+          {!pdfUploadId && <div className="ocr-test-hint">PDFをアップロードしてください</div>}
+          {pdfUploadId && !page && !loading && (
+            <div className="ocr-test-hint">このページで「OCR実行」を押してください</div>
           )}
-
-          {!page && ocrResult && <div className="ocr-test-no-words">OCRデータがありません</div>}
-          {!ocrResult && !loading && file && <div className="ocr-test-hint">「OCR実行」を押してください</div>}
         </div>
       </div>
     </div>

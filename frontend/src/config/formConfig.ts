@@ -1,39 +1,22 @@
 /**
- * 양식지별 설정
+ * 업로드 채널 설정: FINET(엑셀) / 우편물(Upstage OCR)
+ * 양식지 타입(form_type)은 API /api/form-types 에서 동적 조회
  */
-import type { FormConfig, FormType } from '@/types'
+import type { UploadChannelConfig, UploadChannel } from '@/types'
 
-export const FORM_TYPES: FormType[] = ['01', '02', '03', '04', '05', '06']
+export const UPLOAD_CHANNELS: UploadChannel[] = ['finet', 'mail']
 
-export const FORM_CONFIGS: Record<FormType, FormConfig> = {
-  '01': {
-    name: '01 FINET',
+export const UPLOAD_CHANNEL_CONFIGS: Record<UploadChannel, UploadChannelConfig> = {
+  finet: {
+    name: 'FINET',
+    label: 'Excel変換',
     color: '#667eea',
-    imagePath: '/images/form_01.png', // 프로젝트 루트의 form_01.png 파일 경로
+    imagePath: '/images/form_01.png',
   },
-  '02': {
-    name: '02 ヤマエ',
-    color: '#4ECDC4',
-    imagePath: '/images/form_02.png', // 프로젝트 루트의 form_02.png 파일 경로
-  },
-  '03': {
-    name: '03 旭食品/ヤマキ',
-    color: '#45B7D1',
-    imagePath: '/images/form_03.png', // 프로젝트 루트의 form_03.png 파일 경로
-  },
-  '04': {
-    name: '04 ACCESS',
+  mail: {
+    name: '郵便物',
+    label: 'Upstage OCR',
     color: '#a78bfa',
-    imagePath: '/images/form_04.png', // 프로젝트 루트의 form_04.png 파일 경로
-  },
-  '05': {
-    name: '05 湧川',
-    color: '#98D8C8',
-    imagePath: '/images/form_05.png', // 프로젝트 루트의 form_05.png 파일 경로
-  },
-  '06': {
-    name: '06 新規フォーム',
-    color: '#F4A261',
-    imagePath: '/images/form_06.png', // 양식 06 샘플 이미지 (추가 필요)
+    imagePath: '/images/form_04.png',
   },
 }

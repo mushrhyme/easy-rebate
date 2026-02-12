@@ -1,15 +1,20 @@
 /**
  * 메인 App 컴포넌트
  */
-import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, useMemo, useRef, useCallback } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { FormUploadSection } from './components/Upload/FormUploadSection'
+import { UploadedFilesList } from './components/Upload/UploadedFilesList'
+import { UploadPagePreview } from './components/Upload/UploadPagePreview'
+import { UploadProgressList } from './components/Upload/UploadProgressList'
+import type { UploadProgressPayload } from './components/Upload/FormUploadSection'
 import { CustomerSearch } from './components/Search/CustomerSearch'
 import { SAPUpload } from './components/SAPUpload/SAPUpload'
 import { RagAdminPanel } from './components/Admin/RagAdminPanel'
-import { OcrTestTab } from './components/OcrTest/OcrTestTab'
-import { documentsApi } from './api/client'
-import { FORM_TYPES } from './config/formConfig'
+import { AnswerKeyTab } from './components/AnswerKey/AnswerKeyTab'
+import { documentsApi, settingsApi, type RagProvider } from './api/client'
+import { UPLOAD_CHANNELS } from './config/formConfig'
+import type { UploadChannel } from './types'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './components/Auth/Login'
 import './App.css'
@@ -40,7 +45,20 @@ interface YearMonthGroup {
 function AppContent() {
   const { user, logout } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('upload')
+  const [initialPdfFilenameForAnswerKey, setInitialPdfFilenameForAnswerKey] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false) // 사이드바는 기본적으로 닫혀있음
+  const [selectedUploadChannel, setSelectedUploadChannel] = useState<UploadChannel | null>(UPLOAD_CHANNELS[0] ?? null)
+  const [selectedDocumentForPreview, setSelectedDocumentForPreview] = useState<{ pdfFilename: string; totalPages: number } | null>(null)
+  const [uploadProgressByChannel, setUploadProgressByChannel] = useState<Partial<Record<UploadChannel, UploadProgressPayload>>>({})
+  const removeFileByChannelRef = useRef<Partial<Record<UploadChannel, (fileName: string) => void>>>({})
+
+  /** 채널별 날짜 필터 (업로드 블록 + 업로드 완료 목록 연동) */
+  const [dateFilterByChannel, setDateFilterByChannel] = useState<Partial<Record<UploadChannel, { year: number | null; month: number | null }>>>({})
+  const setChannelDateFilter = useCallback((channel: UploadChannel, year: number | null, month: number | null) => {
+    setDateFilterByChannel((prev) => ({ ...prev, [channel]: { year, month } }))
+  }, [])
+
+  const isSidebarOpen = sidebarOpen
 
   // 모든 문서 조회 (드롭다운 표시를 위해)
   const { data: documentsData } = useQuery({
@@ -113,15 +131,29 @@ function AppContent() {
 
   const isAdmin = user?.username === 'admin'
 
+  /** 分析(기본 RAG) LLM: UI에서 변경 가능 */
+  const queryClient = useQueryClient()
+  const { data: ragProviderData } = useQuery({
+    queryKey: ['settings', 'rag-provider'],
+    queryFn: () => settingsApi.getRagProvider(),
+  })
+  const ragProvider = (ragProviderData?.provider ?? 'gemini') as RagProvider
+  const setRagProviderMutation = useMutation({
+    mutationFn: (provider: RagProvider) => settingsApi.setRagProvider(provider),
+    onSuccess: (_, provider) => {
+      queryClient.setQueryData(['settings', 'rag-provider'], { provider })
+    },
+  })
+
   return (
     <div className="app">
       <aside
-        className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}
+        className={`app-sidebar ${isSidebarOpen ? 'open' : ''}`}
         onMouseEnter={() => setSidebarOpen(true)}
         onMouseLeave={() => setSidebarOpen(false)}
       >
         <div className="sidebar-toggle-area">
-          {sidebarOpen ? (
+          {isSidebarOpen ? (
             <svg
               width="20"
               height="20"
@@ -159,20 +191,6 @@ function AppContent() {
         </div>
 
         <div className="sidebar-content">
-          <div className="sidebar-user-info">
-            <div className="user-avatar">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M20 21V19C20 17.9391 19.5786 16.9217 18.8284 16.1716C18.0783 15.4214 17.0609 15 16 15H8C6.93913 15 5.92172 15.4214 5.17157 16.1716C4.42143 16.9217 4 17.9391 4 19V21M16 7C16 9.20914 14.2091 11 12 11C9.79086 11 8 9.20914 8 7C8 4.79086 9.79086 3 12 3C14.2091 3 16 4.79086 16 7Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
-            <div className="user-details">
-              <div className="user-name">{user?.display_name || user?.username}</div>
-              <button className="logout-button" onClick={logout}>
-                ログアウト
-              </button>
-            </div>
-          </div>
-
           <div className="sidebar-menu">
             <button
               className={`sidebar-button ${activeTab === 'upload' ? 'active' : ''}`}
@@ -203,7 +221,7 @@ function AppContent() {
                 className={`sidebar-button ${activeTab === 'ocr_test' ? 'active' : ''}`}
                 onClick={() => setActiveTab('ocr_test')}
               >
-                OCRテスト
+                正解表作成
               </button>
             )}
             {isAdmin && (
@@ -235,18 +253,97 @@ function AppContent() {
                   <span className="upload-title-sub">Rebate Management System</span>
                 </h1>
               </div>
+              <div className="header-user-info">
+                <div className="header-user-avatar">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M20 21V19C20 17.9391 19.5786 16.9217 18.8284 16.1716C18.0783 15.4214 17.0609 15 16 15H8C6.93913 15 5.92172 15.4214 5.17157 16.1716C4.42143 16.9217 4 17.9391 4 19V21M16 7C16 9.20914 14.2091 11 12 11C9.79086 11 8 9.20914 8 7C8 4.79086 9.79086 3 12 3C14.2091 3 16 4.79086 16 7Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <span className="header-user-name">{user?.display_name || user?.username}</span>
+                <button type="button" className="header-logout-button" onClick={logout}>
+                  ログアウト
+                </button>
+              </div>
             </div>
-            <div className="upload-sections">
-              {FORM_TYPES.map((formType) => (
-                <FormUploadSection key={formType} formType={formType} />
-              ))}
+            <div className="upload-body">
+              <div className="upload-body-left">
+                <div className="upload-analysis-llm-row">
+                  <label className="upload-analysis-llm-label">分析LLM:</label>
+                  <select
+                    className="upload-analysis-llm-select"
+                    value={ragProvider}
+                    onChange={(e) => setRagProviderMutation.mutate(e.target.value as RagProvider)}
+                    title="アップロード後の解析に使用するLLM（Gemini / GPT 5.2）"
+                  >
+                    <option value="gemini">Gemini</option>
+                    <option value="gpt5.2">GPT 5.2</option>
+                  </select>
+                </div>
+                <div className="upload-body-cards">
+                  {UPLOAD_CHANNELS.map((channel) => (
+                    <FormUploadSection
+                      key={channel}
+                      uploadChannel={channel}
+                      selectedYear={dateFilterByChannel[channel]?.year ?? null}
+                      selectedMonth={dateFilterByChannel[channel]?.month ?? null}
+                      onYearMonthChange={(y, m) => setChannelDateFilter(channel, y, m)}
+                      onShowFileList={(ch) => {
+                        setSelectedUploadChannel(ch)
+                        setSelectedDocumentForPreview(null)
+                      }}
+                      isListSelected={selectedUploadChannel === channel}
+                      onUploadProgressChange={(ch, payload) => {
+                        setUploadProgressByChannel((prev) => ({ ...prev, [ch]: payload }))
+                      }}
+                      onRegisterRemove={(ch, removeFn) => {
+                        const next = { ...removeFileByChannelRef.current }
+                        if (removeFn == null) delete next[ch]
+                        else next[ch] = removeFn
+                        removeFileByChannelRef.current = next
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="upload-body-preview">
+                  <UploadPagePreview pdfFilename={selectedDocumentForPreview?.pdfFilename ?? null} />
+                </div>
+              </div>
+              <div className="upload-body-list">
+                {selectedUploadChannel ? (
+                  <>
+                    {uploadProgressByChannel[selectedUploadChannel]?.fileNames?.length ? (
+                      <UploadProgressList
+                        channel={selectedUploadChannel}
+                        fileNames={uploadProgressByChannel[selectedUploadChannel].fileNames}
+                        progress={uploadProgressByChannel[selectedUploadChannel].progress}
+                        isUploading={uploadProgressByChannel[selectedUploadChannel].isUploading}
+                        onRemove={(fileName) => removeFileByChannelRef.current[selectedUploadChannel]?.(fileName)}
+                      />
+                    ) : null}
+                    <UploadedFilesList
+                      selectedChannel={selectedUploadChannel}
+                      filterYear={dateFilterByChannel[selectedUploadChannel]?.year ?? null}
+                      filterMonth={dateFilterByChannel[selectedUploadChannel]?.month ?? null}
+                      onSelectDocument={(pdfFilename, totalPages) => setSelectedDocumentForPreview({ pdfFilename, totalPages })}
+                      selectedPdfFilename={selectedDocumentForPreview?.pdfFilename ?? null}
+                    />
+                  </>
+                ) : (
+                  <div className="upload-list-placeholder">一覧をクリックしてアップロード済みファイルを表示</div>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {activeTab === 'search' && (
           <div className="search-tab">
-            <CustomerSearch />
+            <CustomerSearch
+              onNavigateToAnswerKey={(pdfFilename) => {
+                setInitialPdfFilenameForAnswerKey(pdfFilename)
+                setActiveTab('ocr_test')
+              }}
+            />
           </div>
         )}
 
@@ -257,8 +354,11 @@ function AppContent() {
         )}
 
         {isAdmin && activeTab === 'ocr_test' && (
-          <div className="ocr-test-tab-wrapper">
-            <OcrTestTab />
+          <div className="answer-key-tab-wrapper">
+            <AnswerKeyTab
+              initialPdfFilename={initialPdfFilenameForAnswerKey}
+              onConsumeInitialPdfFilename={() => setInitialPdfFilenameForAnswerKey(null)}
+            />
           </div>
         )}
 

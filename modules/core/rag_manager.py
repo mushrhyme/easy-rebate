@@ -160,7 +160,7 @@ class RAGManager:
                         CREATE TABLE rag_vector_index (
                             index_id SERIAL PRIMARY KEY,
                             index_name VARCHAR(100) NOT NULL DEFAULT 'base',
-                            form_type VARCHAR(10) NOT NULL,
+                            form_type VARCHAR(10),
                             index_data BYTEA NOT NULL,
                             metadata_json JSONB NOT NULL,
                             index_size BIGINT,
@@ -218,194 +218,69 @@ class RAGManager:
     
     def _load_index_from_db(self, form_type: Optional[str] = None) -> Tuple[Optional[Any], Dict[str, Any], Dict[str, int], Dict[int, str]]:
         """
-        DB에서 FAISS 인덱스를 로드합니다.
-
-        - form_type 가 주어진 경우: 해당 양식의 base_{form_type} 또는 shard_* 들만 병합
-        - form_type 가 None 인 경우:
-          1) index_name = 'base' (글로벌 인덱스)가 있으면 그것을 사용
-          2) 없으면 모든 base_{XX} 인덱스를 병합해 전체용 인덱스 생성
-          3) 그래도 없으면 shard_* 전체를 병합 시도
+        DB에서 FAISS 인덱스를 로드합니다. 단일 글로벌 인덱스만 사용합니다.
+        1) index_name='base', form_type IS NULL/'' 인 행이 있으면 사용
+        2) 없으면 shard_* 전체를 병합해 (base, NULL)로 저장 후 반환
+        (form_type 인자는 하위 호환용으로 무시)
         """
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 디버깅용 전체 인덱스 목록 (필요시 사용할 수 있음)
+                # 1) 글로벌 base 인덱스 로드
                 cursor.execute("""
-                    SELECT index_name, form_type, vector_count, updated_at
+                    SELECT index_data, metadata_json, vector_count
                     FROM rag_vector_index
+                    WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
                     ORDER BY updated_at DESC
+                    LIMIT 1
                 """)
-                all_indices = cursor.fetchall()
-
-                # -----------------------------
-                # 1. form_type 이 있는 경우 (기존 동작 유지)
-                # -----------------------------
-                if form_type:
-                    base_index_name = f'base_{form_type}'
-                    # print(f"🔍 [인덱스 로드] 양식지 {form_type}의 인덱스 로드 시도: {base_index_name}")
-                    cursor.execute("""
-                        SELECT index_data, metadata_json, vector_count
-                        FROM rag_vector_index
-                        WHERE index_name = %s AND form_type = %s
-                        ORDER BY updated_at DESC
-                        LIMIT 1
-                    """, (base_index_name, form_type))
-                else:
-                    # -----------------------------
-                    # 2. form_type 이 없는 경우 (글로벌 인덱스)
-                    #    2-1) index_name = 'base' 먼저 시도
-                    # -----------------------------
-                    cursor.execute("""
-                        SELECT index_data, metadata_json, vector_count
-                        FROM rag_vector_index
-                        WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
-                        ORDER BY updated_at DESC
-                        LIMIT 1
-                    """)
-
                 row = cursor.fetchone()
                 if row and len(row) >= 3:
-                    index_data_bytes = row[0]
-                    metadata_json = row[1]
-                    vector_count = row[2] or 0
+                    index_data_bytes, metadata_json, vector_count = row[0], row[1], row[2] or 0
                     if isinstance(index_data_bytes, memoryview):
                         index_data_bytes = np.frombuffer(index_data_bytes, dtype=np.uint8)
                     elif isinstance(index_data_bytes, bytes):
                         index_data_bytes = np.frombuffer(index_data_bytes, dtype=np.uint8)
                     else:
                         index_data_bytes = np.frombuffer(bytes(index_data_bytes), dtype=np.uint8)
-
                     index = faiss.deserialize_index(index_data_bytes)
                     metadata = metadata_json.get('metadata', {})
                     id_to_index = metadata_json.get('id_to_index', {})
                     index_to_id_raw = metadata_json.get('index_to_id', {})
                     index_to_id = {int(k): v for k, v in index_to_id_raw.items()}
                     return index, metadata, id_to_index, index_to_id
-                else:
-                    if form_type:
-                        # 개별 양식 base_{form_type} 도 없고 shard 도 없으면 완전히 비어있는 상태
-                        print(f"⚠️ [인덱스 로드] base_{form_type} 인덱스를 찾을 수 없습니다. shard 검색 시도...")
 
-                # -----------------------------------------
-                # 2-2. form_type 이 없는 경우: 모든 base_{XX} 병합
-                # -----------------------------------------
-                if not form_type:
-                    cursor.execute("""
-                        SELECT index_data, metadata_json, vector_count, form_type
-                        FROM rag_vector_index
-                        WHERE index_name LIKE 'base_%'
-                        ORDER BY updated_at DESC
-                    """)
-                    base_rows = cursor.fetchall()
-
-                    if base_rows:
-                        # 첫 번째 base 인덱스를 기준으로 시작
-                        first_data_bytes, first_metadata_json, first_vector_count, first_form_type = base_rows[0]
-                        if isinstance(first_data_bytes, memoryview):
-                            first_data_bytes = np.frombuffer(first_data_bytes, dtype=np.uint8)
-                        elif isinstance(first_data_bytes, bytes):
-                            first_data_bytes = np.frombuffer(first_data_bytes, dtype=np.uint8)
-                        else:
-                            first_data_bytes = np.frombuffer(bytes(first_data_bytes), dtype=np.uint8)
-
-                        base_index = faiss.deserialize_index(first_data_bytes)
-                        base_metadata = first_metadata_json.get('metadata', {})
-                        base_id_to_index = first_metadata_json.get('id_to_index', {})
-                        base_index_to_id_raw = first_metadata_json.get('index_to_id', {})
-                        base_index_to_id = {int(k): v for k, v in base_index_to_id_raw.items()}
-
-                        # 나머지 base_{XX} 들을 순차적으로 병합
-                        for other_row in base_rows[1:]:
-                            if len(other_row) < 4:
-                                continue
-                            shard_data_bytes, shard_metadata_json, shard_vector_count, shard_form_type = other_row
-                            if isinstance(shard_data_bytes, memoryview):
-                                shard_data_bytes = np.frombuffer(shard_data_bytes, dtype=np.uint8)
-                            elif isinstance(shard_data_bytes, bytes):
-                                shard_data_bytes = np.frombuffer(shard_data_bytes, dtype=np.uint8)
-                            else:
-                                shard_data_bytes = np.frombuffer(bytes(shard_data_bytes), dtype=np.uint8)
-
-                            shard_index = faiss.deserialize_index(shard_data_bytes)
-                            base_vector_count = base_index.ntotal
-                            base_index.merge_from(shard_index)
-
-                            shard_metadata = shard_metadata_json.get('metadata', {})
-                            shard_id_to_index = shard_metadata_json.get('id_to_index', {})
-                            shard_index_to_id_raw = shard_metadata_json.get('index_to_id', {})
-                            shard_index_to_id = {int(k): v for k, v in shard_index_to_id_raw.items()}
-
-                            for doc_id, shard_faiss_idx in shard_id_to_index.items():
-                                new_faiss_idx = base_vector_count + shard_faiss_idx
-                                base_metadata[doc_id] = shard_metadata.get(doc_id, {})
-                                base_id_to_index[doc_id] = new_faiss_idx
-                                base_index_to_id[new_faiss_idx] = doc_id
-
-                        # 이 시점에서 base_index 는 모든 양식의 예제를 포함하는 글로벌 인덱스
-                        return base_index, base_metadata, base_id_to_index, base_index_to_id
-
-                # -----------------------------------------
-                # 3. shard_* 병합 (기존 로직, form_type 여부에 따라 분기)
-                # -----------------------------------------
-                if form_type:
-                    if isinstance(form_type, (tuple, list)):
-                        form_type = form_type[0] if form_type else None
-                    
-                    if not isinstance(form_type, str):
-                        return None, {}, {}, {}
-                    
-                    cursor.execute("""
-                        SELECT index_data, metadata_json, vector_count, index_name
-                        FROM rag_vector_index
-                        WHERE index_name LIKE 'shard_%' AND form_type = %s
-                        ORDER BY updated_at DESC
-                    """, (form_type,))
-                else:
-                    cursor.execute("""
-                        SELECT index_data, metadata_json, vector_count, index_name
-                        FROM rag_vector_index
-                        WHERE index_name LIKE 'shard_%'
-                        ORDER BY updated_at DESC
-                    """)
-                
+                # 2) base 없으면 shard_* 전체 병합 후 (base, NULL)로 저장
+                cursor.execute("""
+                    SELECT index_data, metadata_json, vector_count, index_name
+                    FROM rag_vector_index
+                    WHERE index_name LIKE 'shard_%'
+                    ORDER BY updated_at DESC
+                """)
                 shard_rows = cursor.fetchall()
-                if not shard_rows:
-                    if form_type:
-                        print(f"⚠️ [인덱스 로드] 양식지 {form_type}의 shard 인덱스도 없습니다.")
+                if not shard_rows or len(shard_rows[0]) < 4:
                     return None, {}, {}, {}
-                embedding_dim = self._get_embedding_dim()
-                if len(shard_rows) == 0:
-                    return None, {}, {}, {}
-                if len(shard_rows[0]) < 4:
-                    return None, {}, {}, {}
-                
-                first_shard_data, first_metadata_json, first_vector_count, first_shard_name = shard_rows[0]
-                if isinstance(first_shard_data, memoryview):
-                    first_shard_data = np.frombuffer(first_shard_data, dtype=np.uint8)
-                elif isinstance(first_shard_data, bytes):
-                    first_shard_data = np.frombuffer(first_shard_data, dtype=np.uint8)
-                else:
-                    first_shard_data = np.frombuffer(bytes(first_shard_data), dtype=np.uint8)
-                
-                base_index = faiss.deserialize_index(first_shard_data)
-                base_metadata = first_metadata_json.get('metadata', {})
-                base_id_to_index = first_metadata_json.get('id_to_index', {})
-                base_index_to_id_raw = first_metadata_json.get('index_to_id', {})
+
+                def _bytes_to_np(b):
+                    if isinstance(b, memoryview):
+                        return np.frombuffer(b, dtype=np.uint8)
+                    if isinstance(b, bytes):
+                        return np.frombuffer(b, dtype=np.uint8)
+                    return np.frombuffer(bytes(b), dtype=np.uint8)
+
+                first_data, first_meta, _, _ = shard_rows[0]
+                base_index = faiss.deserialize_index(_bytes_to_np(first_data))
+                base_metadata = first_meta.get('metadata', {})
+                base_id_to_index = first_meta.get('id_to_index', {})
+                base_index_to_id_raw = first_meta.get('index_to_id', {})
                 base_index_to_id = {int(k): v for k, v in base_index_to_id_raw.items()}
-                
+
                 for shard_row in shard_rows[1:]:
                     if len(shard_row) < 4:
                         continue
-                    shard_data_bytes, shard_metadata_json, shard_vector_count, shard_name = shard_row
-                    if isinstance(shard_data_bytes, memoryview):
-                        shard_data_bytes = np.frombuffer(shard_data_bytes, dtype=np.uint8)
-                    elif isinstance(shard_data_bytes, bytes):
-                        shard_data_bytes = np.frombuffer(shard_data_bytes, dtype=np.uint8)
-                    else:
-                        shard_data_bytes = np.frombuffer(bytes(shard_data_bytes), dtype=np.uint8)
-                    
-                    shard_index = faiss.deserialize_index(shard_data_bytes)
+                    shard_data_bytes, shard_metadata_json, _, _ = shard_row
+                    shard_index = faiss.deserialize_index(_bytes_to_np(shard_data_bytes))
                     base_vector_count = base_index.ntotal
                     base_index.merge_from(shard_index)
                     shard_metadata = shard_metadata_json.get('metadata', {})
@@ -417,18 +292,14 @@ class RAGManager:
                         base_metadata[doc_id] = shard_metadata.get(doc_id, {})
                         base_id_to_index[doc_id] = new_faiss_idx
                         base_index_to_id[new_faiss_idx] = doc_id
-                
+
                 total_vectors = base_index.ntotal
-                # print(f"✅ [인덱스 로드] shard 병합 완료: 총 {total_vectors}개 벡터, 메타데이터 {len(base_metadata)}개")
-                if form_type:
-                    try:
-                        self._save_merged_index_to_db(base_index, base_metadata, base_id_to_index, base_index_to_id, total_vectors, form_type)
-                        print(f"✅ [인덱스 로드] base_{form_type} 인덱스로 저장 완료")
-                    except Exception as save_err:
-                        print(f"⚠️ base 인덱스 저장 실패 (계속 사용 가능): {save_err}")
-                
+                try:
+                    self._save_merged_index_to_db(base_index, base_metadata, base_id_to_index, base_index_to_id, total_vectors, None)
+                except Exception as save_err:
+                    print(f"⚠️ base 인덱스 저장 실패 (계속 사용 가능): {save_err}")
                 return base_index, base_metadata, base_id_to_index, base_index_to_id
-                
+
         except Exception as e:
             print(f"⚠️ DB에서 인덱스 로드 실패: {e}")
             import traceback
@@ -467,14 +338,15 @@ class RAGManager:
             print(f"⚠️ 인덱스 저장 실패: {e}")
     
     def _save_merged_index_to_db(
-        self, 
-        index: Any, 
-        metadata: Dict[str, Any], 
-        id_to_index: Dict[str, int], 
+        self,
+        index: Any,
+        metadata: Dict[str, Any],
+        id_to_index: Dict[str, int],
         index_to_id: Dict[int, str],
         vector_count: int,
-        form_type: str
+        form_type: Optional[str] = None
     ):
+        """단일 글로벌 인덱스만 (base, NULL)로 저장합니다."""
         try:
             serialized = faiss.serialize_index(index)
             if hasattr(serialized, 'tobytes'):
@@ -499,7 +371,8 @@ class RAGManager:
                 "id_to_index": id_to_index,
                 "index_to_id": {str(k): v for k, v in index_to_id.items()}
             }
-            base_index_name = f'base_{form_type}'
+            base_index_name = 'base'
+            form_type_value = ''  # NULL이면 UNIQUE/ON CONFLICT 미동작하므로 '' 사용
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -515,7 +388,7 @@ class RAGManager:
                         updated_at = CURRENT_TIMESTAMP
                 """, (
                     base_index_name,
-                    form_type,
+                    form_type_value,
                     index_data_bytes,
                     json.dumps(metadata_json, allow_nan=False),
                     index_size,
@@ -546,81 +419,33 @@ class RAGManager:
                     return obj
                 return obj
             cleaned_metadata = clean_for_json(self.metadata)
-            form_type_groups = {}
-            for doc_id, data in cleaned_metadata.items():
-                metadata_info = data.get("metadata", {})
-                form_type = metadata_info.get("form_type") if isinstance(metadata_info, dict) else None
-                if not form_type:
-                    continue
-                if form_type not in form_type_groups:
-                    form_type_groups[form_type] = {
-                        "metadata": {},
-                        "id_to_index": {},
-                        "index_to_id": {}
-                    }
-                form_type_groups[form_type]["metadata"][doc_id] = data
-                if doc_id in self.id_to_index:
-                    form_type_groups[form_type]["id_to_index"][doc_id] = self.id_to_index[doc_id]
-                if doc_id in self.index_to_id:
-                    faiss_idx = self.id_to_index.get(doc_id)
-                    if faiss_idx is not None and faiss_idx in self.index_to_id:
-                        form_type_groups[form_type]["index_to_id"][str(faiss_idx)] = self.index_to_id[faiss_idx]
+            # 단일 글로벌 인덱스만 (base, '')로 저장 (NULL이면 ON CONFLICT 미동작)
+            metadata_json = {
+                "metadata": cleaned_metadata,
+                "id_to_index": self.id_to_index,
+                "index_to_id": {str(k): v for k, v in self.index_to_id.items()}
+            }
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
-                for form_type, group_data in form_type_groups.items():
-                    metadata_json = {
-                        "metadata": group_data["metadata"],
-                        "id_to_index": group_data["id_to_index"],
-                        "index_to_id": group_data["index_to_id"]
-                    }
-                    base_index_name = f'base_{form_type}'
-                    group_vector_count = len(group_data["metadata"])
-                    cursor.execute("""
-                        INSERT INTO rag_vector_index (
-                            index_name, form_type, index_data, metadata_json, index_size, vector_count
-                        ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
-                        ON CONFLICT (index_name, form_type)
-                        DO UPDATE SET
-                            index_data = EXCLUDED.index_data,
-                            metadata_json = EXCLUDED.metadata_json,
-                            index_size = EXCLUDED.index_size,
-                            vector_count = EXCLUDED.vector_count,
-                            updated_at = CURRENT_TIMESTAMP
-                    """, (
-                        base_index_name,
-                        form_type,
-                        index_data_bytes,
-                        json.dumps(metadata_json, allow_nan=False),
-                        index_size,
-                        group_vector_count
-                    ))
-            if not form_type_groups:
-                metadata_json = {
-                    "metadata": cleaned_metadata,
-                    "id_to_index": self.id_to_index,
-                    "index_to_id": {str(k): v for k, v in self.index_to_id.items()}
-                }
-                with self.db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO rag_vector_index (
-                            index_name, form_type, index_data, metadata_json, index_size, vector_count
-                        ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
-                        ON CONFLICT (index_name, form_type)
-                        DO UPDATE SET
-                            index_data = EXCLUDED.index_data,
-                            metadata_json = EXCLUDED.metadata_json,
-                            index_size = EXCLUDED.index_size,
-                            vector_count = EXCLUDED.vector_count,
-                            updated_at = CURRENT_TIMESTAMP
-                    """, (
-                        'base',
-                        None,
-                        index_data_bytes,
-                        json.dumps(metadata_json, allow_nan=False),
-                        index_size,
-                        vector_count
-                    ))
+                cursor.execute("""
+                    INSERT INTO rag_vector_index (
+                        index_name, form_type, index_data, metadata_json, index_size, vector_count
+                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    ON CONFLICT (index_name, form_type)
+                    DO UPDATE SET
+                        index_data = EXCLUDED.index_data,
+                        metadata_json = EXCLUDED.metadata_json,
+                        index_size = EXCLUDED.index_size,
+                        vector_count = EXCLUDED.vector_count,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    'base',
+                    '',
+                    index_data_bytes,
+                    json.dumps(metadata_json, allow_nan=False),
+                    index_size,
+                    vector_count
+                ))
         except Exception as e:
             print(f"⚠️ DB 인덱스 저장 실패: {e}")
             import traceback
@@ -781,6 +606,7 @@ class RAGManager:
                     "index_to_id": {str(k): v for k, v in shard_index_to_id.items()}
                 }
                 
+                # form_type='' 로 저장 (NULL이면 UNIQUE에서 여러 행 허용 → ON CONFLICT 미동작)
                 with self.db.get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
@@ -789,7 +615,7 @@ class RAGManager:
                         ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
                     """, (
                         shard_name,
-                        form_type or '',
+                        '',
                         index_data_bytes,
                         json.dumps(metadata_json, allow_nan=False),
                         index_size,
@@ -855,15 +681,14 @@ class RAGManager:
                 shard_index_to_id_raw = shard_metadata_json.get('index_to_id', {})
                 shard_index_to_id = {int(k): v for k, v in shard_index_to_id_raw.items()}
                 
-                # Base 인덱스 로드 (form_type별)
-                base_index_name = f'base_{form_type}' if form_type else 'base'
+                # Base 인덱스 로드 (단일 글로벌 base만 사용)
                 cursor.execute("""
                     SELECT index_data, metadata_json, vector_count
                     FROM rag_vector_index
-                    WHERE index_name = %s AND (form_type = %s OR (form_type IS NULL AND %s IS NULL))
+                    WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
                     ORDER BY updated_at DESC
                     LIMIT 1
-                """, (base_index_name, form_type, form_type))
+                """)
                 
                 base_row = cursor.fetchone()
                 if base_row:
@@ -940,8 +765,8 @@ class RAGManager:
                         vector_count = EXCLUDED.vector_count,
                         updated_at = CURRENT_TIMESTAMP
                 """, (
-                    base_index_name,
-                    form_type or None,
+                    'base',
+                    '',
                     index_data_bytes,
                     json.dumps(metadata_json, allow_nan=False),
                     index_size,
@@ -978,11 +803,14 @@ class RAGManager:
     def get_key_order_by_form_type(self, form_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if self.metadata:
             # item_keys가 있는 key_order를 우선적으로 찾기
+            # doc_id 기준 정렬로 호출마다 동일한 key_order 선택 (DB에서 읽은 뒤 순서가 섞이지 않도록)
             best_key_order = None
+            best_source_doc_id = None
+            best_source_meta = None
             fallback_key_order = None
             
-            for doc_id, data in self.metadata.items():
-                metadata_info = data.get("metadata", {})
+            for doc_id, data in sorted(self.metadata.items(), key=lambda x: x[0]):
+                metadata_info = data.get("metadata", {}) or {}
                 if form_type:
                     if metadata_info.get("form_type") == form_type:
                         key_order = data.get("key_order")
@@ -991,6 +819,8 @@ class RAGManager:
                             item_keys = key_order.get("item_keys", [])
                             if item_keys and len(item_keys) > 0:
                                 best_key_order = key_order
+                                best_source_doc_id = doc_id
+                                best_source_meta = metadata_info
                                 break  # item_keys가 있는 것을 찾으면 즉시 반환
                             elif fallback_key_order is None:
                                 fallback_key_order = key_order
@@ -1000,12 +830,21 @@ class RAGManager:
                         item_keys = key_order.get("item_keys", [])
                         if item_keys and len(item_keys) > 0:
                             best_key_order = key_order
+                            best_source_doc_id = doc_id
+                            best_source_meta = metadata_info
                             break
                         elif fallback_key_order is None:
                             fallback_key_order = key_order
             
             # item_keys가 있는 key_order를 우선 반환
             if best_key_order:
+                io = best_key_order.get("item_keys", [])
+                pdf_name = (best_source_meta or {}).get("pdf_name") or "(메타 없음)"
+                page_num = (best_source_meta or {}).get("page_num")
+                page_info = f" page={page_num}" if page_num is not None else ""
+                print(f"[RAG get_key_order_by_form_type] form_type={form_type} 소스=metadata")
+                print(f"  -> key_order 출처: doc_id={best_source_doc_id} pdf_name={pdf_name}{page_info}")
+                print(f"  -> item_keys 개수={len(io)} 순서={io[:15]}{'...' if len(io) > 15 else ''}")
                 return best_key_order
             
             # 없으면 fallback 반환
@@ -1015,23 +854,24 @@ class RAGManager:
             try:
                 with self.db.get_connection() as conn:
                     cursor = conn.cursor()
-                    for index_name_pattern in [f'base_{form_type}', 'shard_%']:
-                        if index_name_pattern.startswith('base_'):
+                    # 단일 글로벌 인덱스만 사용: base (form_type NULL) 또는 shard_*
+                    for index_name_pattern in ['base', 'shard_%']:
+                        if index_name_pattern == 'base':
                             cursor.execute("""
                                 SELECT metadata_json
                                 FROM rag_vector_index
-                                WHERE index_name = %s AND form_type = %s
+                                WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
                                 ORDER BY updated_at DESC
                                 LIMIT 1
-                            """, (index_name_pattern, form_type))
+                            """)
                         else:
                             cursor.execute("""
                                 SELECT metadata_json
                                 FROM rag_vector_index
-                                WHERE index_name LIKE %s AND form_type = %s
+                                WHERE index_name LIKE %s
                                 ORDER BY updated_at DESC
                                 LIMIT 1
-                            """, (index_name_pattern, form_type))
+                            """, (index_name_pattern,))
                         row = cursor.fetchone()
                         if row:
                             metadata_json = row[0]
@@ -1046,14 +886,16 @@ class RAGManager:
                                 if not metadata_dict:
                                     continue
                                 
-                                # item_keys가 있는 key_order를 우선적으로 찾기
+                                # item_keys가 있는 key_order를 우선적으로 찾기 (doc_id 정렬로 동일 key_order 보장)
                                 best_key_order = None
+                                best_source_doc_id = None
+                                best_source_meta = None
                                 fallback_key_order = None
                                 
-                                for doc_id, data in metadata_dict.items():
+                                for doc_id, data in sorted(metadata_dict.items(), key=lambda x: x[0]):
                                     if not isinstance(data, dict):
                                         continue
-                                    metadata_info = data.get("metadata", {})
+                                    metadata_info = data.get("metadata", {}) or {}
                                     if isinstance(metadata_info, dict):
                                         actual_form_type = metadata_info.get("form_type")
                                         if (actual_form_type == form_type or 
@@ -1066,26 +908,41 @@ class RAGManager:
                                                 item_keys = key_order.get("item_keys", [])
                                                 if item_keys and len(item_keys) > 0:
                                                     best_key_order = key_order
+                                                    best_source_doc_id = doc_id
+                                                    best_source_meta = metadata_info
                                                     break  # item_keys가 있는 것을 찾으면 즉시 반환
                                                 elif fallback_key_order is None:
                                                     fallback_key_order = key_order
                                 
                                 # item_keys가 있는 key_order를 우선 반환
                                 if best_key_order:
+                                    ko = best_key_order.get("item_keys", [])
+                                    pdf_name = (best_source_meta or {}).get("pdf_name") or "(메타 없음)"
+                                    page_num = (best_source_meta or {}).get("page_num")
+                                    page_info = f" page={page_num}" if page_num is not None else ""
+                                    print(f"[RAG get_key_order_by_form_type] form_type={form_type} 소스=DB")
+                                    print(f"  -> key_order 출처: doc_id={best_source_doc_id} pdf_name={pdf_name}{page_info}")
+                                    print(f"  -> item_keys 개수={len(ko)} 순서={ko[:15]}{'...' if len(ko) > 15 else ''}")
                                     return best_key_order
                                 
                                 # 없으면 fallback 반환
                                 if fallback_key_order:
                                     return fallback_key_order
                                 
-                                # form_type 매칭이 안되면 item_keys가 있는 첫 번째 key_order 찾기
-                                for doc_id, data in metadata_dict.items():
+                                # form_type 매칭이 안되면 item_keys가 있는 첫 번째 key_order 찾기 (doc_id 정렬)
+                                for doc_id, data in sorted(metadata_dict.items(), key=lambda x: x[0]):
                                     if not isinstance(data, dict):
                                         continue
                                     key_order = data.get("key_order")
                                     if key_order:
                                         item_keys = key_order.get("item_keys", [])
                                         if item_keys and len(item_keys) > 0:
+                                            meta = data.get("metadata", {}) or {}
+                                            pdf_name = meta.get("pdf_name") or "(메타 없음)"
+                                            page_num = meta.get("page_num")
+                                            page_info = f" page={page_num}" if page_num is not None else ""
+                                            print(f"[RAG get_key_order_by_form_type] form_type={form_type} 소스=DB(fallback)")
+                                            print(f"  -> key_order 출처: doc_id={doc_id} pdf_name={pdf_name}{page_info}")
                                             return key_order
                                         elif fallback_key_order is None:
                                             fallback_key_order = key_order
@@ -1119,7 +976,7 @@ class RAGManager:
                     cursor.execute("""
                         SELECT vector_count
                         FROM rag_vector_index
-                        WHERE index_name = 'base'
+                        WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
                         ORDER BY updated_at DESC
                         LIMIT 1
                     """)
@@ -1227,18 +1084,11 @@ class RAGManager:
         model = self._get_embedding_model()
         query_embedding = model.encode([processed_query], convert_to_numpy=True).astype('float32')
         all_results = []
-        if form_type and self.use_db:
-            # print(f"🔍 [RAG 검색] 양식지 {form_type}의 인덱스 로드 중...")
-            index, metadata, id_to_index, index_to_id = self._load_index_from_db(form_type=form_type)
-            if index is None:
-                print(f"⚠️ RAG 검색: 양식지 {form_type}의 인덱스를 찾을 수 없습니다.")
-                return []
-            # print(f"🔍 [RAG 검색] 인덱스 로드 완료: ntotal={index.ntotal}, 메타데이터={len(metadata)}개")
-        else:
-            index = self.index
-            metadata = self.metadata
-            id_to_index = self.id_to_index
-            index_to_id = self.index_to_id
+        # 단일 글로벌 인덱스만 사용 (form_type 무시)
+        index = self.index
+        metadata = self.metadata
+        id_to_index = self.id_to_index
+        index_to_id = self.index_to_id
         if index is None:
             print(f"⚠️ RAG 검색: 인덱스가 None입니다. 벡터 DB가 제대로 로드되지 않았을 수 있습니다.")
             return []

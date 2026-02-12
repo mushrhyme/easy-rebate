@@ -1,12 +1,15 @@
 /**
  * SAP 업로드 탭 컴포넌트
  * 이번달 검토 탭의 모든 분석 결과물을 SAP 업로드 양식에 맞게 엑셀 파일로 다운로드
+ * 산식은 양식지(01~05)별로 편집·저장 가능
  */
 import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { documentsApi, sapUploadApi } from '@/api/client'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { sapUploadApi } from '@/api/client'
 import { getApiBaseUrl } from '@/utils/apiConfig'
-import type { Document } from '@/types'
+import type { SapFormulasConfig, DataInputRule } from '@/types'
+import { DEFAULT_SAP_FORMULAS, dataInputToDescriptionLines, byFormValueToDisplay, parseCondFromText } from '@/config/sapUploadFormulas'
+import { useFormTypes } from '@/hooks/useFormTypes'
 import './SAPUpload.css'
 
 // 열 번호를 열 문자로 변환 (A=1, B=2, ..., Z=26, AA=27, ..., BB=54)
@@ -20,10 +23,117 @@ function getColumnLetter(columnNumber: number): string {
   return result
 }
 
+// 열 문자 → 0-based 인덱스 (A=0, B=1, ..., Z=25, AA=26, ...)
+function getColumnIndex(letter: string): number {
+  let n = 0
+  for (let i = 0; i < letter.length; i++) {
+    n = n * 26 + (letter.charCodeAt(i) - 64)
+  }
+  return n - 1
+}
+
+function getColumnDisplayName(letter: string, columnNames: string[] | undefined): string {
+  if (!columnNames?.length) return `${letter}列`
+  const idx = getColumnIndex(letter)
+  const name = columnNames[idx]?.trim()
+  return name ? `${letter}（${name}）` : `${letter}列`
+}
+
 export const SAPUpload = () => {
+  const queryClient = useQueryClient()
+  const { options: formTypeOptions } = useFormTypes()
+  const formKeys = formTypeOptions.map((o) => o.value)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
-  const [selectedFormType, setSelectedFormType] = useState<string>('all') // 'all' 또는 '01', '02', '03', '04', '05'
+  const [selectedFormType, setSelectedFormType] = useState<string>('all')
+  const [isEditFormulas, setIsEditFormulas] = useState(false)
+  const [editFormulas, setEditFormulas] = useState<SapFormulasConfig | null>(null)
+
+  // SAP 산식 설정 조회 (서버 또는 기본값)
+  const { data: formulasData, isLoading: formulasLoading } = useQuery({
+    queryKey: ['sap-upload', 'formulas'],
+    queryFn: () => sapUploadApi.getFormulas(),
+    placeholderData: DEFAULT_SAP_FORMULAS,
+  })
+
+  const formulas: SapFormulasConfig = formulasData ?? DEFAULT_SAP_FORMULAS
+
+  // 템플릿 컬럼명 (실제 컬럼명 표시용)
+  const { data: columnNamesData } = useQuery({
+    queryKey: ['sap-upload', 'column-names'],
+    queryFn: () => sapUploadApi.getColumnNames(),
+  })
+  const columnNames = columnNamesData?.column_names
+
+  const enterEditFormulas = () => {
+    setEditFormulas(JSON.parse(JSON.stringify(formulas)))
+    setIsEditFormulas(true)
+  }
+
+  const cancelEditFormulas = () => {
+    setIsEditFormulas(false)
+    setEditFormulas(null)
+  }
+
+  const saveFormulasMutation = useMutation({
+    mutationFn: (body: SapFormulasConfig) => sapUploadApi.putFormulas(body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sap-upload', 'formulas'] })
+      setIsEditFormulas(false)
+      setEditFormulas(null)
+    },
+    onError: () => {
+      alert('保存に失敗しました。')
+    },
+  })
+
+  const handleSaveFormulas = () => {
+    if (!editFormulas) return
+    saveFormulasMutation.mutate(editFormulas)
+  }
+
+  /** 편집한 문구를 rule에 반영 (field/field_digits/expr/cond 모두 텍스트로 갱신, cond는 파싱) */
+  const updateRuleFromText = (prevRule: DataInputRule, value: string): DataInputRule => {
+    if ('field' in prevRule) return { field: value }
+    if ('field_digits' in prevRule) return { field_digits: value }
+    if ('expr' in prevRule) return { expr: value }
+    if ('cond' in prevRule) {
+      const parsed = parseCondFromText(value)
+      return parsed ?? prevRule
+    }
+    return prevRule
+  }
+
+  const updateDataInput = (columnIndex: number, formKey: string, value: string) => {
+    if (!editFormulas) return
+    const next = JSON.parse(JSON.stringify(editFormulas)) as SapFormulasConfig
+    const row = next.dataInputColumns[columnIndex]
+    if (!row) return
+    const prev = row.byForm[formKey]
+    const prevRule =
+      typeof prev === 'object' && prev !== null && 'rule' in prev ? prev.rule : null
+    const isDirectRule =
+      typeof prev === 'object' && prev !== null && ('field' in prev || 'field_digits' in prev || 'expr' in prev || 'cond' in prev)
+
+    if (prevRule) {
+      row.byForm[formKey] = { description: value, rule: updateRuleFromText(prevRule, value) }
+    } else if (isDirectRule && typeof prev === 'object') {
+      row.byForm[formKey] = updateRuleFromText(prev as DataInputRule, value)
+    } else {
+      row.byForm[formKey] = value
+    }
+    setEditFormulas(next)
+  }
+
+  const updateFormulaColumn = (columnIndex: number, field: 'formula' | 'description', value: string) => {
+    if (!editFormulas) return
+    const next = JSON.parse(JSON.stringify(editFormulas)) as SapFormulasConfig
+    if (next.excelFormulaColumns[columnIndex]) {
+      if (field === 'formula') next.excelFormulaColumns[columnIndex].formula = value
+      else next.excelFormulaColumns[columnIndex].description = value
+      setEditFormulas(next)
+    }
+  }
 
   // 현재 연월 계산
   const currentYearMonth = useMemo(() => {
@@ -161,6 +271,139 @@ export const SAPUpload = () => {
           </div>
         </div>
 
+        {/* 컬럼별 산식 시각화 (양식지별 편집 가능) */}
+        <div className="sap-upload-formulas-section">
+          <div className="formulas-section-header">
+            <h2 className="formulas-section-title">列ごとの計算式（산식）</h2>
+            <p className="formulas-section-note">
+              ※ 空欄＝未入力（아직 입력이 안 된 값）。양식지(01~05)에 따라 입력·계산이 달라집니다。
+            </p>
+            {!isEditFormulas ? (
+              <button type="button" className="formulas-edit-btn" onClick={enterEditFormulas}>
+                編集（양식지별 수정）
+              </button>
+            ) : (
+              <div className="formulas-edit-actions">
+                <button type="button" className="formulas-cancel-btn" onClick={cancelEditFormulas}>
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  className="formulas-save-btn"
+                  onClick={handleSaveFormulas}
+                  disabled={saveFormulasMutation.isPending || !editFormulas}
+                >
+                  {saveFormulasMutation.isPending ? '保存中...' : '保存'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {formulasLoading && !formulasData ? (
+            <div className="formulas-loading">読み込み中...</div>
+          ) : isEditFormulas && editFormulas ? (
+            /* 편집 모드: 양식지(01~05)별 입력 */
+            <div className="formulas-edit-grid">
+              <div className="formulas-block">
+                <h3 className="formulas-block-title">データ入力列（양식지별）</h3>
+                <p className="formulas-edit-hint">
+                  필드명 / 수식(예: 単価+単価小数部×0.01) / 분기(예: if 数量単位=個 then 数量 else if 数量単位=CS then ケース入数×数量) 등을 입력 후 保存하면 백엔드 규칙으로 반영됩니다. 분기는 if·else if·then만 사용하며 / 는 수식의 나누기로만 씁니다.
+                </p>
+                <div className="formulas-edit-table-wrap">
+                  <table className="formulas-edit-table">
+                    <thead>
+                      <tr>
+                        <th>列</th>
+                        {formKeys.map((k) => (
+                          <th key={k}>フォーム {k}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editFormulas.dataInputColumns.map((row, idx) => (
+                        <tr key={row.column}>
+                          <td className="formulas-edit-col-letter">{getColumnDisplayName(row.column, columnNames)}</td>
+                          {formKeys.map((formKey) => (
+                            <td key={formKey}>
+                              <input
+                                type="text"
+                                className="formulas-edit-input"
+                                value={byFormValueToDisplay(row.byForm[formKey])}
+                                onChange={(e) => updateDataInput(idx, formKey, e.target.value)}
+                                placeholder="未入力"
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="formulas-block">
+                <h3 className="formulas-block-title">エクセル数式列</h3>
+                <div className="formulas-edit-table-wrap">
+                  <table className="formulas-edit-table formulas-edit-table-formula">
+                    <thead>
+                      <tr>
+                        <th>列</th>
+                        <th>説明</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {editFormulas.excelFormulaColumns.map((row, idx) => (
+                        <tr key={row.column}>
+                          <td className="formulas-edit-col-letter">{getColumnDisplayName(row.column, columnNames)}</td>
+                          <td>
+                            <input
+                              type="text"
+                              className="formulas-edit-input"
+                              value={row.description ?? ''}
+                              onChange={(e) => updateFormulaColumn(idx, 'description', e.target.value)}
+                              placeholder="説明"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* 표시 모드: 실제 컬럼명 + 설명만 */
+            <div className="formulas-grid">
+              <div className="formulas-block">
+                <div className="formulas-cards">
+                  {formulas.dataInputColumns.map((item) => {
+                    const lines = dataInputToDescriptionLines(item.byForm, formKeys)
+                    return (
+                      <div key={item.column} className="formula-card">
+                        <div className="formula-card-header">
+                          <span className="formula-column-name">{getColumnDisplayName(item.column, columnNames)}</span>
+                        </div>
+                        <ul className="formula-description">
+                          {lines.length > 0 ? lines.map((line, i) => <li key={i}>{line}</li>) : <li className="formula-empty">（空欄＝未入力）</li>}
+                        </ul>
+                      </div>
+                    )
+                  })}
+                  {formulas.excelFormulaColumns.map((item) => (
+                    <div key={item.column} className="formula-card">
+                      <div className="formula-card-header">
+                        <span className="formula-column-name">{getColumnDisplayName(item.column, columnNames)}</span>
+                      </div>
+                      <ul className="formula-description">
+                        {item.description ? <li>{item.description}</li> : <li className="formula-empty">（説明なし）</li>}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* 다운로드 버튼 섹션 */}
         <div className="sap-upload-download-section">
           <div className="download-info">
@@ -237,6 +480,7 @@ export const SAPUpload = () => {
                   <div className="preview-header">
                     <h3 className="preview-title">プレビュー</h3>
                     <p className="preview-info">{filteredPreviewData.message}</p>
+                    <p className="preview-empty-note">※ セルが空欄の場合は未入力です。</p>
                     {/* 폼 필터 */}
                     <div className="preview-filter">
                       <label htmlFor="form-filter" className="filter-label">
@@ -249,11 +493,9 @@ export const SAPUpload = () => {
                         className="form-filter-select"
                       >
                         <option value="all">すべて</option>
-                        <option value="01">フォーム 01</option>
-                        <option value="02">フォーム 02</option>
-                        <option value="03">フォーム 03</option>
-                        <option value="04">フォーム 04</option>
-                        <option value="05">フォーム 05</option>
+                        {formTypeOptions.map((opt) => (
+                          <option key={opt.value} value={opt.value}>フォーム {opt.value}</option>
+                        ))}
                       </select>
                       {selectedFormType !== 'all' && (
                         <span className="filter-count">

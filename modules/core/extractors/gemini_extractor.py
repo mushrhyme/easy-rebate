@@ -10,7 +10,7 @@ import re
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
@@ -18,7 +18,7 @@ import google.generativeai as genai
 from PIL import Image
 
 # 공통 설정 로드 (PIL 설정, .env 로드 등)
-from modules.utils.config import load_env, load_gemini_prompt, get_gemini_prompt_path
+from modules.utils.config import load_env, load_gemini_prompt, get_gemini_prompt_path, rag_config
 load_env()  # 명시적으로 .env 로드
 
 # 공통 PdfImageConverter 모듈 import
@@ -28,7 +28,12 @@ from modules.core.extractors.pdf_processor import PdfImageConverter
 class GeminiVisionParser:
     """Gemini Vision API를 사용하여 이미지를 구조화된 JSON으로 파싱"""
     
-    def __init__(self, api_key: Optional[str] = None, model_name: str = "gemini-3-pro-preview", prompt_version: str = "v1"):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        prompt_version: str = "v1",
+    ):
         """
         Args:
             api_key: Google Gemini API 키 (None이면 환경변수에서 가져옴)
@@ -40,6 +45,13 @@ class GeminiVisionParser:
             if not api_key:
                 raise ValueError("GEMINI_API_KEY가 필요합니다. .env 파일에 GEMINI_API_KEY를 설정하거나 api_key 파라미터를 제공하세요.")
         
+        # 모델 이름 기본값: 전역 설정(rag_config.gemini_extractor_model) 사용
+        if model_name is None:
+            try:
+                model_name = getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite")
+            except Exception:
+                model_name = "gemini-2.5-flash-lite"
+
         genai.configure(api_key=api_key)  # API 키 설정
         
         # 안전성 설정: 문서 분석을 위해 필터 완화
@@ -83,28 +95,42 @@ class GeminiVisionParser:
         except FileNotFoundError as e:
             raise FileNotFoundError(f"Gemini 프롬프트 파일을 찾을 수 없습니다: {e}")
     
-    def parse_image(self, image: Image.Image, max_size: int = 1000, timeout: int = 120) -> Dict[str, Any]:
+    def parse_image(
+        self,
+        image: Image.Image,
+        max_size: int = 1000,
+        timeout: int = 120,
+        debug_dir: Optional[Union[str, Path]] = None,
+        page_number: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         이미지를 Gemini Vision으로 파싱하여 JSON 반환
         
         Args:
             image: PIL Image 객체
             max_size: Gemini API에 전달할 최대 이미지 크기 (픽셀, 기본값: 600)
-                      속도 개선을 위해 큰 이미지는 리사이즈됨
-            timeout: API 호출 타임아웃 (초, 기본값: 120초 = 2분)
-                    주의: 직접 호출하므로
-                    실제 타임아웃은 Gemini API의 기본 타임아웃에 의존합니다.
-            
+            timeout: API 호출 타임아웃 (초)
+            debug_dir: 지정 시 프롬프트·원문 응답을 이 디렉터리에 저장 (정답지 디버깅용)
+            page_number: debug_dir 사용 시 파일명에 사용 (page_N_prompt.txt, page_N_response.txt)
+        
         Returns:
             파싱 결과 JSON 딕셔너리
         """
+        prompt_text = self.get_parsing_prompt()
+        if debug_dir is not None and page_number is not None:
+            debug_path = Path(debug_dir)
+            debug_path.mkdir(parents=True, exist_ok=True)
+            try:
+                (debug_path / f"page_{page_number}_prompt.txt").write_text(prompt_text, encoding="utf-8")
+            except Exception as e:
+                print(f"  [debug] prompt 저장 실패: {e}")
+
         # 원본 이미지 정보
         original_width, original_height = image.size
         
         # 이미지 리사이즈 (Gemini API 속도 개선을 위해)
         api_image = image
         if original_width > max_size or original_height > max_size:
-            # 비율 유지하면서 리사이즈
             ratio = min(max_size / original_width, max_size / original_height)
             new_width = int(original_width * ratio)
             new_height = int(original_height * ratio)
@@ -114,43 +140,31 @@ class GeminiVisionParser:
             print(f"  이미지 크기: {original_width}x{original_height}px", end="", flush=True)
         
         # Gemini API 호출: 재시도 로직 포함 (SAFETY 오류 대응)
-        # 직접 호출 (ThreadPoolExecutor 제거)
-        max_retries = 3  # 최대 재시도 횟수
-        retry_delay = 2  # 재시도 전 대기 시간 (초)
+        max_retries = 3
+        retry_delay = 2
         response = None
         
         for attempt in range(max_retries):
             try:
-                # 직접 호출
                 chat = self.model.start_chat(history=[])
-                # 1단계: 이미지만 먼저 전달 (프롬프트 없이)
                 _ = chat.send_message([api_image])
-                # 2단계: 프롬프트를 별도 메시지로 전달
-                response = chat.send_message(self.get_parsing_prompt())
-                break  # 성공하면 루프 탈출
+                response = chat.send_message(prompt_text)
+                break
             except Exception as e:
                 error_msg = str(e)
-                # SAFETY 오류인 경우 재시도
                 if "SAFETY" in error_msg or "安全性" in error_msg or "finish_reason: SAFETY" in error_msg:
                     if attempt < max_retries - 1:
                         print(f"  ⚠️ SAFETY 필터 감지 (시도 {attempt + 1}/{max_retries}), {retry_delay}초 후 재시도...", end="", flush=True)
                         time.sleep(retry_delay)
-                        retry_delay *= 2  # 지수 백오프
+                        retry_delay *= 2
                         continue
-                    else:
-                        # 마지막 시도도 실패하면 예외 발생
-                        raise Exception(f"SAFETY 필터로 인해 {max_retries}회 시도 모두 실패: {error_msg}")
-                else:
-                    # SAFETY 오류가 아니면 즉시 예외 발생
-                    raise
+                    raise Exception(f"SAFETY 필터로 인해 {max_retries}회 시도 모두 실패: {error_msg}")
+                raise
         
-        # 응답 검증
         if not response.candidates:
             raise Exception("Gemini API 응답에 candidates가 없습니다.")
         
         candidate = response.candidates[0]
-        
-        # 응답 텍스트 추출 (content가 있으면 finish_reason과 관계없이 추출)
         if not candidate.content or not candidate.content.parts:
             raise Exception("Gemini API 응답에 content parts가 없습니다.")
         
@@ -162,19 +176,107 @@ class GeminiVisionParser:
         if not result_text:
             raise Exception("Gemini API 응답에 텍스트가 없습니다.")
         
-        # JSON 추출 시도
+        if debug_dir is not None and page_number is not None:
+            debug_path = Path(debug_dir)
+            debug_path.mkdir(parents=True, exist_ok=True)
+            try:
+                (debug_path / f"page_{page_number}_response.txt").write_text(result_text, encoding="utf-8")
+            except Exception as e:
+                print(f"  [debug] response 저장 실패: {e}")
+        
         try:
-            # JSON 부분만 추출 (마크다운 코드 블록 제거)
-            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)  # JSON 객체 추출
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if json_match:
-                result_json = json.loads(json_match.group())  # JSON 파싱
+                result_json = json.loads(json_match.group())
+                if debug_dir is not None and page_number is not None:
+                    debug_path = Path(debug_dir)
+                    try:
+                        (debug_path / f"page_{page_number}_response_parsed.json").write_text(
+                            json.dumps(result_json, ensure_ascii=False, indent=2), encoding="utf-8"
+                        )
+                    except Exception as e:
+                        print(f"  [debug] parsed JSON 저장 실패: {e}")
                 return result_json
-            else:
-                # JSON이 없으면 텍스트만 반환
-                return {"text": result_text}
-        except json.JSONDecodeError:
-            # JSON 파싱 실패 시 텍스트만 반환
             return {"text": result_text}
+        except json.JSONDecodeError:
+            return {"text": result_text}
+
+    def parse_image_with_template(
+        self,
+        image: Image.Image,
+        template_item: Dict[str, Any],
+        max_size: int = 1200,
+    ) -> Dict[str, Any]:
+        """
+        이미지 + 템플릿(첫 행)을 주고, 같은 키 구조로 나머지 행까지 포함한 전체 items 생성.
+        템플릿은 키와 예시 값만 제공하며, LLM이 문서 이미지를 보고 모든 행을 채움.
+
+        Args:
+            image: PIL Image (문서 페이지)
+            template_item: 한 행의 키-값 예시 (키 목록 + 첫 행 값)
+            max_size: 이미지 최대 크기
+
+        Returns:
+            {"items": [...], "page_role": "detail"} 형태
+        """
+        original_width, original_height = image.size
+        api_image = image
+        if original_width > max_size or original_height > max_size:
+            ratio = min(max_size / original_width, max_size / original_height)
+            new_width = int(original_width * ratio)
+            new_height = int(original_height * ratio)
+            api_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+        template_json = json.dumps(template_item, ensure_ascii=False, indent=2)
+        prompt = f"""You are given a document page image and ONE example row (template) with the following keys and values.
+Your task: Look at the image and generate ALL rows on this page. Each row must have exactly the same keys as the template.
+Output ONLY a single JSON object with key "items" (array of objects). No other text.
+
+Template (one row, keys and example value):
+{template_json}
+
+Output format: {{ "items": [ {{ ... }}, {{ ... }}, ... ] }}
+Use the same key names as the template. Fill values from the document for each row."""
+
+        max_retries = 3
+        retry_delay = 2
+        response = None
+        for attempt in range(max_retries):
+            try:
+                chat = self.model.start_chat(history=[])
+                _ = chat.send_message([api_image])
+                response = chat.send_message(prompt)
+                break
+            except Exception as e:
+                error_msg = str(e)
+                if "SAFETY" in error_msg or "安全性" in error_msg or "finish_reason: SAFETY" in error_msg:
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    raise Exception(f"SAFETY 필터로 인해 {max_retries}회 시도 모두 실패: {error_msg}")
+                raise
+
+        if not response or not response.candidates:
+            raise Exception("Gemini API 응답에 candidates가 없습니다.")
+        result_text = ""
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'text') and part.text:
+                result_text += part.text
+        if not result_text:
+            raise Exception("Gemini API 응답에 텍스트가 없습니다.")
+
+        try:
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+            if json_match:
+                result_json = json.loads(json_match.group())
+                items = result_json.get("items")
+                if not isinstance(items, list):
+                    items = []
+                return {"items": items, "page_role": result_json.get("page_role", "detail")}
+            return {"items": [], "page_role": "detail"}
+        except json.JSONDecodeError:
+            return {"items": [], "page_role": "detail"}
 
 
 def extract_pages_with_gemini(
@@ -364,235 +466,3 @@ def extract_pages_with_gemini(
         image_paths = [None] * len(page_jsons)
     
     return page_jsons, image_paths, pil_images
-
-
-class GeminiTwoStageParser:
-    """
-    2단계 파이프라인을 사용하는 Gemini 파서
-    
-    Step 1: Vision 모델로 이미지에서 raw text 추출 (행 누락 0%)
-    Step 2: Text 모델로 raw text를 JSON으로 구조화 (행 누락 0%)
-    """
-    
-    def __init__(
-        self, 
-        api_key: Optional[str] = None, 
-        vision_model: str = "gemini-3-pro-preview",
-        text_model: str = "gemini-3-pro-preview"
-    ):
-        """
-        Args:
-            api_key: Google Gemini API 키 (None이면 환경변수에서 가져옴)
-            vision_model: Step 1에 사용할 Vision 모델 이름
-            text_model: Step 2에 사용할 Text 모델 이름
-        """
-        if api_key is None:
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError("GEMINI_API_KEY가 필요합니다. .env 파일에 GEMINI_API_KEY를 설정하거나 api_key 파라미터를 제공하세요.")
-        
-        genai.configure(api_key=api_key)
-        
-        # 안전성 설정: 문서 분석을 위해 필터 완화
-        safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"}
-        ]
-        
-        # Vision 모델 (Step 1용)
-        self.vision_model = genai.GenerativeModel(
-            model_name=vision_model,
-            safety_settings=safety_settings
-        )
-        
-        # Text 모델 (Step 2용)
-        self.text_model = genai.GenerativeModel(
-            model_name=text_model,
-            safety_settings=safety_settings
-        )
-        
-        self.vision_model_name = vision_model
-        self.text_model_name = text_model
-    
-    def extract_raw_text(self, image: Image.Image, max_retries: int = 2) -> str:
-        """
-        Step 1: 이미지에서 raw text 추출 (행 누락 0%)
-        
-        Args:
-            image: PIL Image 객체
-            max_retries: 최대 재시도 횟수
-            
-        Returns:
-            raw_text: 줄 단위로 추출된 원본 텍스트 문자열
-            예: "管理番号\t商品名\t数量\t金額\n001\t商品A\t10\t1000\n002\t商品B\t20\t2000"
-        """
-        step1_prompt = """이 이미지에 있는 모든 텍스트를 줄 단위로 순서를 유지하여 그대로 출력해주세요.
-해석하지 말고 원본 텍스트를 그대로 반환하세요.
-요약, 구조화, 통합, 삭제를 하지 마세요.
-이미지에서 감지된 모든 텍스트 라인을 1행도 빠짐없이 출력하세요."""
-        
-        retry_delay = 2  # 원래 설정으로 복원
-        for attempt in range(max_retries):
-            try:
-                # 원래 방식 유지: chat을 사용한 2단계 전송 (이 방식이 더 빠름)
-                chat = self.vision_model.start_chat(history=[])
-                _ = chat.send_message([image])  # 이미지 먼저 전달
-                response = chat.send_message(step1_prompt)  # 프롬프트 전달
-                
-                # 응답 텍스트 추출
-                if not response.candidates or not response.candidates[0].content:
-                    raise Exception("Gemini API 응답에 content가 없습니다.")
-                
-                result_text = ""
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        result_text += part.text
-                
-                if not result_text:
-                    raise Exception("Gemini API 응답에 텍스트가 없습니다.")
-                
-                return result_text.strip()
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "SAFETY" in error_msg or attempt < max_retries - 1:
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)  # 출력 제거로 속도 개선
-                        retry_delay *= 2
-                        continue
-                raise Exception(f"Step 1 실패 ({max_retries}회 시도): {error_msg}")
-    
-    def build_json_from_raw_text(self, raw_text: str, max_retries: int = 2) -> Dict[str, Any]:
-        """
-        Step 2: raw text를 JSON으로 구조화 (행 누락 0%)
-        
-        Args:
-            raw_text: Step 1에서 추출된 raw text 문자열
-            max_retries: 최대 재시도 횟수
-            
-        Returns:
-            json_result: 구조화된 JSON 딕셔너리
-            예: {
-                "text": "...",
-                "document_number": "...",
-                "items": [{"management_id": "...", ...}, ...],
-                ...
-            }
-        """
-        step2_prompt = f"""다음은 일본어 条件請求書 문서의 OCR 텍스트입니다.
-이 텍스트를 아래 JSON 스키마에 맞게 구조화해주세요.
-
----
-{raw_text}
----
-
-아래 구조로 JSON만 출력하세요:
-
-{{
-  "items": [
-    {{
-      "management_id": "...",
-      "product_name": "...",
-      "quantity": ...,
-      "case_count": ...,
-      "bara_count": ...,
-      "units_per_case": ...,
-      "amount": ...,
-      "customer": "..."
-    }}
-  ],
-  "page_role": "cover | main | detail | reply"
-}}
-
-규칙:
-- items는 raw_text 내 테이블의 모든 행과 1:1로 대응해야 합니다.
-- 같은 관리番号가 반복되어도 각 행을 개별 item으로 생성하세요.
-- 바코드(13자리 숫자)로 시작하면 상품명에서 제거하세요.
-- 수량이 케이스/바라 형식이면 quantity는 null로 설정하세요.
-- 정보가 없으면 null을 사용하세요.
-
-JSON 외 추가 설명은 출력하지 않습니다."""
-        
-        retry_delay = 2  # 원래 설정으로 복원
-        for attempt in range(max_retries):
-            try:
-                response = self.text_model.generate_content(step2_prompt)
-                
-                # 응답 텍스트 추출
-                if not response.candidates or not response.candidates[0].content:
-                    raise Exception("Gemini API 응답에 content가 없습니다.")
-                
-                result_text = ""
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        result_text += part.text
-                
-                if not result_text:
-                    raise Exception("Gemini API 응답에 텍스트가 없습니다.")
-                
-                # JSON 추출 (마크다운 코드 블록 제거)
-                json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
-                if json_match:
-                    json_result = json.loads(json_match.group())
-                    return json_result
-                else:
-                    raise Exception("응답에서 JSON을 찾을 수 없습니다.")
-                    
-            except json.JSONDecodeError as e:
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)  # 출력 제거로 속도 개선
-                    retry_delay *= 2
-                    continue
-                raise Exception(f"Step 2 JSON 파싱 실패 ({max_retries}회 시도): {e}")
-            except Exception as e:
-                error_msg = str(e)
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)  # 출력 제거로 속도 개선
-                    retry_delay *= 2
-                    continue
-                raise Exception(f"Step 2 실패 ({max_retries}회 시도): {error_msg}")
-    
-    def parse_image_two_stage(
-        self, 
-        image: Image.Image, 
-        max_size: int = 600,  # 원래 설정으로 복원
-        max_retries: int = 2  # 재시도 횟수 감소: 3 → 2
-    ) -> Dict[str, Any]:
-        """
-        2단계 파이프라인으로 이미지를 JSON으로 파싱
-        
-        Args:
-            image: PIL Image 객체
-            max_size: Gemini API에 전달할 최대 이미지 크기 (픽셀, 기본값: 800)
-            max_retries: 각 단계별 최대 재시도 횟수
-        
-        Returns:
-            json_result: 구조화된 JSON 딕셔너리
-        """
-        # 이미지 리사이즈 (속도 개선: 작은 이미지가 더 빠름)
-        original_width, original_height = image.size
-        api_image = image
-        if original_width > max_size or original_height > max_size:
-            ratio = min(max_size / original_width, max_size / original_height)
-            new_width = int(original_width * ratio)
-            new_height = int(original_height * ratio)
-            api_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        
-        # Step 1: Raw Text 추출
-        step1_start = time.time()
-        raw_text = self.extract_raw_text(api_image, max_retries=max_retries)
-        step1_duration = time.time() - step1_start
-        
-        # Step 2: JSON 구조화
-        step2_start = time.time()
-        json_result = self.build_json_from_raw_text(raw_text, max_retries=max_retries)
-        step2_duration = time.time() - step2_start
-        
-        # 소요시간만 출력
-        total_duration = step1_duration + step2_duration
-        print(f"소요 시간: {total_duration:.1f}초 (Step 1: {step1_duration:.1f}초, Step 2: {step2_duration:.1f}초)", end="", flush=True)
-        
-        return json_result
-

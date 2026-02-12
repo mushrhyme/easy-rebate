@@ -245,21 +245,34 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 search_value = customer_name if exact_match else f'%{customer_name}%'
                 operator = "=" if exact_match else "ILIKE"
                 
-                # WHERE 조건 구성
-                conditions = ["i.customer IS NOT NULL", f"i.customer {operator} %s"]
-                params = [search_value]
+                # WHERE 조건: customer 컬럼 + item_data 내 거래처 관련 키 + item_data 전체 텍스트
+                # (RAG/LLM이 양식별로 得意先名, 得意先様, 得意先, 取引先 등 다양한 키로 저장함)
+                customer_keys = ["得意先", "得意先名", "得意先様", "取引先"]
+                or_parts = [
+                    f"(i.customer IS NOT NULL AND i.customer {operator} %s)"
+                ]
+                or_parts.extend([
+                    f"(i.item_data ->> {repr(k)} IS NOT NULL AND (i.item_data ->> {repr(k)}) {operator} %s)"
+                    for k in customer_keys
+                ])
+                # 키 이름이 다른 경우를 위해 item_data JSON 전체에서도 검색
+                or_parts.append(f"(i.item_data IS NOT NULL AND i.item_data::text {operator} %s)")
+                condition = "(" + " OR ".join(or_parts) + ")"
+                params = [search_value] * (1 + len(customer_keys) + 1)
                 
-                # pdf_filename 필터
+                # pdf_filename / form_type 필터
+                conditions = [condition]
                 if pdf_filename:
                     conditions.append("i.pdf_filename = %s")
                     params.append(pdf_filename)
-                
-                # form_type 필터
                 if form_type:
                     conditions.append("d.form_type = %s")
                     params.append(form_type)
+                where_clause = " AND ".join(conditions)
                 
                 # SQL 쿼리 구성 (items_current와 items_archive 모두 조회)
+                # WHERE 절이 두 번 들어가므로 placeholder가 2배 → params도 2배로 전달
+                execute_params = params * 2
                 if form_type or pdf_filename:
                     sql = """
                         SELECT 
@@ -267,8 +280,6 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             i.pdf_filename,
                             i.page_number,
                             i.item_order,
-                            i.customer,
-                            i.product_name,
                             i.first_review_checked,
                             i.second_review_checked,
                             i.first_reviewed_at,
@@ -278,15 +289,13 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             d.form_type
                         FROM items_current i
                         INNER JOIN documents_current d ON i.pdf_filename = d.pdf_filename
-                        WHERE """ + " AND ".join(conditions) + """
+                        WHERE """ + where_clause + """
                         UNION ALL
                         SELECT 
                             i.item_id,
                             i.pdf_filename,
                             i.page_number,
                             i.item_order,
-                            i.customer,
-                            i.product_name,
                             i.first_review_checked,
                             i.second_review_checked,
                             i.first_reviewed_at,
@@ -296,7 +305,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             d.form_type
                         FROM items_archive i
                         INNER JOIN documents_archive d ON i.pdf_filename = d.pdf_filename
-                        WHERE """ + " AND ".join(conditions) + """
+                        WHERE """ + where_clause + """
                         ORDER BY pdf_filename, page_number, item_order
                     """
                 else:
@@ -306,8 +315,6 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             i.pdf_filename,
                             i.page_number,
                             i.item_order,
-                            i.customer,
-                            i.product_name,
                             i.first_review_checked,
                             i.second_review_checked,
                             i.first_reviewed_at,
@@ -317,15 +324,13 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             d.form_type
                         FROM items_current i
                         LEFT JOIN documents_current d ON i.pdf_filename = d.pdf_filename
-                        WHERE """ + " AND ".join(conditions) + """
+                        WHERE """ + where_clause + """
                         UNION ALL
                         SELECT 
                             i.item_id,
                             i.pdf_filename,
                             i.page_number,
                             i.item_order,
-                            i.customer,
-                            i.product_name,
                             i.first_review_checked,
                             i.second_review_checked,
                             i.first_reviewed_at,
@@ -335,11 +340,11 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             d.form_type
                         FROM items_archive i
                         LEFT JOIN documents_archive d ON i.pdf_filename = d.pdf_filename
-                        WHERE """ + " AND ".join(conditions) + """
+                        WHERE """ + where_clause + """
                         ORDER BY pdf_filename, page_number, item_order
                     """
                 
-                cursor.execute(sql, params)
+                cursor.execute(sql, execute_params)
                 fetched_rows = cursor.fetchall()
                 
                 # 키 순서 조회 (form_type별)
@@ -384,18 +389,13 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                         'version': row_dict['version'],
                     }
                     
-                    # 공통 필드 추가 (원본 필드명 유지)
-                    if row_dict.get('customer'):
-                        if result_form_type:
-                            from modules.utils.config import rag_config
-                            customer_fields = rag_config.form_field_mapping.get("customer", {}) if rag_config.form_field_mapping else {}
-                            customer_field_name = customer_fields.get(result_form_type, "customer")
-                        else:
-                            customer_field_name = "customer"
-                        merged_item[customer_field_name] = row_dict['customer']
-                    
-                    if row_dict.get('product_name'):
-                        merged_item["商品名"] = row_dict['product_name']
+                    # 공통 필드: item_data의 표준 키(得意先)를 사용한다.
+                    customer_value = item_data.get('得意先')
+                    if customer_value is not None:
+                        merged_item['得意先'] = customer_value
+                    # 상품명: item_data 내 商品名만 사용 (DB 컬럼 product_name 제거됨)
+                    if item_data.get('商品名') is not None:
+                        merged_item['商品名'] = item_data['商品名']
                     
                     # 검토 상태 추가
                     merged_item['review_status'] = {
@@ -428,6 +428,37 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     results.append(merged_item)
                 
                 return results
+        except Exception:
+            return []
+
+    def search_pages_by_customer_in_page_meta(
+        self,
+        customer_name: str
+    ) -> List[Dict[str, Any]]:
+        """
+        page_data의 page_meta(JSON) 텍스트에서 거래처명 부분 일치 검색.
+        items 검색 결과가 0일 때 폴백으로 사용 (page_meta에 거래처가 포함된 페이지 찾기).
+        """
+        if not customer_name or not customer_name.strip():
+            return []
+        search_pattern = f"%{customer_name.strip()}%"
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT p.pdf_filename, p.page_number, d.form_type
+                    FROM page_data_current p
+                    LEFT JOIN documents_current d ON p.pdf_filename = d.pdf_filename
+                    WHERE p.page_meta::text ILIKE %s
+                    UNION
+                    SELECT p.pdf_filename, p.page_number, d.form_type
+                    FROM page_data_archive p
+                    LEFT JOIN documents_archive d ON p.pdf_filename = d.pdf_filename
+                    WHERE p.page_meta::text ILIKE %s
+                    ORDER BY pdf_filename, page_number
+                """, (search_pattern, search_pattern))
+                rows = cursor.fetchall()
+                return [dict(r) for r in rows]
         except Exception:
             return []
     
@@ -626,7 +657,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
     
     def get_all_pdf_filenames(self) -> List[str]:
         """
-        모든 PDF 파일명 목록 반환
+        모든 PDF 파일명 목록 반환 (documents_current + documents_archive)
         
         Returns:
             PDF 파일명 리스트
@@ -636,10 +667,13 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT DISTINCT pdf_filename
-                    FROM documents
+                    FROM (
+                        SELECT pdf_filename FROM documents_current
+                        UNION ALL
+                        SELECT pdf_filename FROM documents_archive
+                    ) t
                     ORDER BY pdf_filename
                 """)
-                
                 return [row[0] for row in cursor.fetchall()]
         except Exception:
             return []

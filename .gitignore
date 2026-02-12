@@ -36,8 +36,11 @@ frontend/dist-ssr/
 *.local
 
 # 디버그/임시
+debug/
 debug2/
 test/
 # DB (로컬 SQLite 등)
 *.db
 *.sqlite3
+database/users_import.csv
+model_comparison_results

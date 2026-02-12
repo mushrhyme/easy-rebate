@@ -95,8 +95,8 @@ curl "http://localhost:8000/api/items/example.pdf/pages/1"
       "page_number": 1,
       "item_order": 1,
       "customer": "取引先名",
-      "product_name": "商品名",
       "item_data": {
+        "商品名": "商品名",
         "管理番号": "12345",
         "数量": 100,
         "金額": 10000

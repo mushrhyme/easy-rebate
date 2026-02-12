@@ -31,6 +31,7 @@ def extract_pages_with_rag(
     similarity_threshold: Optional[float] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     form_type: Optional[str] = None,
+    upload_channel: Optional[str] = None,  # finet | mail. mail일 때만 Upstage OCR 사용(bbox 등)
     debug_dir_name: str = "debug",  # 디버깅 폴더명
     include_bbox: bool = False,  # True일 때만 03/04에서 단어 좌표 추출·LLM _word_indices·_bbox 부여 (새 탭 전용)
 ) -> tuple[List[Dict[str, Any]], List[str], Optional[List[Image.Image]]]:
@@ -47,6 +48,8 @@ def extract_pages_with_rag(
         question: 질문 텍스트 (None이면 config에서 가져옴)
         top_k: 검색할 예제 수 (None이면 config에서 가져옴)
         similarity_threshold: 최소 유사도 임계값 (None이면 config에서 가져옴)
+        form_type: 양식지 번호 (01–06)
+        upload_channel: 업로드 채널 (finet | mail). finet→엑셀 추출, mail→Upstage OCR(bbox 시 단어 좌표)
         
     Returns:
         (페이지별 JSON 결과 리스트, 이미지 파일 경로 리스트, PIL Image 객체 리스트) 튜플
@@ -165,19 +168,20 @@ def extract_pages_with_rag(
         "page_details": []
     }
     
-    # 1단계: PDF에서 텍스트 추출 (include_bbox=True이고 03/04일 때만 Upstage full로 단어 좌표 확보)
+    # 1단계: PDF에서 텍스트 추출. upload_channel 기준만 사용 (업로드 시점에는 form_type을 모름)
+    # finet → excel 추출, mail → Upstage(bbox 요청 시 단어 좌표 포함)
     print(f"📝 1단계: PDF 텍스트 추출 시작 ({len(images)}개 페이지)")
     pdf_path_obj = Path(pdf_path)
     ocr_texts = []
     ocr_words_list = [None] * len(images)
 
-    use_upstage_raw = include_bbox and form_type in ("03", "04")
+    use_upstage_raw = upload_channel == "mail" and include_bbox
 
     if use_upstage_raw:
         from modules.core.extractors.upstage_extractor import get_upstage_extractor
         upstage_extractor = get_upstage_extractor(enable_cache=False)
     else:
-        text_extractor = PdfTextExtractor(form_number=form_type)
+        text_extractor = PdfTextExtractor(upload_channel=upload_channel, form_number=form_type)
 
     try:
         for idx, image in enumerate(images):
@@ -267,6 +271,7 @@ def extract_pages_with_rag(
                 ocr_words=ocr_words_data["words"] if ocr_words_data else None,
                 page_width=ocr_words_data["width"] if ocr_words_data else None,
                 page_height=ocr_words_data["height"] if ocr_words_data else None,
+                include_bbox=False,  # 최종 프롬프트에는 좌표 미포함. 좌표는 OCR 탭(그림) 전용.
             )
             rag_end_time = time.time()
             total_duration = rag_end_time - process_start_time
@@ -413,10 +418,10 @@ def extract_pages_with_rag(
     # 인덱스 순서대로 결과 리스트 생성
     page_jsons = [page_results[i] for i in range(len(images))]
     
-    # 후처리: management_id와 customer가 null인 경우 앞 페이지에서 가져오기
+    # 후처리: 請求番号와 得意先가 비어있는 경우 앞 페이지에서 가져오기
     def fill_missing_management_id_and_customer(page_jsons: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        items가 있는데 management_id와 customer가 모두 null인 경우,
+        items가 있는데 請求番号와 得意先가 모두 비어있는 경우,
         바로 앞 페이지의 마지막 item에서 값을 가져와서 채워넣기
         
         Args:
@@ -433,27 +438,27 @@ def extract_pages_with_rag(
             
             # items가 비어있지 않은 경우에만 처리
             if items and len(items) > 0:
-                # 현재 페이지의 모든 items를 확인하여 null인 경우 채워넣기
+                # 현재 페이지의 모든 items를 확인하여 비어있는 경우 채워넣기
                 for item in items:
-                    current_mgmt_id = item.get("management_id")
-                    current_customer = item.get("customer")
+                    current_mgmt_id = item.get("請求番号")
+                    current_customer = item.get("得意先")
                     
-                    # management_id와 customer가 모두 null인 경우
+                    # 請求番号와 得意先가 모두 비어있는 경우
                     if (current_mgmt_id is None or current_mgmt_id == "") and \
                        (current_customer is None or current_customer == ""):
                         # 앞 페이지의 마지막 값이 있으면 사용
                         if last_management_id is not None:
-                            item["management_id"] = last_management_id
+                            item["請求番号"] = last_management_id
                         if last_customer is not None:
-                            item["customer"] = last_customer
+                            item["得意先"] = last_customer
                 
-                # 현재 페이지의 마지막 item에서 management_id와 customer 추출
+                # 현재 페이지의 마지막 item에서 請求番号와 得意先 추출
                 # (null이 아닌 값만 업데이트)
                 last_item = items[-1]
-                if last_item.get("management_id") is not None and last_item.get("management_id") != "":
-                    last_management_id = last_item.get("management_id")
-                if last_item.get("customer") is not None and last_item.get("customer") != "":
-                    last_customer = last_item.get("customer")
+                if last_item.get("請求番号") is not None and last_item.get("請求番号") != "":
+                    last_management_id = last_item.get("請求番号")
+                if last_item.get("得意先") is not None and last_item.get("得意先") != "":
+                    last_customer = last_item.get("得意先")
             else:
                 # items가 비어있는 페이지는 last 값을 업데이트하지 않음
                 # (앞 페이지의 값을 유지)

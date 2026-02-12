@@ -2,10 +2,11 @@
  * 검토 탭 컴포넌트
  * 기본적으로 모든 페이지를 표시하고, 검색어 입력 시 거래처명으로 필터링
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { documentsApi, searchApi, itemsApi, ragAdminApi } from '@/api/client'
-import { ItemsGridRdg } from '../Grid/ItemsGridRdg'
+import { documentsApi, searchApi, itemsApi, formTypesApi } from '@/api/client'
+import { useFormTypes } from '@/hooks/useFormTypes'
+import { ItemsGridRdg, type ItemsGridRdgHandle } from '../Grid/ItemsGridRdg'
 import { getApiBaseUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
 import { useAuth } from '@/contexts/AuthContext'
@@ -22,15 +23,63 @@ interface Page {
 // 검토 필터 타입: 1次/2次 각각 완료/미완료
 type ReviewFilter = 'all' | 'first_reviewed' | 'first_not_reviewed' | 'second_reviewed' | 'second_not_reviewed'
 
-export const CustomerSearch = () => {
+interface CustomerSearchProps {
+  /** 정답지 생성 탭으로 이동할 때 지정한 문서의 pdf_filename 전달 */
+  onNavigateToAnswerKey?: (pdfFilename: string) => void
+}
+
+export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) => {
   const queryClient = useQueryClient()
   const { user } = useAuth()
   const isAdmin = user?.username === 'admin'
+  const { options: formTypeOptions, formTypeLabel } = useFormTypes()
+  const [showAnswerKeyModal, setShowAnswerKeyModal] = useState(false)
+  const [answerKeyFormChoice, setAnswerKeyFormChoice] = useState<'keep' | 'change' | 'new'>('keep')
+  const [answerKeyFormChangeTo, setAnswerKeyFormChangeTo] = useState<string>('')
+  const [answerKeyNewFormDisplayName, setAnswerKeyNewFormDisplayName] = useState<string>('')
+  const [formPreviewHover, setFormPreviewHover] = useState<{ value: string; label: string; x: number; y: number } | null>(null)
   const [currentPageIndex, setCurrentPageIndex] = useState(0) // 현재 페이지 인덱스
   const [inputValue, setInputValue] = useState('') // 입력창에 표시되는 값
   const [searchQuery, setSearchQuery] = useState('') // 실제 검색에 사용되는 값 (엔터 또는 버튼 클릭 시 업데이트)
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all') // 검토 필터
+  const [formTypeFilter, setFormTypeFilter] = useState<string | null>(null) // 참조 양식지 필터 (null=전체)
   const [selectedYearMonth, setSelectedYearMonth] = useState<{ year: number; month: number } | null>(null) // 선택된 연월
+  const [imageHeightPercent, setImageHeightPercent] = useState(50) // 이미지 영역 높이 비율 (20~80)
+  const [isResizing, setIsResizing] = useState(false)
+  const [pageJumpInput, setPageJumpInput] = useState<string>('') // 원하는 페이지 번호 입력값
+  const contentWrapperRef = useRef<HTMLDivElement>(null)
+  const gridRef = useRef<ItemsGridRdgHandle>(null)
+
+  const handleResizerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsResizing(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isResizing) return
+    const onMove = (e: MouseEvent) => {
+      const el = contentWrapperRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const y = e.clientY - rect.top
+      const pct = Math.round((y / rect.height) * 100)
+      setImageHeightPercent((prev) => {
+        const next = Math.min(80, Math.max(20, pct))
+        return next
+      })
+    }
+    const onUp = () => setIsResizing(false)
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [isResizing])
 
   // 모든 문서 가져오기 (기본 표시용)
   const { data: documentsData, isLoading: documentsLoading } = useQuery({
@@ -62,13 +111,19 @@ export const CustomerSearch = () => {
     }
   }, [])
 
+  // 정답지 생성 대상 문서는 검토 탭에서 제외
+  const documentsForReview = useMemo(
+    () => (documentsData?.documents ?? []).filter((d: Document) => !d.is_answer_key_document),
+    [documentsData?.documents]
+  )
+
   // 문서 목록에서 선택 가능한 연월 목록 생성 (최신순)
   const availableYearMonths = useMemo(() => {
-    if (!documentsData?.documents) return []
+    if (!documentsForReview.length) return []
 
     const map = new Map<string, { year: number; month: number; count: number }>()
 
-    documentsData.documents.forEach((doc: Document) => {
+    documentsForReview.forEach((doc: Document) => {
       let year = doc.data_year
       let month = doc.data_month
 
@@ -99,7 +154,7 @@ export const CustomerSearch = () => {
       if (a.year !== b.year) return b.year - a.year
       return b.month - a.month
     })
-  }, [documentsData])
+  }, [documentsForReview])
 
   // 연도만 추출 (연도 드롭다운용, 최신순)
   const availableYears = useMemo(() => {
@@ -122,14 +177,14 @@ export const CustomerSearch = () => {
   }, [selectedYearMonth, availableYearMonths, currentYearMonth])
 
   // 모든 페이지를 평탄화하여 리스트 생성 (검색어가 없을 때 사용)
-  // 선택된 연월(또는 기본 최신 연월)의 데이터만 필터링
+  // 선택된 연월(또는 기본 최신 연월)의 데이터만 필터링 (정답지 대상 문서 제외)
   const allPages: Page[] = useMemo(() => {
-    if (!documentsData?.documents) return []
+    if (!documentsForReview.length) return []
 
     const targetYearMonth = effectiveYearMonth
     const pages: Page[] = []
 
-    documentsData.documents.forEach((doc: Document) => {
+    documentsForReview.forEach((doc: Document) => {
       let docYear = doc.data_year
       let docMonth = doc.data_month
       if (!docYear || !docMonth) {
@@ -154,7 +209,7 @@ export const CustomerSearch = () => {
       }
     })
     return pages
-  }, [documentsData, effectiveYearMonth])
+  }, [documentsForReview, effectiveYearMonth])
 
   // 검색 결과에서 페이지 리스트 생성 (검색어가 있을 때 사용)
   const searchPages: Page[] = useMemo(() => {
@@ -168,23 +223,27 @@ export const CustomerSearch = () => {
     }))
   }, [searchResult])
 
-  // 검색어가 있으면 검색 결과, 없으면 전체 페이지 사용 + 검토 필터 적용
+  // 검색어가 있으면 검색 결과, 없으면 전체 페이지 사용 + 검토 필터 + 참조 양식지 필터 적용
   const displayPages: Page[] = useMemo(() => {
-    const basePages = searchQuery.trim() ? searchPages : allPages
+    let pages = searchQuery.trim() ? searchPages : allPages
+
+    // 참조 양식지(form_type) 필터 적용
+    if (formTypeFilter) {
+      pages = pages.filter((p) => p.formType === formTypeFilter)
+    }
 
     // 검토 필터 적용
     if (reviewFilter === 'all' || !reviewStats?.page_stats) {
-      return basePages
+      return pages
     }
 
-    // page_stats를 Map으로 변환 (빠른 조회를 위해)
     const statsMap = new Map<string, { first: boolean; second: boolean }>()
     reviewStats.page_stats.forEach((stat) => {
       const key = `${stat.pdf_filename}_${stat.page_number}`
       statsMap.set(key, { first: stat.first_reviewed, second: stat.second_reviewed })
     })
 
-    return basePages.filter((page) => {
+    return pages.filter((page) => {
       const key = `${page.pdfFilename}_${page.pageNumber}`
       const stat = statsMap.get(key) || { first: false, second: false }
 
@@ -201,11 +260,20 @@ export const CustomerSearch = () => {
           return true
       }
     })
-  }, [searchQuery, searchPages, allPages, reviewFilter, reviewStats])
+  }, [searchQuery, searchPages, allPages, formTypeFilter, reviewFilter, reviewStats])
 
   // 현재 페이지 정보
   const currentPage = displayPages[currentPageIndex] || null
   const totalFilteredPages = displayPages.length
+
+  // 현재 인덱스/전체 페이지 수 변경 시, 입력창에 현재 페이지 번호 동기화
+  useEffect(() => {
+    if (totalFilteredPages === 0) {
+      setPageJumpInput('')
+    } else {
+      setPageJumpInput(String(currentPageIndex + 1))
+    }
+  }, [currentPageIndex, totalFilteredPages])
 
   // 현재 페이지의 검토율 조회
   const currentPageStats = useMemo(() => {
@@ -229,38 +297,51 @@ export const CustomerSearch = () => {
 
   const currentPageRole = pageImageData?.page_role
 
-  // 현재 페이지의 벡터DB 학습 플래그 (관리자 전용)
-  const { data: learningFlag } = useQuery({
-    queryKey: ['rag-learning-flag', currentPage?.pdfFilename, currentPage?.pageNumber],
-    queryFn: () =>
-      currentPage && isAdmin
-        ? ragAdminApi.getLearningFlag(currentPage.pdfFilename, currentPage.pageNumber)
-        : Promise.resolve({ selected: false }),
-    enabled: !!currentPage?.pdfFilename && !!currentPage?.pageNumber && isAdmin,
+  const setAnswerKeyDocumentMutation = useMutation({
+    mutationKey: ['documents', 'answer-key-designate'],
+    mutationFn: (pdfFilename: string) => documentsApi.setAnswerKeyDocument(pdfFilename),
+    onSuccess: (_data, pdfFilename) => {
+      queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+      queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
+      queryClient.invalidateQueries({ queryKey: ['form-types'] })
+      setShowAnswerKeyModal(false)
+      onNavigateToAnswerKey?.(pdfFilename)
+    },
   })
 
-  const setLearningFlagMutation = useMutation({
-    mutationKey: ['rag-learning-flag-set'],
-    mutationFn: (selected: boolean) => {
-      if (!currentPage) {
-        return Promise.resolve({ success: false })
+  useEffect(() => {
+    if (showAnswerKeyModal && currentPage) {
+      setAnswerKeyFormChoice('keep')
+      const firstOpt = formTypeOptions.find((o) => o.value === currentPage.formType) ?? formTypeOptions[0]
+      setAnswerKeyFormChangeTo(firstOpt?.value ?? currentPage.formType ?? '01')
+      setAnswerKeyNewFormDisplayName('')
+    } else {
+      setFormPreviewHover(null)
+    }
+  }, [showAnswerKeyModal, currentPage?.pdfFilename, currentPage?.formType, formTypeOptions])
+
+  const handleAnswerKeyConfirm = async () => {
+    if (!currentPage) return
+    const pdfFilename = currentPage.pdfFilename
+
+    try {
+      if (answerKeyFormChoice === 'new' && answerKeyNewFormDisplayName.trim()) {
+        const displayName = answerKeyNewFormDisplayName.trim()
+        const res = await formTypesApi.create({ display_name: displayName })
+        const code = res.form_code
+        await formTypesApi.savePreviewImage(code, pdfFilename)
+        await documentsApi.updateFormType(pdfFilename, code)
+      } else if (answerKeyFormChoice === 'change' && answerKeyFormChangeTo) {
+        await documentsApi.updateFormType(pdfFilename, answerKeyFormChangeTo)
       }
-      return ragAdminApi.setLearningFlag({
-        pdf_filename: currentPage.pdfFilename,
-        page_number: currentPage.pageNumber,
-        selected,
-      })
-    },
-    onSuccess: () => {
-      if (currentPage) {
-        queryClient.invalidateQueries({
-          queryKey: ['rag-learning-flag', currentPage.pdfFilename, currentPage.pageNumber],
-        })
-      }
-      // 체크된 페이지 리스트도 갱신
-      queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
-    },
-  })
+      await setAnswerKeyDocumentMutation.mutateAsync(pdfFilename)
+    } catch (err: unknown) {
+      const msg = err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : null
+      alert(msg ? `エラー: ${msg}` : '処理に失敗しました。')
+    }
+  }
 
   // 페이지 이동 핸들러
   const handlePrevPage = () => {
@@ -273,6 +354,23 @@ export const CustomerSearch = () => {
     if (currentPageIndex < totalFilteredPages - 1) {
       setCurrentPageIndex(currentPageIndex + 1)
     }
+  }
+
+  // 페이지 점프 입력 변경
+  const handlePageJumpInputChange = (value: string) => {
+    setPageJumpInput(value)
+  }
+
+  // 입력된 페이지 번호로 이동
+  const handlePageJumpSubmit = () => {
+    if (!pageJumpInput.trim()) return
+    if (totalFilteredPages <= 0) return
+
+    const num = Number(pageJumpInput)
+    if (Number.isNaN(num)) return
+
+    const clamped = Math.min(Math.max(num, 1), totalFilteredPages)
+    setCurrentPageIndex(clamped - 1)
   }
 
   // 입력값 변경 핸들러 (검색은 실행하지 않음)
@@ -292,6 +390,11 @@ export const CustomerSearch = () => {
       handleSearch()
     }
   }
+
+  // 참조 양식지 필터 변경 시 인덱스 초기화
+  useEffect(() => {
+    setCurrentPageIndex(0)
+  }, [formTypeFilter])
 
   // 검토 필터 변경 핸들러
   const handleReviewFilterChange = (filter: ReviewFilter) => {
@@ -394,53 +497,44 @@ export const CustomerSearch = () => {
 
   return (
     <div className="customer-search">
-      {/* 이미지 섹션: 데이터 있으면 이미지, 없으면 데이터 없음 메시지 */}
-      {currentPage ? (
-        <div className="selected-page-content image-section">
-          <PageImageViewer
-            pdfFilename={currentPage.pdfFilename}
-            pageNumber={currentPage.pageNumber}
-          />
-        </div>
-      ) : hasNoData ? (
-        <div className="selected-page-content image-section no-data-placeholder">
-          <div className="no-results">{noDataMessage}</div>
-        </div>
-      ) : null}
-
-      {/* 페이지 내비게이션 섹션 */}
-      <div className="page-navigation-section">
-        <div className="page-nav-controls">
-          {/* 연월 선택: 연도·월 각각 드롭다운 (실수 방지, 목록 짧게) */}
-          <div className="year-month-selector inline">
-            <span className="year-month-caption">対象期間</span>
-            <select
-              className="year-month-select year-select"
-              value={effectiveYearMonth.year}
-              onChange={(e) => handleYearChange(e.target.value)}
-              aria-label="年を選択"
-            >
-              {availableYears.map((y) => (
-                <option key={y} value={y}>
-                  {y}年
-                </option>
-              ))}
-            </select>
-            <select
-              className="year-month-select month-select"
-              value={effectiveYearMonth.month}
-              onChange={(e) => handleMonthChange(e.target.value)}
-              aria-label="月を選択"
-            >
-              {monthOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}月
-                </option>
-              ))}
-            </select>
+      <div ref={contentWrapperRef} className="customer-search-split">
+        {/* 이미지 섹션: 데이터 있으면 이미지, 없으면 데이터 없음 메시지 */}
+        {currentPage ? (
+          <div
+            className="selected-page-content image-section"
+            style={{ height: `${imageHeightPercent}%` }}
+          >
+            <PageImageViewer
+              pdfFilename={currentPage.pdfFilename}
+              pageNumber={currentPage.pageNumber}
+            />
           </div>
+        ) : hasNoData ? (
+          <div
+            className="selected-page-content image-section no-data-placeholder"
+            style={{ height: `${imageHeightPercent}%` }}
+          >
+            <div className="no-results">{noDataMessage}</div>
+          </div>
+        ) : null}
 
-          {/* 이전/다음 버튼 */}
+        {/* 경계선 리사이저: 드래그하면 이미지/그리드 비율 조절 */}
+        {(currentPage || hasNoData) && (
+          <div
+            className="split-resizer"
+            onMouseDown={handleResizerMouseDown}
+            title="드래그하여 이미지/그리드 비율 조절"
+            role="separator"
+            aria-valuenow={imageHeightPercent}
+            aria-valuemin={20}
+            aria-valuemax={80}
+          />
+        )}
+
+        {/* 페이지 내비게이션 섹션: 페이지 <> 2/4 → 연월 → 양식 → 검색 → 파일명 → p.N → 나머지 */}
+        <div className="page-navigation-section">
+        <div className="page-nav-controls">
+          {/* 1. 페이지 <> 2/4 */}
           <div className="nav-buttons-group">
             <button
               onClick={handlePrevPage}
@@ -457,16 +551,48 @@ export const CustomerSearch = () => {
               &gt;
             </button>
           </div>
-
-          {/* 페이지 번호 배지 */}
           <div className="page-number-badge">
-            <span className="current-page-number">
-              {totalFilteredPages === 0 ? 0 : currentPageIndex + 1}
-            </span>
+            <input
+              type="number"
+              className="page-number-input"
+              min={1}
+              max={totalFilteredPages || 1}
+              value={pageJumpInput}
+              onChange={(e) => handlePageJumpInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handlePageJumpSubmit()
+                }
+              }}
+            />
             <span className="total-pages-text">of {totalFilteredPages}</span>
           </div>
 
-          {/* 검색창 */}
+          {/* 2. 연월 선택 (커스텀 드롭다운) */}
+          <NavCustomDropdown
+            value={String(effectiveYearMonth.year)}
+            onChange={handleYearChange}
+            options={availableYears.map((y) => ({ value: String(y), label: `${y}年` }))}
+            ariaLabel="年を選択"
+            containerClass="nav-dropdown-year"
+          />
+          <NavCustomDropdown
+            value={String(effectiveYearMonth.month)}
+            onChange={handleMonthChange}
+            options={monthOptions.map((m) => ({ value: String(m), label: `${m}月` }))}
+            ariaLabel="月を選択"
+            containerClass="nav-dropdown-month"
+          />
+
+          {/* 3. 양식 선택 */}
+          <FormTypeFilterDropdown
+            value={formTypeFilter}
+            onChange={setFormTypeFilter}
+            options={formTypeOptions}
+          />
+
+          {/* 4. 거래처 검색 */}
           <input
             type="text"
             value={inputValue}
@@ -475,7 +601,6 @@ export const CustomerSearch = () => {
             placeholder="取引先名で検索"
             className="page-search-input"
           />
-          {/* 검색 버튼 */}
           <button
             onClick={handleSearch}
             className="search-button"
@@ -483,7 +608,29 @@ export const CustomerSearch = () => {
             検索
           </button>
 
-          {/* 파일명 + 페이지 번호 */}
+          {/* 現在の状態を保存 + 正解帳作成（管理者のみ）：同じトーンで並べる */}
+          <div className="nav-action-buttons">
+            <button
+              type="button"
+              className="nav-action-btn nav-save-btn"
+              onClick={() => gridRef.current?.save?.()}
+              title="編集中の行を保存（Ctrl+Sと同じ）"
+            >
+              現在の状態を保存
+            </button>
+            {isAdmin && currentPage && (
+              <button
+                type="button"
+                className="nav-action-btn answer-key-designate-btn"
+                onClick={() => setShowAnswerKeyModal(true)}
+                title="この文書を正解帳作成対象に指定（検索タブでは非表示）"
+              >
+                正解帳作成
+              </button>
+            )}
+          </div>
+
+          {/* 5. 파일명 + 6. 파일 페이지 (p.N) */}
           <div className="page-filename-container">
             <span className="page-filename">
               {currentPage?.pdfFilename || ''}
@@ -493,21 +640,8 @@ export const CustomerSearch = () => {
                 p.{currentPage.pageNumber}
               </span>
             )}
-            {/* 페이지 역할 배지 */}
             <PageRoleBadge pageRole={currentPageRole} />
-            {/* 검토율 배지 */}
             <ReviewRateBadges stats={currentPageStats} />
-            {/* 관리자 전용: 벡터DB 학습 대상 체크박스 */}
-            {isAdmin && currentPage && (
-              <label className="rag-learning-checkbox">
-                <input
-                  type="checkbox"
-                  checked={!!learningFlag?.selected}
-                  onChange={(e) => setLearningFlagMutation.mutate(e.target.checked)}
-                />
-                <span>ベクター学習対象</span>
-              </label>
-            )}
           </div>
 
           {/* 검토 상태 배지 */}
@@ -526,6 +660,7 @@ export const CustomerSearch = () => {
       {currentPage ? (
         <div className="selected-page-content grid-section">
           <ItemsGridRdg
+            ref={gridRef}
             pdfFilename={currentPage.pdfFilename}
             pageNumber={currentPage.pageNumber}
             formType={currentPage.formType}
@@ -536,6 +671,159 @@ export const CustomerSearch = () => {
           <div className="no-results">{noDataMessage}</div>
         </div>
       ) : null}
+
+      {/* 正解表作成確認モーダル */}
+      {showAnswerKeyModal && currentPage && (
+        <div className="answer-key-modal-overlay" onClick={() => setShowAnswerKeyModal(false)}>
+          <div className="answer-key-modal answer-key-modal-wide" onClick={(e) => e.stopPropagation()}>
+            <h3 className="answer-key-modal-title">正解表作成対象の指定</h3>
+            <p className="answer-key-modal-body">
+              この文書を正解表作成対象に指定しますか？
+              <br />
+              <span className="answer-key-modal-hint">
+                指定すると検索タブでは非表示になり、正解表作成タブでのみ表示されます。
+              </span>
+            </p>
+            <p className="answer-key-modal-current-form">
+              現在の様式: <strong>{formTypeLabel(currentPage.formType)}</strong>
+              {currentPage.formType && `（${currentPage.formType}）`}
+            </p>
+            <p className="answer-key-modal-form-question">
+              様式をそのまま維持しますか、変更しますか、または新規様式を作成しますか？
+            </p>
+            <div className="answer-key-modal-form-choices">
+              <label className="answer-key-modal-form-choice">
+                <input
+                  type="radio"
+                  name="formChoice"
+                  checked={answerKeyFormChoice === 'keep'}
+                  onChange={() => setAnswerKeyFormChoice('keep')}
+                />
+                <span>そのまま維持</span>
+              </label>
+              <label className="answer-key-modal-form-choice">
+                <input
+                  type="radio"
+                  name="formChoice"
+                  checked={answerKeyFormChoice === 'change'}
+                  onChange={() => setAnswerKeyFormChoice('change')}
+                />
+                <span>別の様式に変更</span>
+              </label>
+              <label className="answer-key-modal-form-choice">
+                <input
+                  type="radio"
+                  name="formChoice"
+                  checked={answerKeyFormChoice === 'new'}
+                  onChange={() => setAnswerKeyFormChoice('new')}
+                />
+                <span>新規様式を作成</span>
+              </label>
+            </div>
+
+            {answerKeyFormChoice === 'change' && (
+              <div className="answer-key-modal-form-grid">
+                <p className="answer-key-modal-form-grid-label">様式を選択（ホバーで拡大）</p>
+                <div className="answer-key-form-images">
+                  {formTypeOptions.map((opt) => (
+                      <label
+                        key={opt.value}
+                        className={`answer-key-form-image-item ${answerKeyFormChangeTo === opt.value ? 'selected' : ''}`}
+                        onMouseEnter={(e) => {
+                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                          setFormPreviewHover({ value: opt.value, label: opt.label, x: rect.left, y: rect.top })
+                        }}
+                        onMouseLeave={() => setFormPreviewHover(null)}
+                      >
+                        <input
+                          type="radio"
+                          name="formChangeTo"
+                          value={opt.value}
+                          checked={answerKeyFormChangeTo === opt.value}
+                          onChange={() => setAnswerKeyFormChangeTo(opt.value)}
+                        />
+                        <div className="answer-key-form-image-wrap">
+                          <img
+                            src={`/images/form_${opt.value}.png`}
+                            alt={opt.label}
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none'
+                              const sibling = (e.target as HTMLImageElement).nextElementSibling
+                              if (sibling) (sibling as HTMLElement).style.display = 'block'
+                            }}
+                          />
+                          <span className="answer-key-form-image-placeholder" style={{ display: 'none' }}>
+                            型{opt.value}
+                          </span>
+                        </div>
+                        <span className="answer-key-form-image-label">{opt.label}</span>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {answerKeyFormChoice === 'new' && (
+              <div className="answer-key-modal-new-form">
+                <label className="answer-key-modal-new-form-label">
+                  新規様式の表示名（コードは自動で付与されます）:
+                  <input
+                    type="text"
+                    className="answer-key-modal-new-form-input"
+                    value={answerKeyNewFormDisplayName}
+                    onChange={(e) => setAnswerKeyNewFormDisplayName(e.target.value)}
+                    placeholder="例: 郵便様式、청구서A"
+                    maxLength={200}
+                  />
+                </label>
+              </div>
+            )}
+
+            {formPreviewHover && (() => {
+              const previewW = 720
+              const previewH = Math.min(900, window.innerHeight - 60)
+              const pad = 12
+              const left = Math.max(pad, Math.min(formPreviewHover.x, window.innerWidth - previewW - pad))
+              const preferTop = formPreviewHover.y - previewH - 40
+              let top = preferTop >= pad ? preferTop : formPreviewHover.y + 180
+              if (top + previewH > window.innerHeight - 24) top = window.innerHeight - previewH - 24
+              top = Math.max(pad, top)
+              return (
+              <div
+                className="answer-key-form-preview-overlay"
+                style={{ left, top }}
+              >
+                <img src={`/images/form_${formPreviewHover.value}.png`} alt={formPreviewHover.label} />
+                <span className="answer-key-form-preview-label">{formPreviewHover.label}</span>
+              </div>
+              )
+            })()}
+
+            <p className="answer-key-modal-filename">{currentPage.pdfFilename}</p>
+            <div className="answer-key-modal-actions">
+              <button
+                type="button"
+                className="answer-key-modal-btn cancel"
+                onClick={() => setShowAnswerKeyModal(false)}
+              >
+                いいえ
+              </button>
+              <button
+                type="button"
+                className="answer-key-modal-btn confirm"
+                onClick={handleAnswerKeyConfirm}
+                disabled={
+                  setAnswerKeyDocumentMutation.isPending ||
+                  (answerKeyFormChoice === 'new' && !answerKeyNewFormDisplayName.trim())
+                }
+              >
+                {setAnswerKeyDocumentMutation.isPending ? '処理中…' : 'はい（正解帳作成タブへ移動）'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
     </div>
   )
 }
@@ -641,6 +929,153 @@ const ReviewRateBadges = ({ stats }: {
       >
         2次 {stats.second_review_rate}%
       </span>
+    </div>
+  )
+}
+
+// 연·월·양식 공통: 커스텀 드롭다운 (네이티브 select 대체, 같은 스타일)
+const NavCustomDropdown = ({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+  containerClass = '',
+}: {
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
+  ariaLabel: string
+  containerClass?: string
+}) => {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  const currentLabel = options.find((o) => o.value === value)?.label ?? options[0]?.label ?? ''
+
+  return (
+    <div
+      className={`form-type-filter form-type-filter-custom ${containerClass}`.trim()}
+      ref={containerRef}
+    >
+      <button
+        type="button"
+        className="form-type-filter-trigger"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span className="form-type-filter-trigger-label">{currentLabel}</span>
+        <span className="form-type-filter-chevron" aria-hidden>▼</span>
+      </button>
+      {open && (
+        <ul className="form-type-filter-list" role="listbox" aria-label={ariaLabel}>
+          {options.map((opt) => (
+            <li
+              key={opt.value}
+              role="option"
+              aria-selected={value === opt.value}
+              className={`form-type-filter-option ${value === opt.value ? 'selected' : ''}`}
+              onClick={() => {
+                onChange(opt.value)
+                setOpen(false)
+              }}
+            >
+              {opt.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// 참조 양식지 필터: 커스텀 드롭다운 (NavCustomDropdown과 동일 스타일, null 허용)
+const FormTypeFilterDropdown = ({
+  value,
+  onChange,
+  options,
+}: {
+  value: string | null
+  onChange: (v: string | null) => void
+  options: Array<{ value: string; label: string }>
+}) => {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  const currentLabel = value
+    ? options.find((o) => o.value === value)?.label ?? value
+    : '全て'
+
+  return (
+    <div className="form-type-filter form-type-filter-custom" ref={containerRef}>
+      <button
+        type="button"
+        className="form-type-filter-trigger"
+        onClick={() => setOpen((v) => !v)}
+        title="参照フォームで絞り込み"
+        aria-label="参照フォーム"
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span className="form-type-filter-trigger-label">{currentLabel}</span>
+        <span className="form-type-filter-chevron" aria-hidden>▼</span>
+      </button>
+      {open && (
+        <ul
+          className="form-type-filter-list"
+          role="listbox"
+          aria-label="参照フォーム"
+        >
+          <li
+            role="option"
+            aria-selected={value === null}
+            className={`form-type-filter-option ${value === null ? 'selected' : ''}`}
+            onClick={() => {
+              onChange(null)
+              setOpen(false)
+            }}
+          >
+            全て
+          </li>
+          {options.map((opt) => (
+            <li
+              key={opt.value}
+              role="option"
+              aria-selected={value === opt.value}
+              className={`form-type-filter-option ${value === opt.value ? 'selected' : ''}`}
+              onClick={() => {
+                onChange(opt.value)
+                setOpen(false)
+              }}
+            >
+              {opt.label}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

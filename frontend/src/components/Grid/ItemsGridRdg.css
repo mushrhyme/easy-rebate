@@ -111,11 +111,13 @@
 
 /* 그리드가 컨테이너를 꽉 채우도록 */
 .rdg-container .rdg {
-  width: 100% !important;
+  /* 컬럼별로 계산된 총 너비를 그대로 사용하도록 변경
+     - 화면보다 그리드가 넓어질 수 있게 해서 데이터 길이만큼 컬럼이 확보됨
+     - 화면이 그보다 넓으면 최소 100%까지는 채우고, 남는 공간은 JS에서 비율로 확장 */
+  width: auto !important;
   min-width: 100%;
-  max-width: 100%; /* 최대 너비 제한으로 화면 초과 방지 */
+  max-width: none;
   height: 100% !important;
-  overflow-x: auto; /* 가로 스크롤 허용으로 내용이 잘리지 않도록 */
 }
 
 /* react-data-gridの内部コンテナも全体の幅を使用 */
@@ -134,16 +136,40 @@
   --rdg-font-size: 14px;
   --rdg-header-color: #333;
   --rdg-header-font-weight: 600;
+  /* 행/헤더 기본 높이를 조금 넉넉하게 */
+  --rdg-row-height: 42px;
+  --rdg-header-row-height: 44px;
+  /* 셀 안쪽 여백도 기본값보다 약간 크게 */
+  --rdg-cell-padding: 10px;
 }
 
-/* 그리드 셀 스타일 개선 */
-.rdg-cell {
+/* 그리드 셀: 텍스트 전체 표시(줄바꿈), react-data-grid 기본 ellipsis/clip 제거 */
+.items-grid-rdg .rdg-cell,
+.rdg-container .rdg .rdg-cell,
+.rdg .rdg-cell {
   border-right: 1px solid #d0d0d0;
   border-bottom: 1px solid #d0d0d0;
   color: #333;
   font-size: 14px;
-  padding: 8px;
-  overflow: visible !important; /* 액션 메뉴가 셀 밖으로 나가도 보이도록 */
+  /* 두 줄까지 들어가도 답답하지 않도록 상하 여백을 조금 더 줌 */
+  padding: 10px 8px;
+  min-height: 38px;
+  overflow: visible !important;
+  text-overflow: unset !important;
+  white-space: normal !important;
+  word-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.4;
+}
+/* 셀 내부 콘텐츠도 잘리지 않도록 (라이브러리 내부 래퍼) */
+.items-grid-rdg .rdg-cell > div,
+.rdg-container .rdg .rdg-cell > div,
+.rdg .rdg-cell > div {
+  overflow: visible !important;
+  text-overflow: unset !important;
+  white-space: normal !important;
+  word-wrap: break-word;
+  word-break: break-word;
 }
 
 /* 헤더 셀 스타일 */
@@ -159,6 +185,9 @@
   padding: 10px 8px;
   font-weight: 600;
   color: #333;
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
 }
 
 /* 행 스타일 */

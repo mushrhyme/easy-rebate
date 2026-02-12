@@ -1,7 +1,8 @@
 """
 RAG / 벡터 DB 관리용 관리자 API
 """
-
+import asyncio
+from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import json
 
@@ -14,6 +15,7 @@ from backend.core.auth import get_current_user
 from modules.core.build_faiss_db import build_faiss_db
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.hash_utils import compute_page_hash, get_page_key
+from modules.utils.config import get_project_root
 
 
 router = APIRouter()
@@ -61,6 +63,90 @@ def _ensure_admin(user: Dict[str, Any]) -> None:
         raise HTTPException(status_code=403, detail="관리자만 접근할 수 있습니다")
 
 
+def _ocr_text_from_upstage_result(result: dict) -> str:
+    """Upstage OCR 응답 dict에서 전체 텍스트 추출."""
+    if not result or not isinstance(result, dict):
+        return ""
+    text = result.get("text") or result.get("result") or result.get("content")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    if "pages" in result:
+        pages = result.get("pages") or []
+        parts = []
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            pt = page.get("text") or page.get("content")
+            if isinstance(pt, str) and pt.strip():
+                parts.append(pt.strip())
+                continue
+            words = page.get("words") or []
+            if words:
+                parts.append(" ".join(w.get("text", "") for w in words if isinstance(w, dict)))
+        if parts:
+            return "\n".join(parts)
+    return ""
+
+
+def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
+    """
+    페이지 이미지에서 실제 OCR 텍스트 추출 (임베딩용).
+    search.get_page_ocr_text와 동일한 우선순위: debug2 → 이미지 Upstage → PDF → result
+    """
+    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    ocr_text = ""
+
+    # 1) debug2 파일
+    try:
+        root = get_project_root()
+        debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
+        if debug2_file.exists():
+            ocr_text = debug2_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+
+    # 2) 저장된 페이지 이미지로 Upstage OCR
+    if not ocr_text.strip():
+        try:
+            image_path = db.get_page_image_path(pdf_filename, page_number)
+            if image_path:
+                root = get_project_root()
+                full_path = Path(image_path) if Path(image_path).is_absolute() else root / image_path
+                if full_path.exists():
+                    image_bytes = full_path.read_bytes()
+                    from modules.core.extractors.upstage_extractor import get_upstage_extractor
+                    extractor = get_upstage_extractor(enable_cache=False)
+                    raw = extractor.extract_from_image_raw(image_bytes=image_bytes)
+                    if raw:
+                        ocr_text = _ocr_text_from_upstage_result(raw)
+        except Exception:
+            pass
+
+    # 3) PDF 파일에서 직접 추출
+    if not ocr_text.strip():
+        try:
+            from modules.utils.pdf_utils import find_pdf_path, PdfTextExtractor
+            pdf_path_str = find_pdf_path(pdf_name)
+            if pdf_path_str:
+                extractor = PdfTextExtractor()
+                ocr_text = extractor.extract_text(Path(pdf_path_str), page_number) or ""
+                extractor.close_all()
+        except Exception:
+            pass
+
+    # 4) result/ 페이지 JSON의 text 필드
+    if not ocr_text.strip():
+        try:
+            from modules.core.storage import PageStorage
+            page_data = PageStorage.load_page(pdf_name, page_number)
+            if page_data and isinstance(page_data.get("text"), str):
+                ocr_text = page_data["text"]
+        except Exception:
+            pass
+
+    return ocr_text.strip()
+
+
 @router.post("/build")
 async def build_vector_db(
     payload: Dict[str, Optional[str]] = None,
@@ -79,9 +165,10 @@ async def build_vector_db(
     if payload:
         form_type = payload.get("form_type") or None
 
-    # 동기 실행 (요청이 완료될 때까지 대기)
+    # 스레드 풀에서 실행하여 이벤트 루프 블로킹 방지
     try:
-        build_faiss_db(
+        await asyncio.to_thread(
+            build_faiss_db,
             form_folder=form_type,
             auto_merge=True,
             text_extraction_method="excel",
@@ -264,27 +351,28 @@ async def build_vector_from_learning_pages(
     
     with db.get_connection() as conn:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
+        # LEFT JOIN: items 없는 페이지(cover 전용)도 포함
         cursor.execute(
             """
             SELECT 
                 p.pdf_filename,
                 p.page_number,
+                p.page_role,
+                p.page_meta,
                 i.item_id,
                 i.item_order,
-                i.customer,
-                i.product_name,
                 i.item_data,
                 d.form_type,
                 d.data_year,
                 d.data_month
             FROM page_data_current p
-            JOIN items_current i
+            LEFT JOIN items_current i
               ON i.pdf_filename = p.pdf_filename
              AND i.page_number = p.page_number
             LEFT JOIN documents_current d
               ON p.pdf_filename = d.pdf_filename
             WHERE p.is_rag_candidate = TRUE
-            ORDER BY p.pdf_filename, p.page_number, i.item_order
+            ORDER BY p.pdf_filename, p.page_number, i.item_order NULLS LAST
             """
         )
         rows: List[Dict[str, Any]] = cursor.fetchall()
@@ -303,7 +391,7 @@ async def build_vector_from_learning_pages(
         if not form_type_for_index:
             form_type_for_index = ""
 
-    # (pdf_filename, page_number) 단위로 그룹화
+    # (pdf_filename, page_number) 단위로 그룹화 (items 없는 페이지는 1행, item_id=NULL)
     from collections import defaultdict
 
     pages_map: Dict[Tuple[str, int], List[Dict[str, Any]]] = defaultdict(list)
@@ -314,57 +402,62 @@ async def build_vector_from_learning_pages(
     shard_pages: List[Dict[str, Any]] = []
 
     for (pdf_filename, page_number), item_rows in pages_map.items():
-        if not item_rows:
-            continue
-
         # pdf_name (확장자 제거)
         pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
 
-        lines: List[str] = []
         merged_items: List[Dict[str, Any]] = []
 
         # 연월/폼타입 정보 (첫 행 기준)
         first_row = item_rows[0]
         data_year = first_row.get("data_year")
         data_month = first_row.get("data_month")
+        page_role = first_row.get("page_role") or "detail"
+        page_meta_raw = first_row.get("page_meta")
+        page_meta: Dict[str, Any] = {}
+        if page_meta_raw is not None:
+            if isinstance(page_meta_raw, dict):
+                page_meta = dict(page_meta_raw)
+            elif isinstance(page_meta_raw, str):
+                try:
+                    page_meta = json.loads(page_meta_raw)
+                except json.JSONDecodeError:
+                    pass
 
-        for row in item_rows:
-            customer = row.get("customer")
-            product_name = row.get("product_name")
-            item_data = row.get("item_data") or {}
-            item_id = row["item_id"]
+            for row in item_rows:
+                if row.get("item_id") is None:
+                    # items 없는 페이지(cover): item 행 스킵
+                    continue
 
-            if customer:
-                lines.append(f"得意先名: {customer}")
-            if product_name:
-                lines.append(f"商品名: {product_name}")
+                item_data = row.get("item_data") or {}
+                item_id = row["item_id"]
 
-            if isinstance(item_data, dict):
-                for key in sorted(item_data.keys()):
-                    value = item_data.get(key)
-                    if value is None:
-                        continue
-                    lines.append(f"{key}: {value}")
+                merged_item: Dict[str, Any] = {}
+                if isinstance(item_data, dict):
+                    merged_item.update(item_data)
 
-            merged_item: Dict[str, Any] = {}
-            if isinstance(item_data, dict):
-                merged_item.update(item_data)
-            if customer and "得意先名" not in merged_item:
-                merged_item["得意先名"] = customer
-            if product_name and "商品名" not in merged_item:
-                merged_item["商品名"] = product_name
-            merged_item["pdf_filename"] = pdf_filename
-            merged_item["page_number"] = page_number
-            merged_item["item_id"] = item_id
+                # 得意先는 item_data 내부 표준 키를 우선 사용하고,
+                customer = item_data.get("得意先") if isinstance(item_data, dict) else None
+                if customer and "得意先" not in merged_item:
+                    merged_item["得意先"] = customer
 
-            merged_items.append(merged_item)
+                merged_item["pdf_filename"] = pdf_filename
+                merged_item["page_number"] = page_number
+                merged_item["item_id"] = item_id
 
-        ocr_text = "\n".join(lines)
+                merged_items.append(merged_item)
+
+        # 실제 OCR 텍스트 추출 (페이지 이미지에서, 임베딩용)
+        ocr_text = await asyncio.to_thread(_extract_ocr_for_page, db, pdf_filename, page_number)
         if not ocr_text:
-            # 내용이 전혀 없으면 스킵
+            # OCR 추출 실패 시 스킵 (빈 텍스트로 임베딩할 수 없음)
             continue
 
-        answer_json: Dict[str, Any] = {"items": merged_items}
+        # answer_json: page_meta(문서 메타) + page_role + items
+        answer_json: Dict[str, Any] = {
+            **page_meta,
+            "page_role": page_role,
+            "items": merged_items,
+        }
 
         metadata: Dict[str, Any] = {
             "pdf_name": pdf_name,
@@ -395,7 +488,8 @@ async def build_vector_from_learning_pages(
 
     rag_manager = get_rag_manager()
 
-    result = rag_manager.build_shard(
+    result = await asyncio.to_thread(
+        rag_manager.build_shard,
         shard_pages,
         form_type=form_type_for_index or None,
     )
@@ -404,14 +498,14 @@ async def build_vector_from_learning_pages(
 
     shard_identifier, _shard_id = result
 
-    merged = rag_manager.merge_shard(shard_identifier)
+    merged = await asyncio.to_thread(rag_manager.merge_shard, shard_identifier)
     if not merged:
         raise HTTPException(
             status_code=500,
             detail="Shard를 base 인덱스에 병합하는 데 실패했습니다.",
         )
 
-    rag_manager.reload_index()
+    await asyncio.to_thread(rag_manager.reload_index)
     total_vectors = rag_manager.count_examples()
 
     db = get_db()
@@ -438,4 +532,82 @@ async def build_vector_from_learning_pages(
         "per_form_type": per_form,
     }
 
+
+# ---- 基準管理 (master_code.xlsx) ----
+MASTER_CODE_PATH = get_project_root() / "master_code.xlsx"
+MASTER_CODE_KEYS = ("a", "b", "c", "d", "e", "f")
+
+
+def _cell_str(v: Any) -> str:
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _read_master_code_xlsx() -> Tuple[List[str], List[Dict[str, str]]]:
+    """master_code.xlsx を読み、1行目をヘッダー、2行目以降を rows (a,b,c,d,e,f) で返す。"""
+    headers = ["取引先コード", "取引先名称", "代表スーパーコード", "代表スーパー名称", "担当ID", "担当者"]
+    rows: List[Dict[str, str]] = []
+    if not MASTER_CODE_PATH.exists():
+        return headers, rows
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(MASTER_CODE_PATH, read_only=True)
+        ws = wb.active
+        all_rows = list(ws.iter_rows(min_row=1, max_col=6, values_only=True))
+        wb.close()
+        if not all_rows:
+            return headers, rows
+        first = all_rows[0]
+        headers = [_cell_str(first[i]) if i < len(first) else "" for i in range(6)]
+        for row in all_rows[1:]:
+            a = _cell_str(row[0]) if len(row) > 0 else ""
+            b = _cell_str(row[1]) if len(row) > 1 else ""
+            c = _cell_str(row[2]) if len(row) > 2 else ""
+            d = _cell_str(row[3]) if len(row) > 3 else ""
+            e = _cell_str(row[4]) if len(row) > 4 else ""
+            f = _cell_str(row[5]) if len(row) > 5 else ""
+            rows.append({"a": a, "b": b, "c": c, "d": d, "e": e, "f": f})
+    except Exception:
+        pass
+    return headers, rows
+
+
+class MasterCodeSaveRequest(BaseModel):
+    headers: Optional[List[str]] = None
+    rows: List[Dict[str, str]]
+
+
+@router.get("/master-code")
+async def get_master_code(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """master_code.xlsx を読み、ヘッダーと全行を返す（管理者専用）。"""
+    _ensure_admin(current_user)
+    headers, rows = _read_master_code_xlsx()
+    return {"headers": headers, "rows": rows}
+
+
+@router.put("/master-code")
+async def save_master_code(
+    request: MasterCodeSaveRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """master_code.xlsx に rows を書き戻す（管理者専用）。"""
+    _ensure_admin(current_user)
+    headers, _ = _read_master_code_xlsx()
+    if request.headers and len(request.headers) >= 6:
+        headers = [str(h) for h in request.headers[:6]]
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(headers)
+        for r in request.rows:
+            row = [r.get(k, "") for k in MASTER_CODE_KEYS]
+            ws.append(row)
+        wb.save(MASTER_CODE_PATH)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"保存に失敗しました: {e}")
+    return {"success": True, "message": "保存しました。"}
 

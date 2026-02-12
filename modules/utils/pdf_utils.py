@@ -16,16 +16,18 @@ class PdfTextExtractor:
     여러 페이지를 처리할 때 성능 향상을 위해 문서를 캐싱합니다.
     """
     
-    def __init__(self, method: Optional[str] = None, form_number: Optional[str] = None):
+    def __init__(self, method: Optional[str] = None, upload_channel: Optional[str] = None, form_number: Optional[str] = None):
         """
         PDF 문서 캐시 초기화
         
         Args:
-            method: 텍스트 추출 방법 ("pymupdf", "excel", "upstage"). None이면 설정에서 가져옴
-            form_number: 양식지 번호 (예: "01", "02"). None이면 경로에서 추출
+            method: 텍스트 추출 방법 ("pymupdf", "excel", "upstage"). "excel"/"pymupdf"는 PyMuPDF 사용. None이면 설정에서 가져옴
+            upload_channel: 업로드 채널 (finet | mail). 우선 사용
+            form_number: 양식지 번호 (예: "01", "02"). 하위 호환, upload_channel이 없을 때만 사용
         """
         self._pdf_cache: Dict[Path, fitz.Document] = {}
         self.method = method
+        self.upload_channel = upload_channel
         self.form_number = form_number
     
     def extract_text(self, pdf_path: Path, page_num: int) -> str:
@@ -39,18 +41,29 @@ class PdfTextExtractor:
         Returns:
             추출된 텍스트 (없으면 빈 문자열)
         """
-        # 설정에서 추출 방법 가져오기 (양식지 기반)
+        # 설정에서 추출 방법 가져오기 (upload_channel 기반)
         method = self.method
         if method is None:
-            from modules.utils.config import get_extraction_method_for_form
+            from modules.utils.config import get_extraction_method_for_upload_channel
             
-            # 양식지 번호 추출 (이미 설정된 경우 사용, 없으면 경로에서 추출)
-            form_number = self.form_number
-            if form_number is None:
-                form_number = extract_form_number_from_path(pdf_path)
+            # upload_channel 결정 (우선순위: 설정된 값 > DB 조회 > 경로에서 추출)
+            upload_channel = self.upload_channel
+            if not upload_channel:
+                # DB에서 문서 정보 조회 시도
+                try:
+                    from database.registry import get_db
+                    pdf_filename = f"{pdf_path.stem}.pdf"
+                    doc = get_db().get_document(pdf_filename)
+                    if doc and doc.get('upload_channel'):
+                        upload_channel = doc['upload_channel']
+                except Exception:
+                    pass
             
-            # 양식지에 따라 변환 방식 결정
-            method = get_extraction_method_for_form(form_number)
+            # upload_channel에 따라 변환 방식 결정
+            if upload_channel:
+                method = get_extraction_method_for_upload_channel(upload_channel)
+            else:
+                method = "upstage"  # 기본값
         
         # Upstage OCR 방법 사용
         if method == "upstage":
@@ -65,25 +78,7 @@ class PdfTextExtractor:
             except Exception as e:
                 print(f"⚠️ Upstage OCR 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
         
-        # 엑셀 변환 방법 사용 (pdfplumber로 전체 텍스트 추출)
-        if method == "excel":
-            try:
-                import pdfplumber
-                with pdfplumber.open(pdf_path) as pdf:
-                    if page_num < 1 or page_num > len(pdf.pages):
-                        raise ValueError(f"페이지 번호 범위 초과: {page_num}")
-                    page = pdf.pages[page_num - 1]
-                    text = page.extract_text()  # 전체 텍스트 추출 (테이블만이 아님)
-                    if text:
-                        # 디버깅: 추출된 텍스트가 테이블 형식인지 확인
-                        if "=== 시트:" in text or "Table_" in text:
-                            print(f"⚠️ [경고] 추출된 텍스트에 테이블 형식이 포함되어 있습니다. 전체 텍스트가 아닐 수 있습니다.")
-                        return text.strip()
-                # pdfplumber 실패 시 PyMuPDF로 폴백
-                print(f"⚠️ pdfplumber 텍스트 추출 실패, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num})")
-            except Exception as e:
-                print(f"⚠️ pdfplumber 텍스트 추출 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
-        
+        # "excel" / "pymupdf": PyMuPDF로 전체 텍스트 추출 (표·줄글 혼합 시 순서 보장)
         # 기본 PyMuPDF 방법 사용
         try:
             if not pdf_path.exists():
@@ -169,8 +164,9 @@ def extract_form_number_from_path(pdf_path: Path) -> Optional[str]:
 def extract_text_from_pdf_page(
     pdf_path: Path,
     page_num: int,
-    method: Optional[str] = None,  # None이면 양식지에 따라 자동 결정
-    form_number: Optional[str] = None  # 양식지 번호 (None이면 경로에서 추출)
+    method: Optional[str] = None,  # None이면 upload_channel에 따라 자동 결정
+    upload_channel: Optional[str] = None,  # 업로드 채널 (finet | mail). 우선 사용
+    form_number: Optional[str] = None  # 양식지 번호 (하위 호환, upload_channel이 없을 때만 사용)
 ) -> str:
     """
     PDF에서 특정 페이지의 텍스트를 추출합니다.
@@ -178,8 +174,9 @@ def extract_text_from_pdf_page(
     Args:
         pdf_path: PDF 파일 경로 (Path 객체 또는 문자열)
         page_num: 페이지 번호 (1부터 시작)
-        method: 텍스트 추출 방법 ("pymupdf" 또는 "excel"). None이면 양식지에 따라 자동 결정
-        form_number: 양식지 번호 (예: "01", "02"). None이면 경로에서 자동 추출
+        method: 텍스트 추출 방법 ("pymupdf" 또는 "excel", 둘 다 PyMuPDF 사용). None이면 upload_channel에 따라 자동 결정
+        upload_channel: 업로드 채널 (finet | mail). 우선 사용
+        form_number: 양식지 번호 (예: "01", "02"). 하위 호환, upload_channel이 없을 때만 사용
         
     Returns:
         추출된 텍스트 (없으면 빈 문자열)
@@ -189,7 +186,7 @@ def extract_text_from_pdf_page(
         text = extract_text_from_pdf_page(Path("doc.pdf"), 1)
         
         # 여러 페이지 (캐싱 사용)
-        extractor = PdfTextExtractor()
+        extractor = PdfTextExtractor(upload_channel="finet")
         for page in range(1, 10):
             text = extractor.extract_text(Path("doc.pdf"), page)
         extractor.close_all()
@@ -198,19 +195,29 @@ def extract_text_from_pdf_page(
     if isinstance(pdf_path, str):
         pdf_path = Path(pdf_path)
     
-    # 설정에서 추출 방법 가져오기 (양식지 기반)
+    # 설정에서 추출 방법 가져오기 (upload_channel 기반)
     if method is None:
-        from modules.utils.config import get_extraction_method_for_form
+        from modules.utils.config import get_extraction_method_for_upload_channel
         
-        # 양식지 번호 추출
-        if form_number is None:
-            form_number = extract_form_number_from_path(pdf_path)
+        # upload_channel 결정 (우선순위: 파라미터 > DB 조회 > 경로에서 추출)
+        if not upload_channel:
+            # DB에서 문서 정보 조회 시도
+            try:
+                from database.registry import get_db
+                pdf_filename = f"{pdf_path.stem}.pdf"
+                doc = get_db().get_document(pdf_filename)
+                if doc and doc.get('upload_channel'):
+                    upload_channel = doc['upload_channel']
+            except Exception:
+                pass
         
-        # 양식지에 따라 변환 방식 결정
-        if method is None:
-            method = get_extraction_method_for_form(form_number)
+        # upload_channel에 따라 변환 방식 결정
+        if upload_channel:
+            method = get_extraction_method_for_upload_channel(upload_channel)
+        else:
+            method = "upstage"  # 기본값
         
-        print(f"📝 [PDF 추출] 양식지: {form_number}, 방법: {method}")
+        print(f"📝 [PDF 추출] upload_channel: {upload_channel}, 방법: {method}")
     # Upstage OCR 방법 사용
     if method == "upstage":
         try:
@@ -226,24 +233,7 @@ def extract_text_from_pdf_page(
             import traceback
             traceback.print_exc()
     
-    # 엑셀 변환 방법 사용 (pdfplumber로 전체 텍스트 추출)
-    if method == "excel":
-        try:
-            import pdfplumber
-            with pdfplumber.open(pdf_path) as pdf:
-                if page_num < 1 or page_num > len(pdf.pages):
-                    raise ValueError(f"페이지 번호 범위 초과: {page_num}")
-                page = pdf.pages[page_num - 1]
-                text = page.extract_text()  # 전체 텍스트 추출 (테이블만이 아님)
-                if text:
-                    return text.strip()
-            # pdfplumber 실패 시 PyMuPDF로 폴백
-            print(f"⚠️ pdfplumber 텍스트 추출 실패, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num})")
-        except Exception as e:
-            print(f"⚠️ pdfplumber 텍스트 추출 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
-            import traceback
-            traceback.print_exc()
-    
+    # "excel" / "pymupdf": PyMuPDF로 전체 텍스트 추출 (표·줄글 혼합 시 순서 보장)
     # 기본 PyMuPDF 방법 사용
     try:
         if not pdf_path.exists():

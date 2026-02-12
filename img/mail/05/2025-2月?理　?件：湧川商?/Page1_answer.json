@@ -1,0 +1,43 @@
+{
+  "page_role": "cover",
+  
+  "document_name": "拡販条件確認表",
+  "document_number": "82214",
+  "issue_date": "2025-02-1",
+  "billing_year_month": "2025-01",
+
+  "party": {
+    "recipient": {
+      "registration_number": null,
+      "company_name": "株式会社農心ジャパン",
+      "office_name": null,
+      "postal_code": null,
+      "address": null,
+      "phone": null,
+      "fax": null
+    },
+    "issuer": {
+      "registration_number": null,
+      "company_name": "株式会社 湧川商会",
+      "office_name": null,
+      "postal_code": "〒901-2123",
+      "address": "沖縄県浦添市西洲2丁目8番4号",
+      "phone": "098-875-3001",
+      "fax": "098-874-9530",
+      "bank_account": "琉球銀行 商業団地支店 普通預金 3307、沖縄銀行 商業団地支店 普通預金 1101773",
+      "person_in_charge": null
+    }
+  },
+
+  "totals": {
+    "条件項目": "販売未収 8.0%軽対象",
+    "条件金額": "1,756,920",
+    "消費消費税率": "140,554",
+    "請求合計額": "1,897,474",
+    "8.0%軽合計": {
+      "条件金額": "1,756,920",
+      "消費消費税率": "140,554",
+      "請求合計額": "1,897,474"
+    }
+  }
+}

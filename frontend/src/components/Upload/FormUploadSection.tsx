@@ -1,18 +1,32 @@
 /**
- * 양식지별 업로드 섹션 컴포넌트
+ * 업로드 채널별 섹션: FINET(엑셀) / 우편물(Upstage OCR)
  */
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { documentsApi } from '@/api/client'
 import { useUploadStore } from '@/stores/uploadStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
-import { FORM_CONFIGS } from '@/config/formConfig'
-import type { FormType } from '@/types'
+import { UPLOAD_CHANNEL_CONFIGS } from '@/config/formConfig'
+import type { UploadChannel } from '@/types'
 import type { WebSocketMessage } from '@/types'
 import './FormUploadSection.css'
 
+export interface UploadProgressPayload {
+  fileNames: string[]
+  progress: Record<string, FileProgress>
+  isUploading: boolean
+}
+
 interface FormUploadSectionProps {
-  formType: FormType
+  uploadChannel: UploadChannel
+  /** 날짜 필터 (업로드 완료 목록과 연동, App에서 제어) */
+  selectedYear?: number | null
+  selectedMonth?: number | null
+  onYearMonthChange?: (year: number | null, month: number | null) => void
+  onShowFileList?: (channel: UploadChannel) => void
+  isListSelected?: boolean
+  onUploadProgressChange?: (channel: UploadChannel, payload: UploadProgressPayload) => void
+  onRegisterRemove?: (channel: UploadChannel, removeFn: ((fileName: string) => void) | null) => void
 }
 
 // 파일별 진행 상태 타입
@@ -24,25 +38,23 @@ interface FileProgress {
   progress?: number
 }
 
-export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
+export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selectedMonth: propMonth, onYearMonthChange, onShowFileList, isListSelected, onUploadProgressChange, onRegisterRemove }: FormUploadSectionProps) => {
   const [files, setFiles] = useState<File[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const [isHovered, setIsHovered] = useState(false) // 호버 상태
   const [tooltipPosition, setTooltipPosition] = useState({ top: 0, left: 0 }) // 툴팁 위치
-  // 각 양식지별로 독립적인 년월 선택 (formType별로 localStorage 키 구분)
-  const [selectedYear, setSelectedYear] = useState(() => {
-    const saved = localStorage.getItem(`lastSelectedYear_${formType}`)
-    return saved ? parseInt(saved) : new Date().getFullYear()
-  }) // 선택된 년도
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const saved = localStorage.getItem(`lastSelectedMonth_${formType}`)
-    return saved ? parseInt(saved) : new Date().getMonth() + 1
-  }) // 선택된 월 (1-12)
+  const [localYear, setLocalYear] = useState<number | null>(null)
+  const [localMonth, setLocalMonth] = useState<number | null>(null)
+  const isControlled = onYearMonthChange != null
+  const selectedYear = isControlled ? (propYear ?? null) : localYear
+  const selectedMonth = isControlled ? (propMonth ?? null) : localMonth
+  const setSelectedYear = isControlled ? (y: number | null) => onYearMonthChange?.(y, selectedMonth) : setLocalYear
+  const setSelectedMonth = isControlled ? (m: number | null) => onYearMonthChange?.(selectedYear, m) : setLocalMonth
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hoverInfoRef = useRef<HTMLDivElement>(null) // 정보 아이콘 컨테이너 참조
   const { sessionId, updateProgress } = useUploadStore()
 
-  const config = FORM_CONFIGS[formType]
+  const config = UPLOAD_CHANNEL_CONFIGS[uploadChannel]
 
   // 파일별 진행 상태 관리 { 파일명: 진행상태 }
   const [fileProgresses, setFileProgresses] = useState<Record<string, FileProgress>>({})
@@ -194,7 +206,7 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
   }
 
   const handleUpload = async () => {
-    if (files.length === 0) return
+    if (files.length === 0 || selectedYear == null || selectedMonth == null) return
 
     setIsUploading(true)
     // 모든 파일을 일단 업로드 중 상태로 초기화
@@ -205,11 +217,10 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
     setFileProgresses(initialProgresses)
 
     try {
-      const response = await documentsApi.upload(formType, files, selectedYear, selectedMonth)
+      const response = await documentsApi.upload(uploadChannel, files, selectedYear, selectedMonth)
 
-      // 선택된 년월을 로컬 스토리지에 저장 (양식지별로 독립적으로 저장)
-      localStorage.setItem(`lastSelectedYear_${formType}`, selectedYear.toString())
-      localStorage.setItem(`lastSelectedMonth_${formType}`, selectedMonth.toString())
+      localStorage.setItem(`lastSelectedYear_${uploadChannel}`, selectedYear.toString())
+      localStorage.setItem(`lastSelectedMonth_${uploadChannel}`, selectedMonth.toString())
 
       setTaskId(response.session_id)
 
@@ -315,7 +326,7 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
   }
 
   // 개별 파일 삭제 (분석 개시 전에만 가능)
-  const handleRemoveFile = (fileName: string) => {
+  const handleRemoveFile = useCallback((fileName: string) => {
     if (isUploading) return // 분석 중에는 삭제 불가
     
     setFiles((prev) => prev.filter((file) => file.name !== fileName))
@@ -324,7 +335,7 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
       delete newProgresses[fileName]
       return newProgresses
     })
-  }
+  }, [isUploading])
 
   // 파일별 진행 상태 메시지 생성
   const getFileStatusMessage = (fileName: string): string => {
@@ -393,6 +404,9 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
     }
   }, [isHovered])
 
+  // 년·월 미선택 시 업로드 영역 비활성화
+  const isYearMonthRequired = selectedYear == null || selectedMonth == null
+
   // 모든 파일이 완료되었는지 확인
   const allFilesCompleted = useMemo(() => {
     if (files.length === 0) return false
@@ -401,16 +415,46 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
     ) && Object.keys(fileProgresses).length === files.length
   }, [files, fileProgresses])
 
+  // 오른쪽 패널에 업로드 진행 상태 전달
+  useEffect(() => {
+    onUploadProgressChange?.(uploadChannel, {
+      fileNames: files.map((f) => f.name),
+      progress: fileProgresses,
+      isUploading,
+    })
+  }, [uploadChannel, files, fileProgresses, isUploading, onUploadProgressChange])
+
+  // 오른쪽 패널에서 삭제 시 호출할 함수 등록
+  useEffect(() => {
+    onRegisterRemove?.(uploadChannel, handleRemoveFile)
+    return () => {
+      onRegisterRemove?.(uploadChannel, null)
+    }
+  }, [uploadChannel, handleRemoveFile, onRegisterRemove])
+
+
+  const handleCardClick = () => {
+    onShowFileList?.(uploadChannel)
+  }
 
   return (
     <div 
-      className={`form-upload-section ${files.length > 0 ? 'has-files' : ''}`} 
+      className={`form-upload-section ${files.length > 0 ? 'has-files' : ''} ${isListSelected ? 'form-upload-section-selected' : ''}`} 
       style={{ borderTopColor: config.color }}
+      onClick={handleCardClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && handleCardClick()}
+      aria-pressed={isListSelected}
     >
-      <div className="form-header" style={{ color: config.color }}>
-        {config.name}
-        <div
-          className="hover-info-container"
+      <div className="form-header">
+        <span>
+          <span style={{ color: '#0f172a', fontWeight: 600 }}>{config.name}</span>
+          <span className="form-header-label"> ({config.label})</span>
+        </span>
+        <div className="form-header-actions" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="hover-info-container"
           ref={hoverInfoRef}
           onMouseEnter={handleMouseEnter}
           onMouseMove={handleMouseMove}
@@ -420,30 +464,49 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
             i
           </span>
         </div>
+        </div>
       </div>
 
-      {/* 년월 선택 섹션 */}
-      <div className="year-month-selector">
-        <div className="selector-group">
-          
+      {/* 년월 선택 + 분석 개시 버튼 (한 줄, 높이 맞춤) */}
+      <div className="form-date-and-actions" onClick={(e) => e.stopPropagation()}>
+        <div className="year-month-selector">
           <select
-            value={selectedYear}
-            onChange={(e) => setSelectedYear(parseInt(e.target.value))}
+            value={selectedYear ?? ''}
+            onChange={(e) => setSelectedYear(e.target.value === '' ? null : parseInt(e.target.value))}
             className="year-selector"
+            aria-label="年を選択"
           >
-            {Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 2 + i).map(year => (
+            <option value="">年を選択</option>
+            {Array.from({ length: 5 }, (_, i) => 2026 + i).map(year => (
               <option key={year} value={year}>{year}年</option>
             ))}
           </select>
           <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
+            value={selectedMonth ?? ''}
+            onChange={(e) => setSelectedMonth(e.target.value === '' ? null : parseInt(e.target.value))}
             className="month-selector"
+            aria-label="月を選択"
           >
+            <option value="">月を選択</option>
             {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
               <option key={month} value={month}>{month.toString().padStart(2, '0')}月</option>
             ))}
           </select>
+        </div>
+        <div className="button-group">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleUpload() }}
+            disabled={files.length === 0 || isUploading || selectedYear == null || selectedMonth == null}
+            className="btn-primary"
+          >
+            {isUploading ? '処理中...' : `解析開始 (${files.length}件)`}
+          </button>
+          {files.length > 0 && (
+            <button type="button" onClick={(e) => { e.stopPropagation(); handleClear() }} className="btn-secondary" disabled={isUploading}>
+              クリア
+            </button>
+          )}
         </div>
       </div>
 
@@ -466,26 +529,11 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
         document.body
       )}
 
-      {/* 분석 개시 버튼 - 파일 업로드 영역 위에 위치 */}
-      <div className="button-group">
-        <button
-          onClick={handleUpload}
-          disabled={files.length === 0 || isUploading}
-          className="btn-primary"
-        >
-          {isUploading ? '処理中...' : `解析開始 (${files.length}件)`}
-        </button>
-        {files.length > 0 && (
-          <button onClick={handleClear} className="btn-secondary" disabled={isUploading}>
-            クリア
-          </button>
-        )}
-      </div>
-
       {/* 완료 후 새 파일 업로드 버튼 */}
       {allFilesCompleted && files.length > 0 && (
-        <div className="new-upload-button-container">
+        <div className="new-upload-button-container" onClick={(e) => e.stopPropagation()}>
           <button 
+            type="button"
             onClick={handleNewUpload}
             className="btn-new-upload"
           >
@@ -500,35 +548,41 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
         accept=".pdf"
         multiple
         onChange={handleFileChange}
-        disabled={isUploading}
+        disabled={isUploading || isYearMonthRequired}
         style={{ display: 'none' }}
-        id={`file-input-${formType}`}
+        id={`file-input-${uploadChannel}`}
       />
 
       <label
-        htmlFor={`file-input-${formType}`}
-        className={`file-input-label ${allFilesCompleted ? 'completed-state' : ''}`}
+        htmlFor={`file-input-${uploadChannel}`}
+        className={`file-input-label ${allFilesCompleted ? 'completed-state' : ''} ${isYearMonthRequired ? 'disabled-no-year-month' : ''}`}
         style={{ 
-          opacity: isUploading ? 0.5 : 1,
+          opacity: isUploading ? 0.5 : isYearMonthRequired ? 0.7 : 1,
           pointerEvents: isUploading ? 'none' : 'auto',
-          cursor: isUploading ? 'not-allowed' : 'pointer'
+          cursor: isUploading ? 'not-allowed' : isYearMonthRequired ? 'pointer' : 'pointer'
         }}
         onClick={(e) => {
+          e.stopPropagation()
           if (isUploading) {
             e.preventDefault()
+            return
+          }
+          if (isYearMonthRequired) {
+            e.preventDefault()
             e.stopPropagation()
+            alert('年・月を選択してください。')
             return
           }
           // htmlFor로 인한 기본 동작을 막고, 직접 input을 클릭하여 이벤트 중복 방지
           e.preventDefault()
-          if (fileInputRef.current && !isUploading) {
+          if (fileInputRef.current) {
             fileInputRef.current.click() // 파일 선택 대화상자 열기
           }
         }}
         onDragOver={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          e.currentTarget.classList.add('drag-over')
+          if (!isYearMonthRequired) e.currentTarget.classList.add('drag-over')
         }}
         onDragLeave={(e) => {
           e.preventDefault()
@@ -539,7 +593,11 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
           e.preventDefault()
           e.stopPropagation()
           e.currentTarget.classList.remove('drag-over')
-          if (isUploading) return // 업로드 중에는 드롭 불가
+          if (isUploading) return
+          if (isYearMonthRequired) {
+            alert('年・月を選択してください。')
+            return
+          }
           if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
             const droppedFiles = Array.from(e.dataTransfer.files).filter(
               (file) => file.type === 'application/pdf'
@@ -565,62 +623,11 @@ export const FormUploadSection = ({ formType }: FormUploadSectionProps) => {
         </div>
         <div className="file-upload-text">
           <span className="file-upload-main-text">PDFファイルを選択</span>
-          <span className="file-upload-sub-text">またはドラッグ＆ドロップ</span>
+          <span className="file-upload-sub-text">
+            {isYearMonthRequired ? '年・月を選択してください' : 'またはドラッグ＆ドロップ'}
+          </span>
         </div>
       </label>
-
-      {/* 파일 목록 - 파일별 진행 상태 표시 */}
-      {files.length > 0 && (
-        <div className="file-list">
-          {files.map((file, idx) => {
-            const progress = fileProgresses[file.name]
-            const statusMessage = getFileStatusMessage(file.name)
-            const isProcessing = progress?.status === 'processing'
-            const isCompleted = progress?.status === 'completed'
-            const isError = progress?.status === 'error'
-
-            return (
-              <div key={idx} className="file-item">
-                <div className="file-item-name">{file.name}</div>
-                <div className="file-item-footer">
-                  {!isUploading && (
-                    <button
-                      onClick={() => handleRemoveFile(file.name)}
-                      className="file-item-delete"
-                      title="ファイルを削除"
-                    >
-                      🗑️
-                    </button>
-                  )}
-                  {statusMessage && (
-                    <div
-                      className={`file-item-status ${
-                        isCompleted
-                          ? 'status-completed'
-                          : isError
-                          ? 'status-error'
-                          : isProcessing
-                          ? 'status-processing'
-                          : 'status-pending'
-                      }`}
-                    >
-                      {statusMessage}
-                      {isProcessing && progress.progress !== undefined && (
-                        <div className="file-progress-bar">
-                          <div
-                            className="file-progress-fill"
-                            style={{ width: `${progress.progress * 100}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }

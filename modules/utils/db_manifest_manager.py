@@ -41,7 +41,7 @@ class DBManifestManager:
                     learning_id, pdf_filename, page_number, status,
                     page_hash, fingerprint_mtime, fingerprint_size, shard_id,
                     created_at, updated_at
-                FROM rag_learning_status
+                FROM rag_learning_status_current
                 WHERE pdf_filename = %s AND page_number = %s
             """, (pdf_filename, page_number))
             
@@ -173,7 +173,7 @@ class DBManifestManager:
                 
                 # UPSERT (있으면 업데이트, 없으면 삽입)
                 cursor.execute("""
-                    INSERT INTO rag_learning_status (
+                    INSERT INTO rag_learning_status_current (
                         pdf_filename, page_number, status, page_hash,
                         fingerprint_mtime, fingerprint_size, shard_id
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -210,7 +210,7 @@ class DBManifestManager:
                 page_number = page_info['page_number']
                 
                 cursor.execute("""
-                    UPDATE rag_learning_status
+                    UPDATE rag_learning_status_current
                     SET status = 'merged', updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s AND page_number = %s
                 """, (pdf_filename, page_number))
@@ -230,7 +230,7 @@ class DBManifestManager:
                 page_number = page_info['page_number']
                 
                 cursor.execute("""
-                    UPDATE rag_learning_status
+                    UPDATE rag_learning_status_current
                     SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s AND page_number = %s
                 """, (pdf_filename, page_number))
@@ -249,7 +249,7 @@ class DBManifestManager:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT pdf_filename, page_number
-                    FROM rag_learning_status
+                    FROM rag_learning_status_current
                 """)
                 
                 page_keys = set()
@@ -278,7 +278,7 @@ class DBManifestManager:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT pdf_filename, page_number
-                FROM rag_learning_status
+                FROM rag_learning_status_current
                 WHERE status = 'staged'
             """)
             
@@ -305,7 +305,7 @@ class DBManifestManager:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT pdf_filename, page_number
-                FROM rag_learning_status
+                FROM rag_learning_status_current
                 WHERE status = 'deleted'
             """)
             
@@ -328,16 +328,15 @@ class DBManifestManager:
                 cursor.execute("""
                     SELECT EXISTS (
                         SELECT FROM information_schema.tables 
-                        WHERE table_name = 'rag_learning_status'
+                        WHERE table_name = 'rag_learning_status_current'
                     )
                 """)
                 table_exists = cursor.fetchone()[0]
                 
                 if not table_exists:
-                    print("📋 RAG 학습 상태 테이블이 없습니다. 생성 중...")
-                    # rag_learning_status 테이블 생성
+                    print("📋 RAG 학습 상태 테이블(현재연월)이 없습니다. 생성 중...")
                     cursor.execute("""
-                        CREATE TABLE rag_learning_status (
+                        CREATE TABLE rag_learning_status_current (
                             learning_id SERIAL PRIMARY KEY,
                             pdf_filename VARCHAR(500) NOT NULL,
                             page_number INTEGER NOT NULL,
@@ -351,20 +350,19 @@ class DBManifestManager:
                             UNIQUE(pdf_filename, page_number)
                         )
                     """)
-                    # 인덱스 생성
                     cursor.execute("""
-                        CREATE INDEX idx_rag_learning_status_pdf_page 
-                        ON rag_learning_status(pdf_filename, page_number)
+                        CREATE INDEX idx_rag_learning_status_current_pdf_page
+                        ON rag_learning_status_current(pdf_filename, page_number)
                     """)
                     cursor.execute("""
-                        CREATE INDEX idx_rag_learning_status_status 
-                        ON rag_learning_status(status)
+                        CREATE INDEX idx_rag_learning_status_current_status
+                        ON rag_learning_status_current(status)
                     """)
                     cursor.execute("""
-                        CREATE INDEX idx_rag_learning_status_hash 
-                        ON rag_learning_status(page_hash)
+                        CREATE INDEX idx_rag_learning_status_current_hash
+                        ON rag_learning_status_current(page_hash)
                     """)
-                    print("✅ RAG 학습 상태 테이블 생성 완료")
+                    print("✅ RAG 학습 상태 테이블(현재연월) 생성 완료")
         except psycopg2.Error as e:
             print(f"⚠️ 테이블 생성 중 오류 발생: {e}")
             # 오류가 발생해도 계속 진행 (테이블이 이미 존재할 수 있음)
