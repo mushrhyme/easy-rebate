@@ -12,15 +12,19 @@ export interface User {
   is_active: boolean
   last_login_at?: string
   login_count: number
+  must_change_password?: boolean
 }
 
 interface AuthContextType {
   user: User | null
   sessionId: string | null
   isLoading: boolean
-  login: (username: string) => Promise<{ success: boolean; message: string }>
+  mustChangePassword: boolean
+  login: (username: string, password: string) => Promise<{ success: boolean; message: string }>
   logout: () => Promise<void>
   checkAuth: () => Promise<boolean>
+  changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; message: string }>
+  clearMustChangePassword: () => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -41,6 +45,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [mustChangePassword, setMustChangePassword] = useState(false)
 
   // 세션 ID를 로컬 스토리지에서 불러오기
   useEffect(() => {
@@ -61,8 +66,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const data = await authApi.validateSession()
 
-      if (data.valid) {
-        setUser(data.user)
+      if (data.valid && data.user) {
+        setUser({
+          ...data.user,
+          is_active: true,
+          login_count: 0,
+          must_change_password: (data as { must_change_password?: boolean }).must_change_password ?? false,
+        })
+        setMustChangePassword((data as { must_change_password?: boolean }).must_change_password ?? false)
         return true
       }
 
@@ -82,30 +93,34 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }
 
-  const login = async (username: string): Promise<{ success: boolean; message: string }> => {
+  const login = async (username: string, password: string): Promise<{ success: boolean; message: string }> => {
     try {
       setIsLoading(true)
       console.log('🔵 [로그인] 로그인 시도:', username)
 
-      const data = await authApi.login(username)
+      const data = await authApi.login(username, password)
       console.log('🔵 [로그인] API 응답:', data)
 
       if (data.success) {
+        const mustChange = data.must_change_password ?? false
         console.log('✅ [로그인] 로그인 성공:', {
           user_id: data.user_id,
           username: data.username,
-          session_id: data.session_id?.substring(0, 20) + '...'
+          session_id: data.session_id?.substring(0, 20) + '...',
+          must_change_password: mustChange,
         })
         setUser({
-          user_id: data.user_id,
-          username: data.username,
-          display_name: data.display_name,
+          user_id: data.user_id!,
+          username: data.username!,
+          display_name: data.display_name!,
           display_name_ja: data.display_name_ja,
           is_active: true,
-          login_count: 0
+          login_count: 0,
+          must_change_password: mustChange,
         })
-        setSessionId(data.session_id)
-        localStorage.setItem('sessionId', data.session_id)
+        setMustChangePassword(mustChange)
+        setSessionId(data.session_id ?? null)
+        if (data.session_id) localStorage.setItem('sessionId', data.session_id)
         return { success: true, message: data.message }
       } else {
         console.warn('⚠️ [로그인] 로그인 실패:', data.message)
@@ -145,13 +160,38 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return await checkAuthStatus(sessionId)
   }
 
+  const changePassword = async (
+    currentPassword: string,
+    newPassword: string
+  ): Promise<{ success: boolean; message: string }> => {
+    try {
+      const data = await authApi.changePassword(currentPassword, newPassword)
+      if (data.success) {
+        setMustChangePassword(false)
+        setUser((prev) => (prev ? { ...prev, must_change_password: false } : null))
+      }
+      return data
+    } catch (error: any) {
+      const message = error?.response?.data?.detail || error?.message || '비밀번호 변경에 실패했습니다'
+      return { success: false, message: typeof message === 'string' ? message : JSON.stringify(message) }
+    }
+  }
+
+  const clearMustChangePassword = () => {
+    setMustChangePassword(false)
+    setUser((prev) => (prev ? { ...prev, must_change_password: false } : null))
+  }
+
   const value: AuthContextType = {
     user,
     sessionId,
     isLoading,
+    mustChangePassword,
     login,
     logout,
-    checkAuth
+    checkAuth,
+    changePassword,
+    clearMustChangePassword,
   }
 
   return (
