@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.12.2",
-    "axios": "^1.6.2",
+    "axios": "^1.13.5",
     "react": "^19.0.0",
+    "react-is": "^19.0.0",
     "react-data-grid": "^7.0.0-beta.25",
     "react-dom": "^19.0.0",
+    "recharts": "^3.7.0",
     "uuid": "^9.0.1",
     "zustand": "^4.4.7"
   },
@@ -22,13 +24,17 @@
     "@types/react": "^19.2.9",
     "@types/react-dom": "^19.2.3",
     "@types/uuid": "^9.0.7",
-    "@typescript-eslint/eslint-plugin": "^6.14.0",
-    "@typescript-eslint/parser": "^6.14.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "eslint": "^8.55.0",
+    "eslint": "^10.0.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "typescript": "^5.2.2",
     "vite": "^7.3.1"
+  },
+  "overrides": {
+    "ajv": ">=8.18.0",
+    "minimatch": ">=10.2.1"
   }
 }
