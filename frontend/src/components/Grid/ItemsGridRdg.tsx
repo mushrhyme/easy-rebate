@@ -462,8 +462,11 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   // 검토 탭 컬럼 순서: API의 item_data_keys(RAG key_order) 우선 사용, 없으면 첫 행 item_data 키 순서
   const itemDataKeysFromApi = data?.item_data_keys && data.item_data_keys.length > 0 ? data.item_data_keys : null
 
-  // 컬럼 정의
-  const columns = useMemo<Column<GridRow>[]>(() => {
+  // 컬럼 정의 + 행 높이 자동 계산 함수
+  const { columns, getRowHeight } = useMemo<{
+    columns: Column<GridRow>[]
+    getRowHeight: (row: GridRow) => number
+  }>(() => {
     // items가 비어있어도 기본 컬럼은 표시
 
     // items가 비어있을 때 기본 컬럼만 사용
@@ -517,33 +520,14 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       console.log('🔵 [ItemsGridRdg] orderedKeys(그리드에 표시되는 최종 컬럼 순서 전체)=', orderedKeys)
     }
 
-    // 컬럼 너비 계산 (데이터/헤더 길이 기준)
-    // - 기본 컬럼은 비교적 타이트하게
-    // - 거래처/상품명/비고 같은 본문 계열 컬럼은 조금만 더 여유 있게
-    // - 너무 길어도 컬럼이 모니터 한 화면을 다 먹지 않도록 최대 폭을 둔다
-    const BASE_CHAR_PX = 9 // 기본: 1문자당 9px (타이트)
-    const WIDE_CHAR_PX = 11 // 본문 계열: 1문자당 11px (약간 여유)
-    const PADDING_PX = 18 // 셀 패딩·테두리 여유
-    const MIN_COL_WIDTH = 80 // 기본 컬럼 최소 너비
-    const WIDE_MIN_COL_WIDTH = 140 // 본문 계열 컬럼 최소 너비
-    const MAX_COL_WIDTH = 220 // 기본 컬럼 최대 너비
-    const WIDE_MAX_COL_WIDTH = 280 // 본문 계열 컬럼 최대 너비
-
-    // 넓게 잡아야 하는 필드들 (거래처/상품명/비고 등)
-    const wideFieldKeys = new Set([
-      '得意先',
-      '得意先名',
-      '商品名',
-      '備考',
-    ])
+    // 컬럼 너비: 컬럼명 길이 vs 데이터 최대 길이 중 큰 쪽 기준 (일본어 헤더가 한 줄에 들어가도록 글자당 여유)
+    const CHAR_PX = 11   // 일본어·한글 글자당 픽셀 (컬럼명 한 줄 표시용)
+    const PADDING_PX = 18
+    const COL_WIDTH_MIN = 78  // 4글자 컬럼명(数量単位 등) 한 줄 최소
+    const COL_WIDTH_MAX = 280
 
     const calculateColumnWidth = (key: string, name: string): number => {
-      const isWide = wideFieldKeys.has(key)
-      const charPx = isWide ? WIDE_CHAR_PX : BASE_CHAR_PX
-      const minWidth = isWide ? WIDE_MIN_COL_WIDTH : MIN_COL_WIDTH
-      const maxWidth = isWide ? WIDE_MAX_COL_WIDTH : MAX_COL_WIDTH
-
-      const headerWidth = name.length * charPx + PADDING_PX
+      const headerWidth = name.length * CHAR_PX + PADDING_PX
       let maxDataLength = 0
       if (hasItems) {
         items.forEach((item) => {
@@ -554,33 +538,35 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           }
         })
       }
-      const dataWidth = maxDataLength * charPx + PADDING_PX
-      // 헤더/데이터 길이/최소 너비 중 가장 큰 값 사용하되,
-      // 최대 폭을 넘어가면 잘라서 너무 넓어지지 않도록 함
-      const rawWidth = Math.max(headerWidth, dataWidth, minWidth)
-      return Math.min(rawWidth, maxWidth)
+      const dataWidth = maxDataLength * CHAR_PX + PADDING_PX
+      const rawWidth = Math.max(headerWidth, dataWidth, COL_WIDTH_MIN)
+      return Math.min(rawWidth, COL_WIDTH_MAX)
     }
 
     const cols: Column<GridRow>[] = [
       {
         key: 'item_order',
-        name: 'No',
-        // 고정 컬럼: 항상 고정 픽셀 너비 사용
-        width: 36,
-        minWidth: 36,
+        name: '行',
+        width: 34,
+        minWidth: 34,
         frozen: true,
         resizable: false,
+        renderCell: ({ row }) => (
+          <div className="rdg-cell-no" title={`No. ${row.item_order}`}>
+            {row.item_order}
+          </div>
+        ),
       },
     ]
 
     // items가 있을 때만 편집 및 검토 컬럼 추가
     if (hasItems) {
-      // 통합 액션 컬럼 (편집/추가/삭제)
+      // 통합 액션 컬럼 (편집/추가/삭제) - ヘッダ短縮で幅を最小化
       cols.push({
         key: 'actions',
-        name: '操作',
-        width: 45,
-        minWidth: 45,
+        name: '編',
+        width: 34,
+        minWidth: 34,
         frozen: true,
         resizable: false,
         renderCell: ({ row }) => {
@@ -801,7 +787,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
             key,
             name: key,
             width: dataBasedWidth,
-            minWidth: Math.max(dataBasedWidth, MIN_COL_WIDTH),
+            minWidth: Math.max(dataBasedWidth, COL_WIDTH_MIN),
             resizable: true,
             renderCell: ({ row }) => {
               const isEditing = editingItemIds.has(row.item_id)
@@ -832,13 +818,13 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     const getColWidth = (col: Column<GridRow>): number => {
       const w = col.width
       if (typeof w === 'number') return w
-      if (typeof w === 'string') return parseInt(w, 10) || MIN_COL_WIDTH
-      return MIN_COL_WIDTH
+      if (typeof w === 'string') return parseInt(w, 10) || COL_WIDTH_MIN
+      return COL_WIDTH_MIN
     }
     const adjustedCols: Column<GridRow>[] = cols.map((col) => {
       const w = getColWidth(col)
       const existingMin = col.minWidth
-      const minW = existingMin != null ? existingMin : (col.frozen ? w : Math.max(w, MIN_COL_WIDTH))
+      const minW = existingMin != null ? existingMin : (col.frozen ? w : Math.max(w, COL_WIDTH_MIN))
       return { ...col, width: w, minWidth: minW }
     })
 
@@ -846,6 +832,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     // 고정(frozen) 컬럼은 그대로 두고, 나머지 컬럼들을 스케일업해서 오른쪽 여백을 최대한 제거
     const totalWidth = adjustedCols.reduce((sum, col) => sum + getColWidth(col), 0)
     const availableWidth = containerWidth || totalWidth
+    let scaledCols: Column<GridRow>[] | null = null
 
     if (availableWidth > 0 && totalWidth < availableWidth) {
       const frozenCols = adjustedCols.filter((col) => col.frozen)
@@ -860,12 +847,12 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         const scale = targetFlexibleWidth / flexibleWidth
         let remaining = availableWidth - frozenWidth
 
-        const scaled = adjustedCols.map((col, idx) => {
+        scaledCols = adjustedCols.map((col, idx) => {
           if (col.frozen) {
             return col
           }
           const w = getColWidth(col)
-          let newWidth = Math.max(col.minWidth ?? MIN_COL_WIDTH, Math.floor(w * scale))
+          let newWidth = Math.max(col.minWidth ?? COL_WIDTH_MIN, Math.floor(w * scale))
 
           // 마지막 flexible 컬럼에 남은 여유를 몰아서 줘서 합이 딱 맞도록 조정
           const isLastFlexible = adjustedCols
@@ -879,12 +866,39 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           remaining -= newWidth
           return { ...col, width: newWidth }
         })
-
-        return scaled
       }
     }
 
-    return adjustedCols
+    const finalCols = scaledCols ?? adjustedCols
+
+    // 행 높이 자동 계산: 줄바꿈 가능 컬럼(商品名, 条件備考 등) 너비로 필요한 줄 수 추정 → 잘림 방지
+    const WIDE_KEYS = new Set(['得意先', '得意先名', '商品名', '備考', '条件備考'])
+    const wrapColumnWidths: Record<string, number> = {}
+    finalCols.forEach((col) => {
+      if (WIDE_KEYS.has(col.key)) wrapColumnWidths[col.key] = getColWidth(col)
+    })
+    // 일본어·한글은 글자당 폭이 커서 PX_PER_CHAR를 크게 잡아 한 줄당 글자 수를 적게 → 줄 수를 넉넉히 추정
+    const PX_PER_CHAR = 16
+    const LINE_HEIGHT_PX = 22 // line-height + 여유 (폰트에 따라 잘림 방지)
+    const CELL_PADDING_V = 12
+    const ROW_HEIGHT_BUFFER = 8 // 세로 잘림 방지
+    const MIN_ROW_HEIGHT = 36
+
+    const getRowHeight = (row: GridRow): number => {
+      let maxLines = 1
+      for (const [key, width] of Object.entries(wrapColumnWidths)) {
+        const val = row[key]
+        if (val == null) continue
+        const str = String(val)
+        const charsPerLine = Math.max(1, Math.floor(width / PX_PER_CHAR))
+        const lines = Math.ceil(str.length / charsPerLine)
+        if (lines > maxLines) maxLines = lines
+      }
+      const contentHeight = CELL_PADDING_V + maxLines * LINE_HEIGHT_PX + ROW_HEIGHT_BUFFER
+      return Math.max(MIN_ROW_HEIGHT, contentHeight)
+    }
+
+    return { columns: finalCols, getRowHeight }
   }, [items, itemDataKeysFromApi, editingItemIds, handleCellChange, handleCheckboxUpdate, containerWidth, isItemLocked, getLockedBy, sessionId])
 
 
@@ -1388,6 +1402,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
             ref={gridRef}
             columns={columns}
             rows={rows}
+            rowHeight={getRowHeight}
             onRowsChange={onRowsChange}
             onCellDoubleClick={handleCellDoubleClick}
             rowKeyGetter={(row: GridRow) => row.item_id} // 행 고유 키 지정
@@ -1580,13 +1595,13 @@ const ActionCellWithMenu = ({
         onMouseEnter={onMouseEnter}
         onMouseLeave={onMouseLeave}
       >
-        {/* 기본 버튼 (항상 표시) */}
+        {/* 기본: 연필 / 編集中 or 他ユーザーがロック: 鍵 */}
         <button
           ref={buttonRef}
-          className="btn-action-main"
-          title="操作メニュー"
+          className={`btn-action-main ${(isEditing || isLockedByOthers) ? 'btn-action-main-locked' : ''}`}
+          title={isLockedByOthers ? `編集中: ${lockedBy ?? ''}` : isEditing ? '編集中' : '操作メニュー'}
         >
-          ⋮
+          {isEditing || isLockedByOthers ? '🔒' : '✏️'}
         </button>
       </div>
       {/* 호버 메뉴를 Portal로 body에 렌더링 */}

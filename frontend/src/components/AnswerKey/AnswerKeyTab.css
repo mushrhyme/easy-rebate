@@ -156,7 +156,7 @@
 .answer-key-left-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: auto; /* 画像拡大時に縦横スクロール */
   display: flex;
   flex-direction: column;
 }
@@ -167,6 +167,17 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+}
+
+.answer-key-page-view-zoom {
+  /* Ctrl+ホイールで拡大縮小時のスクロール用 */
+  min-width: 0;
+}
+
+.answer-key-image-zoom-wrapper {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
 }
 
 .answer-key-page-img {

@@ -41,6 +41,36 @@
   border-radius: 4px;
 }
 
+/* No 列: 中央揃え・可読性・2桁は改行させない */
+.rdg-cell-no {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #444;
+  padding: 0 2px;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  min-width: 0;
+}
+
+/* No 列セル全体で改行禁止（親の word-break を上書き） */
+.items-grid-rdg .rdg-cell:nth-child(1),
+.rdg-container .rdg .rdg-cell:nth-child(1),
+.items-grid-rdg .rdg-cell:nth-child(1) {
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+.items-grid-rdg .rdg-cell:nth-child(1) > div,
+.rdg-container .rdg .rdg-cell:nth-child(1) > div,
+.items-grid-rdg .rdg-cell:nth-child(1) > div {
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+
 /* グリッド内編集ボタンスタイル (레거시 - 호환성 유지) */
 .btn-edit-inline,
 .btn-cancel-inline,
@@ -136,11 +166,20 @@
   --rdg-font-size: 14px;
   --rdg-header-color: #333;
   --rdg-header-font-weight: 600;
-  /* 행/헤더 기본 높이를 조금 넉넉하게 */
-  --rdg-row-height: 42px;
-  --rdg-header-row-height: 44px;
-  /* 셀 안쪽 여백도 기본값보다 약간 크게 */
-  --rdg-cell-padding: 10px;
+  --rdg-row-height: 36px;
+  --rdg-header-row-height: 40px;
+  --rdg-cell-padding: 6px 8px;
+}
+
+/* ヘッダー・本体セル共通: 幅計算を揃える */
+.items-grid-rdg .rdg-cell,
+.rdg-container .rdg .rdg-cell,
+.rdg .rdg-cell,
+.items-grid-rdg .rdg-header-row .rdg-cell,
+.rdg-container .rdg-header-row .rdg-cell,
+.rdg .rdg-header-row .rdg-cell {
+  box-sizing: border-box !important;
+  padding: 6px 8px !important;
 }
 
 /* 그리드 셀: 텍스트 전체 표시(줄바꿈), react-data-grid 기본 ellipsis/clip 제거 */
@@ -151,9 +190,7 @@
   border-bottom: 1px solid #d0d0d0;
   color: #333;
   font-size: 14px;
-  /* 두 줄까지 들어가도 답답하지 않도록 상하 여백을 조금 더 줌 */
-  padding: 10px 8px;
-  min-height: 38px;
+  min-height: 28px;
   overflow: visible !important;
   text-overflow: unset !important;
   white-space: normal !important;
@@ -172,7 +209,7 @@
   word-break: break-word;
 }
 
-/* 헤더 셀 스타일 */
+/* 헤더 셀 스타일 - 본문과 동일 padding/border로 열 맞춤 */
 .rdg-header-row {
   background-color: #f5f5f5;
   border-bottom: 2px solid #d0d0d0;
@@ -180,13 +217,26 @@
   color: #333;
 }
 
+.rdg-header-row .rdg-cell,
 .rdg-header-cell {
   border-right: 1px solid #d0d0d0;
-  padding: 10px 8px;
+  padding: 6px 8px !important;
   font-weight: 600;
   color: #333;
   white-space: normal;
   word-wrap: break-word;
+  box-sizing: border-box !important;
+}
+
+/* No / Act 列ヘッダー中央揃え */
+.items-grid-rdg .rdg-header-row .rdg-cell:nth-child(1),
+.items-grid-rdg .rdg-header-row .rdg-cell:nth-child(2),
+.rdg-container .rdg-header-row .rdg-cell:nth-child(1),
+.rdg-container .rdg-header-row .rdg-cell:nth-child(2) {
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   word-break: break-word;
 }
 
@@ -493,10 +543,10 @@
   background: none;
   border: none;
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 2px 4px;
   border-radius: 4px;
   transition: all 0.2s ease;
-  font-size: 18px;
+  font-size: 14px;
   font-weight: bold;
   color: #666;
   display: flex;
@@ -509,6 +559,15 @@
 .btn-action-main:hover {
   background-color: #f0f0f0;
   color: #333;
+}
+
+/* 編集中 or 他ユーザーがロック時: 鍵アイコン表示 */
+.btn-action-main.btn-action-main-locked {
+  color: #c17a3a;
+}
+.btn-action-main.btn-action-main-locked:hover {
+  background-color: #fff4eb;
+  color: #a65c1a;
 }
 
 /* 호버 메뉴 - Portal로 body에 렌더링되므로 fixed positioning */

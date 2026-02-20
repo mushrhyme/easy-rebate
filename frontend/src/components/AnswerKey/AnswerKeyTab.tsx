@@ -81,16 +81,35 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
   const [newKeyInput, setNewKeyInput] = useState('')
   /** 정답 생성 시 사용할 모델: Gemini 2.5 Flash Lite | GPT 5.2 만 허용 */
   const [answerProvider, setAnswerProvider] = useState<'gemini' | 'gpt-5.2'>('gemini')
+  /** 画像 Ctrl+ホイール 拡大縮小 */
+  const [imageScale, setImageScale] = useState(1)
+  const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null)
+  const imageScrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setImageScale(1)
+    setImageSize(null)
+  }, [currentPage, selectedDoc?.pdf_filename])
+
+  useEffect(() => {
+    if (!imageSize || !imageScrollRef.current) return
+    const el = imageScrollRef.current
+    const cw = el.clientWidth
+    if (cw <= 0) return
+    /*  가로 스크롤 없음: 너비에 맞춤 → 세로만 스크롤 */
+    const scaleToWidth = cw / imageSize.w
+    setImageScale((s) => (s === 1 ? scaleToWidth : s))
+  }, [imageSize])
 
   const { data: documentsData } = useQuery({
-    queryKey: ['documents', 'all'],
-    queryFn: () => documentsApi.getList(),
+    queryKey: ['documents', 'for-answer-key-tab'],
+    queryFn: () => documentsApi.getListForAnswerKeyTab(),
   })
 
   const revokeAnswerKeyMutation = useMutation({
     mutationFn: (pdfFilename: string) => documentsApi.revokeAnswerKeyDocument(pdfFilename),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'for-answer-key-tab'] })
       setShowRevokeModal(false)
       setSelectedDoc(null)
       setRows([])
@@ -254,8 +273,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
   })
   const documents: Document[] = useMemo(() => {
     const raw = documentsData?.documents
-    const all = Array.isArray(raw) ? raw : []
-    return all.filter((d) => !!d.is_answer_key_document)
+    return Array.isArray(raw) ? raw : []
   }, [documentsData])
 
   // 검토 탭에서 정답지 지정 후 넘어온 경우 해당 문서 자동 선택
@@ -1200,15 +1218,46 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                 次 →
               </button>
             </div>
-            <div className="answer-key-left-scroll">
-              <div className="answer-key-page-view">
+            <div ref={imageScrollRef} className="answer-key-left-scroll">
+              <div
+                className="answer-key-page-view answer-key-page-view-zoom"
+                onWheel={(e) => {
+                  if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault()
+                    setImageScale((s) => Math.min(3, Math.max(0.25, s - e.deltaY * 0.002)))
+                  }
+                }}
+              >
                 {!allImagesLoaded && <p className="answer-key-loading">画像読み込み中…</p>}
                 {allImagesLoaded && imageUrls[currentPage - 1] && (
-                  <img
-                    src={imageUrls[currentPage - 1]!}
-                    alt={`Page ${currentPage}`}
-                    className="answer-key-page-img"
-                  />
+                  <div
+                    className="answer-key-image-zoom-wrapper"
+                    style={
+                      imageSize
+                        ? { width: imageSize.w * imageScale, height: imageSize.h * imageScale }
+                        : undefined
+                    }
+                  >
+                    <img
+                      src={imageUrls[currentPage - 1]!}
+                      alt={`Page ${currentPage}`}
+                      className="answer-key-page-img"
+                      onLoad={(e) => {
+                        const img = e.currentTarget
+                        setImageSize({ w: img.naturalWidth, h: img.naturalHeight })
+                      }}
+                      style={
+                        imageSize
+                          ? {
+                              width: imageSize.w,
+                              height: imageSize.h,
+                              transform: `scale(${imageScale})`,
+                              transformOrigin: '0 0',
+                            }
+                          : undefined
+                      }
+                    />
+                  </div>
                 )}
               </div>
               <div className="answer-key-ocr-section">

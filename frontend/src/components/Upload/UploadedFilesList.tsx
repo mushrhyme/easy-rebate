@@ -1,13 +1,14 @@
 /**
  * アップロード済みファイル一覧（チャネル別・様式別・削除対応）
  */
-import { useState } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { documentsApi } from '@/api/client'
 import type { UploadChannel } from '@/types'
 import type { Document } from '@/types'
 import { UPLOAD_CHANNEL_CONFIGS } from '@/config/formConfig'
 import { useFormTypes } from '@/hooks/useFormTypes'
+import { formatDocumentDateLabel, getDocumentYearMonth } from '@/utils/documentDate'
 import './UploadedFilesList.css'
 
 interface UploadedFilesListProps {
@@ -17,33 +18,6 @@ interface UploadedFilesListProps {
   filterMonth?: number | null
   onSelectDocument?: (pdfFilename: string, totalPages: number) => void
   selectedPdfFilename?: string | null
-}
-
-function formatDate(created_at?: string, data_year?: number, data_month?: number): string {
-  if (data_year && data_month) {
-    return `${data_year}年${String(data_month).padStart(2, '0')}月`
-  }
-  if (created_at) {
-    const d = new Date(created_at)
-    if (!isNaN(d.getTime())) {
-      return `${d.getFullYear()}年${String(d.getMonth() + 1).padStart(2, '0')}月${String(d.getDate()).padStart(2, '0')}日`
-    }
-  }
-  return '—'
-}
-
-function getDocYearMonth(doc: Document): { year: number; month: number } {
-  if (doc.data_year && doc.data_month && doc.data_year > 0 && doc.data_month >= 1 && doc.data_month <= 12) {
-    return { year: doc.data_year, month: doc.data_month }
-  }
-  const dateString = doc.created_at || doc.upload_date
-  if (dateString) {
-    const d = new Date(dateString)
-    if (!isNaN(d.getTime())) {
-      return { year: d.getFullYear(), month: d.getMonth() + 1 }
-    }
-  }
-  return { year: new Date().getFullYear(), month: new Date().getMonth() + 1 }
 }
 
 export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, onSelectDocument, selectedPdfFilename }: UploadedFilesListProps) {
@@ -57,6 +31,20 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
     queryKey: ['documents', 'upload_channel', selectedChannel],
     queryFn: () => documentsApi.getList(selectedChannel),
   })
+
+  const { data: inVectorData } = useQuery({
+    queryKey: ['documents', 'in-vector-index'],
+    queryFn: () => documentsApi.getInVectorIndex(),
+    refetchInterval: 60000,
+  })
+  const pdfFilenamesInVector = useMemo(
+    () => new Set((inVectorData?.pdf_filenames ?? []).map((f) => (f ?? '').trim().toLowerCase())),
+    [inVectorData?.pdf_filenames]
+  )
+  const isInVector = useCallback(
+    (pdfFilename: string) => pdfFilenamesInVector.has((pdfFilename ?? '').trim().toLowerCase()),
+    [pdfFilenamesInVector]
+  )
 
   const deleteMutation = useMutation({
     mutationFn: (pdfFilename: string) => documentsApi.delete(pdfFilename),
@@ -92,7 +80,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
   const byYearMonth =
     filterYear != null && filterMonth != null
       ? allDocuments.filter((doc) => {
-          const { year, month } = getDocYearMonth(doc)
+          const { year, month } = getDocumentYearMonth(doc)
           return year === filterYear && month === filterMonth
         })
       : allDocuments
@@ -148,6 +136,11 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
         <>
           <div className="uploaded-files-list-summary">
             {total}件
+            {inVectorData && (
+              <span className="uploaded-files-list-legend" title="学習に活用されている文書数">
+                　学習に活用されている文書は緑でハイライト
+              </span>
+            )}
           </div>
           <div className="uploaded-files-list-table-wrap">
             <table className="uploaded-files-list-table">
@@ -164,7 +157,11 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
                 {documents.map((doc: Document) => (
                   <tr
                     key={doc.pdf_filename}
-                    className={selectedPdfFilename === doc.pdf_filename ? 'uploaded-files-list-row-selected' : ''}
+                    className={[
+                      selectedPdfFilename === doc.pdf_filename ? 'uploaded-files-list-row-selected' : '',
+                      isInVector(doc.pdf_filename) ? 'uploaded-files-list-row-in-vector' : '',
+                    ].filter(Boolean).join(' ')}
+                    title={isInVector(doc.pdf_filename) ? '学習に活用されています' : undefined}
                     onClick={() => onSelectDocument?.(doc.pdf_filename, doc.total_pages)}
                     role={onSelectDocument ? 'button' : undefined}
                     tabIndex={onSelectDocument ? 0 : undefined}
@@ -190,7 +187,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
                       </select>
                     </td>
                     <td className="uploaded-files-list-cell-date">
-                      {formatDate(doc.created_at, doc.data_year, doc.data_month)}
+                      {formatDocumentDateLabel(doc)}
                     </td>
                     <td className="uploaded-files-list-cell-pages">{doc.total_pages}ページ</td>
                     <td className="uploaded-files-list-cell-actions">

@@ -1,7 +1,9 @@
 /**
- * APIクライアント
+ * APIクライアント (도메인별 래퍼)
+ * - HTTP 설정 및 인터셉터는 `httpClient.ts`에서 관리
+ * - 여기서는 도메인별 API 객체만 정의한다.
  */
-import axios from 'axios'
+import client from './httpClient'
 import type {
   DocumentListResponse,
   Item,
@@ -10,110 +12,6 @@ import type {
   PageImageResponse,
   UploadResponse,
 } from '@/types'
-import { getApiBaseUrl } from '@/utils/apiConfig'
-
-const API_BASE_URL = getApiBaseUrl()
-
-console.log('🔵 [API Client] 初期化 - baseURL:', API_BASE_URL)
-
-const client = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
-
-// リクエストインターセプター: セッションヘッダー追加およびログ
-client.interceptors.request.use(
-  (config) => {
-    // FormData인 경우 Content-Type 헤더 제거 (axios가 자동으로 multipart/form-data 설정)
-    if (config.data instanceof FormData) {
-      if (config.headers) {
-        if ('delete' in config.headers && typeof config.headers.delete === 'function') {
-          // AxiosHeaders 인스턴스
-          config.headers.delete('Content-Type')
-        } else if (typeof config.headers === 'object') {
-          // 일반 객체
-          delete (config.headers as Record<string, string>)['Content-Type']
-        }
-      }
-    }
-    
-    // セッションIDをヘッダーに追加
-    const sessionId = localStorage.getItem('sessionId')
-    if (sessionId) {
-      // headers를 안전하게 설정
-      if (!config.headers) {
-        config.headers = {} as any
-      }
-      // AxiosHeaders 또는 일반 객체 모두 처리
-      if (config.headers && typeof config.headers === 'object') {
-        if ('set' in config.headers && typeof config.headers.set === 'function') {
-          // AxiosHeaders 인스턴스
-          config.headers.set('X-Session-ID', sessionId)
-        } else {
-          // 일반 객체
-          (config.headers as Record<string, string>)['X-Session-ID'] = sessionId
-        }
-      }
-    }
-
-    console.log('🔵 [API Request]', config.method?.toUpperCase(), config.baseURL + config.url, {
-      params: config.params,
-      hasSessionId: !!sessionId,
-      isFormData: config.data instanceof FormData,
-    })
-    return config
-  },
-  (error) => {
-    console.error('❌ [API Request Error]', error)
-    return Promise.reject(error)
-  }
-)
-
-// レスポンスインターセプター: エラーログ
-client.interceptors.response.use(
-  (response) => {
-    console.log('✅ [API Response]', response.config.method?.toUpperCase(), response.config.url, response.status)
-    return response
-  },
-  (error) => {
-    const errorInfo = {
-      url: error.config?.url,
-      method: error.config?.method,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
-      message: error.message,
-      code: error.code,
-    }
-    console.error('❌ [API Response Error]', errorInfo)
-    
-    // 세션 만료 에러 처리
-    const errorDetail = error.response?.data?.detail || error.response?.data?.message || ''
-    if (
-      error.response?.status === 401 ||
-      (error.response?.status === 409 && typeof errorDetail === 'string' && 
-       (errorDetail.includes('Session expired') || errorDetail.includes('세션') || errorDetail.includes('Session expired or invalid')))
-    ) {
-      console.warn('⚠️ [세션 에러] 세션이 유효하지 않습니다. localStorage에서 세션 제거:', {
-        status: error.response?.status,
-        detail: errorDetail,
-        url: error.config?.url
-      })
-      localStorage.removeItem('sessionId')
-    }
-    
-    // 500 에러인 경우 상세 정보 출력
-    if (error.response?.status === 500) {
-      console.error('❌ [500 Error Detail]', {
-        detail: error.response?.data?.detail,
-        fullData: error.response?.data,
-      })
-    }
-    return Promise.reject(error)
-  }
-)
 
 // 様式(form_type) 목록 API (DB에서 동적 조회)
 export const formTypesApi = {
@@ -214,43 +112,55 @@ export const documentsApi = {
   },
 
   /**
-   * 文書アップロード（座標付き解析・mailチャネルでUpstage単語座標＋LLM _word_indices→_bbox付与）
+   * 文書一覧取得
+   * @param uploadChannel チャネルで絞り込み（省略可）
+   * @param isAnswerKeyDocument true のとき正解表対象文書のみ返す
    */
-  uploadWithBbox: async (
-    uploadChannel: string,
-    files: File[],
-    year?: number,
-    month?: number
-  ): Promise<UploadResponse> => {
-    const formData = new FormData()
-    formData.append('upload_channel', uploadChannel)
-    if (year !== undefined && year !== null && !isNaN(year) && year > 0) {
-      formData.append('year', year.toString())
-    }
-    if (month !== undefined && month !== null && !isNaN(month) && month > 0 && month <= 12) {
-      formData.append('month', month.toString())
-    }
-    files.forEach((file) => formData.append('files', file))
-    const sessionId = localStorage.getItem('sessionId')
-    const headers: Record<string, string> = {}
-    if (sessionId) headers['X-Session-ID'] = sessionId
-    const response = await client.post<UploadResponse>(
-      '/api/documents/upload-with-bbox',
-      formData,
-      { headers }
-    )
+  getList: async (
+    uploadChannel?: string,
+    options?: { is_answer_key_document?: boolean }
+  ): Promise<DocumentListResponse> => {
+    const params: Record<string, string | boolean> = {}
+    if (uploadChannel) params.upload_channel = uploadChannel
+    if (options?.is_answer_key_document === true) params.is_answer_key_document = true
+    const response = await client.get<DocumentListResponse>('/api/documents', { params })
     return response.data
   },
 
   /**
-   * 文書一覧取得
+   * 正解表作成タブ用の文書一覧（管理者は全件、一般は自分が指定した文書のみ）
    */
-  getList: async (uploadChannel?: string): Promise<DocumentListResponse> => {
-    const params = uploadChannel ? { upload_channel: uploadChannel } : {}
-    const response = await client.get<DocumentListResponse>(
-      '/api/documents',
-      { params }
-    )
+  getListForAnswerKeyTab: async (): Promise<DocumentListResponse> => {
+    const response = await client.get<DocumentListResponse>('/api/documents/for-answer-key-tab')
+    return response.data
+  },
+
+  /**
+   * 現在のRAGベクトルインデックスに含まれる文書(pdf_filename)一覧。アップロード一覧のハイライト用。
+   */
+  getInVectorIndex: async (): Promise<{ pdf_filenames: string[] }> => {
+    const response = await client.get<{ pdf_filenames: string[] }>('/api/documents/in-vector-index')
+    return response.data
+  },
+
+  /**
+   * 文書一覧＋様式マッピング＋ページ役割(Cover/Detail/Summary/Reply)件数
+   */
+  getOverview: async (answerKeyOnly?: boolean): Promise<{
+    page_role_totals: Record<string, number>
+    documents: Array<{
+      pdf_filename: string
+      form_type: string | null
+      total_pages: number
+      is_answer_key_document: boolean
+      cover: number
+      detail: number
+      summary: number
+      reply: number
+    }>
+  }> => {
+    const params = answerKeyOnly === true ? { answer_key_only: 'true' } : {}
+    const response = await client.get('/api/documents/overview', { params })
     return response.data
   },
 
@@ -259,6 +169,20 @@ export const documentsApi = {
    */
   get: async (pdfFilename: string) => {
     const response = await client.get(`/api/documents/${pdfFilename}`)
+    return response.data
+  },
+
+  /**
+   * ページ画像が未生成の文書について、PDFから画像を生成して保存する。
+   * PDFはセッションtempまたはimg学習フォルダから検索。見つからない場合は再アップロードが必要。
+   */
+  generatePageImages: async (
+    pdfFilename: string
+  ): Promise<{ success: boolean; message: string; pages: number }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post<{ success: boolean; message: string; pages: number }>(
+      `/api/documents/${encoded}/generate-page-images`
+    )
     return response.data
   },
 
@@ -370,14 +294,6 @@ export const documentsApi = {
   delete: async (pdfFilename: string) => {
     const encoded = encodeURIComponent(pdfFilename)
     const response = await client.delete(`/api/documents/${encoded}`)
-    return response.data
-  },
-
-  /**
-   * 문서의 페이지 목록 조회
-   */
-  getPages: async (pdfFilename: string) => {
-    const response = await client.get(`/api/documents/${pdfFilename}/pages`)
     return response.data
   },
 
@@ -543,6 +459,52 @@ export const itemsApi = {
   },
 
   /**
+   * 検討状況（アイテム数基準・detail・得意先ありのみ）
+   */
+  getReviewStatsByItems: async (): Promise<{
+    total_item_count: number
+    total_document_count: number
+    first_checked_count: number
+    first_not_checked_count: number
+    second_checked_count: number
+    second_not_checked_count: number
+  }> => {
+    const response = await client.get('/api/items/stats/review-by-items')
+    return response.data
+  },
+
+  /**
+   * detail ページ・得意先ありのみのアイテム数集計（文書セクション用）
+   */
+  getDetailSummary: async (): Promise<{
+    total_item_count: number
+    total_document_count: number
+    by_channel: Array<{ channel: string; item_count: number }>
+    by_form_type: Array<{ form_type: string; item_count: number }>
+    by_year_month: Array<{ year: number; month: number; item_count: number }>
+    by_year_month_by_form: Array<{ year: number; month: number; form_type: string; item_count: number }>
+  }> => {
+    const response = await client.get('/api/items/stats/detail-summary')
+    return response.data
+  },
+
+  /**
+   * 得意先（거래처）별 통계（detail のみ・得意先ありのみ）
+   */
+  getCustomerStats: async (limit?: number): Promise<{
+    customers: Array<{
+      customer_name: string
+      document_count: number
+      page_count: number
+      item_count: number
+    }>
+  }> => {
+    const params = limit != null ? { limit } : {}
+    const response = await client.get('/api/items/stats/by-customer', { params })
+    return response.data
+  },
+
+  /**
    * 아이템 락 해제
    */
   releaseLock: async (
@@ -553,35 +515,6 @@ export const itemsApi = {
       data: { session_id: sessionId },
     })
     return response.data
-  },
-
-  /**
-   * 세션 ID로 잠긴 모든 락 해제 (페이지 언로드 시 사용)
-   */
-  releaseAllLocks: async (
-    sessionId: string
-  ): Promise<{ message: string; released_count: number }> => {
-    // beforeunload에서는 비동기 요청이 완료되지 않을 수 있으므로
-    // navigator.sendBeacon을 사용하거나 동기 요청을 사용해야 함
-    // 하지만 DELETE 요청은 sendBeacon으로 보낼 수 없으므로
-    // XMLHttpRequest를 동기 모드로 사용
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('DELETE', `${API_BASE_URL}/api/items/locks/session`, false) // 동기 모드
-      xhr.setRequestHeader('Content-Type', 'application/json')
-      xhr.send(JSON.stringify({ session_id: sessionId }))
-      
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const data = JSON.parse(xhr.responseText)
-          resolve(data)
-        } catch (e) {
-          resolve({ message: 'Locks released', released_count: 0 })
-        }
-      } else {
-        reject(new Error(`Failed to release locks: ${xhr.status}`))
-      }
-    })
   },
 }
 
@@ -639,14 +572,25 @@ export const searchApi = {
 /**
  * 인증 관련 API
  */
+export interface LoginResponse {
+  success: boolean
+  message: string
+  user_id?: number
+  username?: string
+  display_name?: string
+  display_name_ja?: string
+  session_id?: string
+  must_change_password?: boolean
+}
+
 export const authApi = {
   /**
-   * 로그인
+   * 로그인 (사용자명 + 비밀번호)
    */
-  login: async (username: string) => {
+  login: async (username: string, password: string): Promise<LoginResponse> => {
     console.log('🔵 [authApi.login] 요청:', { username, url: '/api/auth/login' })
     try {
-      const response = await client.post('/api/auth/login', { username })
+      const response = await client.post<LoginResponse>('/api/auth/login', { username, password })
       console.log('✅ [authApi.login] 응답:', response.status, response.data)
       return response.data
     } catch (error: any) {
@@ -658,6 +602,17 @@ export const authApi = {
       })
       throw error
     }
+  },
+
+  /**
+   * 비밀번호 변경 (로그인 후, 초기 비밀번호 변경 시)
+   */
+  changePassword: async (currentPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+    const response = await client.post<{ success: boolean; message: string }>('/api/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+    return response.data
   },
 
   /**
@@ -802,19 +757,6 @@ export const ragAdminApi = {
   },
 
   /**
-   * 특정 페이지의 벡터DB 학습 플래그 조회
-   */
-  getLearningFlag: async (
-    pdfFilename: string,
-    pageNumber: number,
-  ): Promise<{ selected: boolean }> => {
-    const response = await client.get('/api/rag-admin/learning-flag', {
-      params: { pdf_filename: pdfFilename, page_number: pageNumber },
-    })
-    return response.data
-  },
-
-  /**
    * 특정 페이지의 벡터DB 학습 플래그 설정
    */
   setLearningFlag: async (params: {
@@ -823,17 +765,6 @@ export const ragAdminApi = {
     selected: boolean
   }): Promise<{ success: boolean }> => {
     const response = await client.post('/api/rag-admin/learning-flag', params)
-    return response.data
-  },
-
-  /**
-   * 현재 학습 대상으로 체크된 페이지 목록 조회
-   */
-  getLearningPages: async (): Promise<{
-    count: number
-    pages: Array<{ pdf_filename: string; page_number: number }>
-  }> => {
-    const response = await client.get('/api/rag-admin/learning-pages')
     return response.data
   },
 
@@ -877,118 +808,6 @@ export const ragAdminApi = {
     return response.data
   },
 }
-
-/** OCR 테스트: 구조화(좌표付き) 요청 - DB 저장 없이 일회성 */
-export type OcrStructureRequest = {
-  ocr_text: string
-  words: OcrWord[]
-  page_width: number
-  page_height: number
-  form_type?: string
-}
-
-/** Upstage OCR 테스트용 API (bbox 포함 전체 응답) */
-export type OcrWord = {
-  id: number
-  text: string
-  confidence?: number
-  boundingBox?: {
-    vertices: Array< { x: number; y: number } >
-  }
-}
-
-export type OcrTestPage = {
-  id: number
-  text: string
-  width: number
-  height: number
-  confidence?: number
-  words?: OcrWord[]
-}
-
-export type OcrTestResponse = {
-  text?: string
-  pages?: OcrTestPage[]
-  metadata?: { pages?: Array<{ page: number; width: number; height: number }> }
-}
-
-/** キーイン保存リクエスト */
-export type OcrKeyinSaveRequest = {
-  keyed_values: Record<string, string>
-  image_filename?: string
-}
-
-/** PDF 업로드 응답 */
-export type OcrUploadPdfResponse = {
-  upload_id: string
-  num_pages: number
-}
-
-/** master_code.xlsx 1行（A~F列） */
-export type OcrSuggestRow = {
-  a: string
-  b: string
-  c: string
-  d: string
-  e: string
-  f: string
-}
-
-export const ocrTestApi = {
-  /** PDF 업로드 → upload_id, num_pages 반환 */
-  uploadPdf: async (file: File): Promise<OcrUploadPdfResponse> => {
-    const formData = new FormData()
-    formData.append('file', file)
-    const response = await client.post<OcrUploadPdfResponse>('/api/ocr-test/upload-pdf', formData)
-    return response.data
-  },
-
-  /** 指定ページの画像URL（img src 用） */
-  getPdfPageImageUrl: (uploadId: string, page: number): string => {
-    const base = client.defaults.baseURL ?? ''
-    const sep = base.includes('?') ? '&' : '?'
-    return `${base}/api/ocr-test/pdf-page-image${sep}upload_id=${encodeURIComponent(uploadId)}&page=${page}`
-  },
-
-  /** 指定PDFページでOCR実行 → OcrTestResponse */
-  ocrPdfPage: async (uploadId: string, page: number): Promise<OcrTestResponse> => {
-    const response = await client.post<OcrTestResponse>('/api/ocr-test/ocr-pdf-page', {
-      upload_id: uploadId,
-      page,
-    })
-    return response.data
-  },
-
-  /** 이미지 1장 업로드 → Upstage OCR 전체 응답 (bbox 포함) */
-  ocrImage: async (file: File): Promise<OcrTestResponse> => {
-    const formData = new FormData()
-    formData.append('file', file)
-    const response = await client.post<OcrTestResponse>('/api/ocr-test/ocr', formData)
-    return response.data
-  },
-
-  /** OCR 결과로 구조화(좌표付き) - LLM _word_indices → _bbox, DB 저장 없음 */
-  structure: async (body: OcrStructureRequest): Promise<OcrTestResponse & Record<string, unknown>> => {
-    const response = await client.post<Record<string, unknown>>('/api/ocr-test/structure', body)
-    return response.data as OcrTestResponse & Record<string, unknown>
-  },
-
-  /** キーイン結果を保存 */
-  saveKeyin: async (body: OcrKeyinSaveRequest): Promise<{ success: boolean }> => {
-    const response = await client.post<{ success: boolean }>('/api/ocr-test/keyin', body)
-    return response.data
-  },
-
-  /** master_code.xlsx: 受注先はB列、スーパーはD列基準で類似3件をA~F列付きで取得 */
-  suggestCodes: async (value: string, field?: string): Promise<{ suggestions: OcrSuggestRow[] }> => {
-    const response = await client.post<{ suggestions: OcrSuggestRow[] }>('/api/ocr-test/suggest-codes', {
-      value: value || '',
-      field: field || undefined,
-    })
-    return response.data
-  },
-}
-
 /** 分析(기본 RAG) LLM: gemini | gpt5.2 */
 export type RagProvider = 'gemini' | 'gpt5.2'
 

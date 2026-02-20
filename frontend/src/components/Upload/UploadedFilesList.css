@@ -105,6 +105,11 @@
   color: #64748b;
 }
 
+.uploaded-files-list-legend {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
 .uploaded-files-list-table-wrap {
   overflow-x: auto;
   border: 1px solid #e2e8f0;
@@ -148,6 +153,19 @@
   background: #eff6ff !important;
   outline: 1px solid #3b82f6;
   outline-offset: -1px;
+}
+
+/* ベクトルDBに登録済みの文書行（ハイライト） */
+.uploaded-files-list-row-in-vector {
+  background: #d1fae5 !important;
+  border-left: 4px solid #059669;
+}
+.uploaded-files-list-row-in-vector:hover {
+  background: #a7f3d0 !important;
+}
+.uploaded-files-list-row-in-vector.uploaded-files-list-row-selected {
+  background: #eff6ff !important;
+  border-left-color: #3b82f6;
 }
 
 .uploaded-files-list-table tbody tr:last-child td {
