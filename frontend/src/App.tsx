@@ -12,14 +12,17 @@ import { CustomerSearch } from './components/Search/CustomerSearch'
 import { SAPUpload } from './components/SAPUpload/SAPUpload'
 import { RagAdminPanel } from './components/Admin/RagAdminPanel'
 import { AnswerKeyTab } from './components/AnswerKey/AnswerKeyTab'
+import { Dashboard } from './components/Dashboard/Dashboard'
 import { documentsApi, settingsApi, type RagProvider } from './api/client'
 import { UPLOAD_CHANNELS } from './config/formConfig'
 import type { UploadChannel } from './types'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './components/Auth/Login'
+import ChangePasswordModal from './components/Auth/ChangePasswordModal'
+import { getDocumentYearMonth } from './utils/documentDate'
 import './App.css'
 
-type Tab = 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin'
+type Tab = 'dashboard' | 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin'
 
 // 문서 인터페이스
 interface Document {
@@ -71,42 +74,10 @@ function AppContent() {
   const groupedData: YearMonthGroup[] = useMemo(() => {
     if (!documentsData?.documents) return []
 
-    const documentsWithYearMonth = documentsData.documents.map((doc: Document) => {
-      // 백엔드에서 data_year, data_month가 제공되면 우선 사용
-      // 없으면 created_at으로 폴백
-      let data_year = doc.data_year
-      let data_month = doc.data_month
-      
-      // data_year, data_month가 없거나 유효하지 않은 경우에만 폴백
-      if (!data_year || !data_month || data_year <= 0 || data_month <= 0 || data_month > 12) {
-        const dateString = doc.created_at || doc.upload_date
-        let uploadDate: Date
-        
-        if (dateString) {
-          uploadDate = new Date(dateString)
-          if (isNaN(uploadDate.getTime())) {
-            uploadDate = new Date()
-          }
-        } else {
-          uploadDate = new Date()
-        }
-        
-        data_year = data_year || uploadDate.getFullYear()
-        data_month = data_month || uploadDate.getMonth() + 1
-      }
-      
-      return {
-        ...doc,
-        data_year,
-        data_month,
-      }
-    })
-
     const groups: Record<string, YearMonthGroup> = {}
 
-    documentsWithYearMonth.forEach((doc: Document) => {
-      const year = doc.data_year || new Date().getFullYear()
-      const month = doc.data_month || new Date().getMonth() + 1
+    documentsData.documents.forEach((doc: Document) => {
+      const { year, month } = getDocumentYearMonth(doc)
       const key = `${year}-${month}`
       if (!groups[key]) {
         groups[key] = {
@@ -125,7 +96,7 @@ function AppContent() {
     // 년월 기준으로 정렬 (최신순)
     return Object.values(groups).sort((a, b) => {
       if (a.year !== b.year) return b.year - a.year
-      return (b.month || 0) - (a.month || 0)
+      return b.month - a.month
     })
   }, [documentsData])
 
@@ -193,6 +164,12 @@ function AppContent() {
         <div className="sidebar-content">
           <div className="sidebar-menu">
             <button
+              className={`sidebar-button ${activeTab === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setActiveTab('dashboard')}
+            >
+              現況
+            </button>
+            <button
               className={`sidebar-button ${activeTab === 'upload' ? 'active' : ''}`}
               onClick={() => {
                 setActiveTab('upload')
@@ -237,6 +214,11 @@ function AppContent() {
       </aside>
 
       <main className="app-main">
+        {activeTab === 'dashboard' && (
+          <div className="dashboard-tab-wrapper">
+            <Dashboard />
+          </div>
+        )}
         {activeTab === 'upload' && (
           <div className="upload-tab">
             <div className="upload-header">
@@ -381,7 +363,7 @@ function App() {
 }
 
 function AppWithAuth() {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, mustChangePassword } = useAuth()
 
   if (isLoading) {
     return (
@@ -398,6 +380,11 @@ function AppWithAuth() {
 
   if (!user) {
     return <Login />
+  }
+
+  // 비밀번호 변경 필요 시: 메인 화면으로 넘어가기 전에 풀페이지로 표시
+  if (mustChangePassword) {
+    return <ChangePasswordModal standalone />
   }
 
   return <AppContent />

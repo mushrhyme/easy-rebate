@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from database.registry import get_db
-from backend.core.auth import get_current_user_id
+from backend.core.auth import get_current_user_id, get_current_user as get_current_user_dep
+from backend.core.password import hash_password, verify_password
 
 router = APIRouter()
 
@@ -16,6 +17,7 @@ router = APIRouter()
 class LoginRequest(BaseModel):
     """ログインリクエストモデル"""
     username: str
+    password: str
 
 
 class LoginResponse(BaseModel):
@@ -27,6 +29,7 @@ class LoginResponse(BaseModel):
     display_name: Optional[str] = None
     display_name_ja: Optional[str] = None
     session_id: Optional[str] = None
+    must_change_password: bool = False
 
 
 class UserInfo(BaseModel):
@@ -38,6 +41,7 @@ class UserInfo(BaseModel):
     is_active: bool
     last_login_at: Optional[str] = None
     login_count: int
+    must_change_password: bool = False
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -77,7 +81,31 @@ async def login(
                 user_id=None,
                 username=None,
                 display_name=None,
-                session_id=None
+                session_id=None,
+                must_change_password=False,
+            )
+
+        # 비밀번호 검증: password_hash가 없으면 초기 비밀번호(ID와 동일)만 허용
+        password_ok = False
+        force_change = user.get("force_password_change", True)
+        stored_hash = user.get("password_hash")
+
+        if stored_hash:
+            password_ok = verify_password(request.password, stored_hash)
+        else:
+            # 초기 비밀번호: ID(username)와 동일할 때만 로그인 허용
+            password_ok = request.password == request.username
+
+        if not password_ok:
+            logger.warning(f"❌ [로그인] 비밀번호 불일치: username={request.username}")
+            return LoginResponse(
+                success=False,
+                message="비밀번호가 올바르지 않습니다",
+                user_id=None,
+                username=None,
+                display_name=None,
+                session_id=None,
+                must_change_password=False,
             )
 
         # 세션 ID 생성
@@ -122,7 +150,8 @@ async def login(
             username=user['username'],
             display_name=user['display_name'],
             display_name_ja=user.get('display_name_ja'),
-            session_id=session_id
+            session_id=session_id,
+            must_change_password=force_change,
         )
 
     except HTTPException:
@@ -134,21 +163,23 @@ async def login(
 
 @router.post("/logout")
 async def logout(
-    session_id: str,
-    db=Depends(get_db)
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+    db=Depends(get_db),
 ):
     """
-    사용자 로그아웃
+    사용자 로그아웃 (X-Session-ID 헤더에서 세션 ID 사용)
 
     Args:
-        session_id: 세션 ID
+        x_session_id: 헤더의 세션 ID
         db: データベースインスタンス
 
     Returns:
         로그아웃 결과
     """
+    if not x_session_id:
+        return {"success": False, "message": "세션 ID가 필요합니다"}
     try:
-        success = db.delete_user_session(session_id)
+        success = db.delete_user_session(x_session_id)
 
         if success:
             return {"success": True, "message": "로그아웃되었습니다"}
@@ -161,21 +192,23 @@ async def logout(
 
 @router.get("/me", response_model=UserInfo)
 async def get_current_user(
-    session_id: str,
-    db=Depends(get_db)
+    x_session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+    db=Depends(get_db),
 ):
     """
-    현재 로그인한 사용자 정보 조회
+    현재 로그인한 사용자 정보 조회 (X-Session-ID 헤더에서 세션 ID 사용)
 
     Args:
-        session_id: 세션 ID
+        x_session_id: 헤더의 세션 ID
         db: データベースインスタンス
 
     Returns:
         사용자 정보
     """
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="세션 ID가 필요합니다")
     try:
-        user_info = db.get_session_user(session_id)
+        user_info = db.get_session_user(x_session_id)
 
         if not user_info:
             raise HTTPException(status_code=401, detail="유효하지 않은 세션입니다")
@@ -187,7 +220,8 @@ async def get_current_user(
             display_name_ja=user_info.get('display_name_ja'),
             is_active=user_info['is_active'],
             last_login_at=user_info.get('last_login_at'),
-            login_count=user_info.get('login_count', 0)
+            login_count=user_info.get('login_count', 0),
+            must_change_password=user_info.get('force_password_change', False),
         )
 
     except HTTPException:
@@ -226,7 +260,8 @@ async def validate_session(
                     "username": user_info['username'],
                     "display_name": user_info['display_name'],
                     "display_name_ja": user_info.get('display_name_ja'),
-                }
+                },
+                "must_change_password": user_info.get('force_password_change', False),
             }
         else:
             return {"valid": False, "message": "유효하지 않은 세션입니다"}
@@ -298,12 +333,14 @@ async def create_user(
         if existing_user:
             raise HTTPException(status_code=400, detail="이미 존재하는 사용자명입니다")
 
-        # 사용자 생성
+        # 사용자 생성 (초기 비밀번호 = ID와 동일)
+        initial_password_hash = hash_password(request.username)
         user_id = db.create_user(
             username=request.username,
             display_name=request.display_name,
             display_name_ja=request.display_name_ja,
             created_by_user_id=current_user_id,
+            password_hash=initial_password_hash,
         )
 
         if user_id:
@@ -363,6 +400,58 @@ async def update_user(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 업데이트 중 오류가 발생했습니다: {str(e)}")
+
+
+class ChangePasswordRequest(BaseModel):
+    """비밀번호 변경 요청"""
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password", response_model=dict)
+async def change_password(
+    request: ChangePasswordRequest,
+    user_info: dict = Depends(get_current_user_dep),
+    db=Depends(get_db),
+):
+    """
+    비밀번호 변경 (로그인 후). 초기 비밀번호(ID와 동일)인 경우 current_password에 ID 입력.
+    """
+    try:
+        user_id = user_info["user_id"]
+        username = user_info["username"]
+        stored_hash = user_info.get("password_hash")
+        force_change = user_info.get("force_password_change", True)
+
+        # 현재 비밀번호 확인: 저장된 해시가 있으면 검증, 없거나 초기 상태면 current == username 허용
+        current_raw = (request.current_password or "").strip() if hasattr(request.current_password, "strip") else str(request.current_password or "")
+        if len(current_raw.encode("utf-8")) > 72:
+            current_raw = current_raw.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+        current_ok = False
+        if stored_hash:
+            current_ok = verify_password(current_raw, stored_hash)
+        else:
+            current_ok = current_raw == username
+
+        if not current_ok:
+            raise HTTPException(status_code=400, detail="현재 비밀번호가 올바르지 않습니다")
+
+        if not request.new_password or len(request.new_password.strip()) < 1:
+            raise HTTPException(status_code=400, detail="새 비밀번호를 입력해 주세요")
+
+        # bcrypt 72바이트 제한: 넘기기 전에 여기서 자름
+        new_raw = (request.new_password or "").strip()
+        if isinstance(new_raw, str) and len(new_raw.encode("utf-8")) > 72:
+            new_raw = new_raw.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+        new_hash = hash_password(new_raw)
+        success = db.update_password(user_id, new_hash)
+        if not success:
+            raise HTTPException(status_code=500, detail="비밀번호 변경에 실패했습니다")
+        return {"success": True, "message": "비밀번호가 변경되었습니다"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"비밀번호 변경 중 오류: {str(e)}")
 
 
 @router.delete("/users/{user_id}", response_model=dict)

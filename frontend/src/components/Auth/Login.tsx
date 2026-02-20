@@ -7,6 +7,8 @@ import './Login.css'
 
 const Login: React.FC = () => {
   const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const { login } = useAuth()
@@ -17,12 +19,16 @@ const Login: React.FC = () => {
       setError('ユーザー名を入力してください')
       return
     }
+    if (!password) {
+      setError('パスワードを入力してください')
+      return
+    }
 
     setIsLoading(true)
     setError('')
 
     try {
-      const result = await login(username.trim())
+      const result = await login(username.trim(), password)
       if (!result.success) {
         setError(result.message)
       }
@@ -66,6 +72,45 @@ const Login: React.FC = () => {
             />
           </div>
 
+          <div className="form-group">
+            <label htmlFor="password" className="form-label">
+              パスワード
+            </label>
+            <div className="password-input-wrap">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                id="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="form-input"
+                placeholder="初期パスワードはユーザー名と同じです"
+                disabled={isLoading}
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="password-toggle-btn"
+                onClick={() => setShowPassword((v) => !v)}
+                tabIndex={-1}
+                aria-label={showPassword ? 'パスワードを隠す' : 'パスワードを表示'}
+                title={showPassword ? 'パスワードを隠す' : 'パスワードを表示'}
+              >
+                {showPassword ? (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3.98 8.88A12 12 0 0 1 12 6c4.92 0 8.24 2.51 9.58 5.12a12 12 0 0 1-2.4 3.24" />
+                    <path d="M14 14.5a2.5 2.5 0 1 1-3.5-3.5" />
+                    <path d="M4 4l16 16" />
+                  </svg>
+                ) : (
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 5c-5 0-8 4-10 7 2 3 5 7 10 7s8-4 10-7c-2-3-5-7-10-7z" />
+                    <circle cx="12" cy="12" r="2.5" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+
           {error && (
             <div className="error-message">
               {error}
@@ -75,7 +120,7 @@ const Login: React.FC = () => {
           <button
             type="submit"
             className="login-button"
-            disabled={isLoading || !username.trim()}
+            disabled={isLoading || !username.trim() || !password}
           >
             {isLoading ? 'ログイン中...' : 'ログイン'}
           </button>
