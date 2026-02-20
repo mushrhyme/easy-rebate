@@ -9,6 +9,7 @@ import { useFormTypes } from '@/hooks/useFormTypes'
 import { ItemsGridRdg, type ItemsGridRdgHandle } from '../Grid/ItemsGridRdg'
 import { getApiBaseUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
+import { getDocumentYearMonth } from '@/utils/documentDate'
 import './CustomerSearch.css'
 
 // 페이지 타입
@@ -60,7 +61,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
       const rect = el.getBoundingClientRect()
       const y = e.clientY - rect.top
       const pct = Math.round((y / rect.height) * 100)
-      setImageHeightPercent((prev) => {
+      setImageHeightPercent(() => {
         const next = Math.min(80, Math.max(20, pct))
         return next
       })
@@ -83,6 +84,17 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     queryKey: ['documents', 'all'],
     queryFn: () => documentsApi.getList(),
   })
+
+  // 벡터DB 등록 문서 목록 (검토 탭에서는 제외)
+  const { data: inVectorData } = useQuery({
+    queryKey: ['documents', 'in-vector-index'],
+    queryFn: () => documentsApi.getInVectorIndex(),
+    refetchInterval: 60000,
+  })
+  const pdfInVectorSet = useMemo(
+    () => new Set((inVectorData?.pdf_filenames ?? []).map((f) => (f ?? '').trim().toLowerCase())),
+    [inVectorData?.pdf_filenames]
+  )
 
   // 검토 상태 통계 조회 (성능 최적화: 10초마다 갱신)
   const { data: reviewStats } = useQuery({
@@ -108,11 +120,16 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     }
   }, [])
 
-  // 정답지 생성 대상 문서는 검토 탭에서 제외
-  const documentsForReview = useMemo(
-    () => (documentsData?.documents ?? []).filter((d: Document) => !d.is_answer_key_document),
-    [documentsData?.documents]
-  )
+  // 정답지 생성 대상・벡터DB 등록 문서는 검토 탭에서 제외
+  const documentsForReview = useMemo(() => {
+    const list = documentsData?.documents ?? []
+    return list.filter((d: Document) => {
+      if (d.is_answer_key_document) return false
+      const key = (d.pdf_filename ?? '').trim().toLowerCase()
+      if (pdfInVectorSet.has(key)) return false
+      return true
+    })
+  }, [documentsData?.documents, pdfInVectorSet])
 
   // 문서 목록에서 선택 가능한 연월 목록 생성 (최신순)
   const availableYearMonths = useMemo(() => {
@@ -121,23 +138,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     const map = new Map<string, { year: number; month: number; count: number }>()
 
     documentsForReview.forEach((doc: Document) => {
-      let year = doc.data_year
-      let month = doc.data_month
-
-      // data_year, data_month가 없으면 created_at / upload_date로 폴백
-      if (!year || !month) {
-        const dateString = doc.created_at || doc.upload_date
-        if (dateString) {
-          const d = new Date(dateString)
-          if (!isNaN(d.getTime())) {
-            year = year || d.getFullYear()
-            month = month || d.getMonth() + 1
-          }
-        }
-      }
-
-      if (!year || !month) return
-
+      const { year, month } = getDocumentYearMonth(doc)
       const key = `${year}-${month}`
       const existing = map.get(key)
       if (existing) {
@@ -212,7 +213,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   const searchPages: Page[] = useMemo(() => {
     if (!searchResult?.pages) return []
 
-    return searchResult.pages.map((page) => ({
+    return searchResult.pages.map((page: any) => ({
       pdfFilename: page.pdf_filename,
       pageNumber: page.page_number,
       formType: page.form_type,
@@ -281,7 +282,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   }, [currentPage, reviewStats])
 
   // 현재 페이지의 page_role 조회
-  const { data: pageImageData, isLoading: imageLoading, error: imageError } = useQuery({
+  const { data: pageImageData } = useQuery({
     queryKey: ['page-image', currentPage?.pdfFilename, currentPage?.pageNumber],
     queryFn: () => {
       if (!currentPage) return null
@@ -299,6 +300,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     mutationFn: (pdfFilename: string) => documentsApi.setAnswerKeyDocument(pdfFilename),
     onSuccess: (_data, pdfFilename) => {
       queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'for-answer-key-tab'] })
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
       queryClient.invalidateQueries({ queryKey: ['form-types'] })
       setShowAnswerKeyModal(false)
@@ -641,8 +643,8 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
             <ReviewRateBadges stats={currentPageStats} />
           </div>
 
-          {/* 검토 상태 배지 */}
-          <ReviewStatusBadges
+          {/* 검토 필터 드롭다운 */}
+          <ReviewFilterDropdown
             firstReviewedCount={reviewStats?.first_reviewed_count || 0}
             firstNotReviewedCount={reviewStats?.first_not_reviewed_count || 0}
             secondReviewedCount={reviewStats?.second_reviewed_count || 0}
@@ -825,8 +827,8 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   )
 }
 
-// 검토 상태 배지 컴포넌트
-const ReviewStatusBadges = ({
+// 검토 필터 드롭다운: 전체 / 1차 검토분만 / 1차 미검토 / 2차 검토분만 / 2차 미검토
+const ReviewFilterDropdown = ({
   firstReviewedCount,
   firstNotReviewedCount,
   secondReviewedCount,
@@ -842,50 +844,20 @@ const ReviewStatusBadges = ({
   onFilterChange: (filter: ReviewFilter) => void
 }) => {
   return (
-    <div className="review-status-badges">
-      {/* 1次 검토 완료 배지 */}
-      <button
-        className={`review-badge first-reviewed ${currentFilter === 'first_reviewed' ? 'active' : ''}`}
-        onClick={() => onFilterChange(currentFilter === 'first_reviewed' ? 'all' : 'first_reviewed')}
-        title={currentFilter === 'first_reviewed' ? '전체 보기' : '1次 검토 완료만'}
+    <div className="review-filter-dropdown-wrap">
+      <select
+        className="review-filter-select"
+        value={currentFilter}
+        onChange={(e) => onFilterChange(e.target.value as ReviewFilter)}
+        aria-label="検討フィルター"
+        title="検討状況で絞り込み"
       >
-        <span className="badge-label">1次</span>
-        <span className="badge-icon">✓</span>
-        <span className="badge-count">{firstReviewedCount}</span>
-      </button>
-
-      {/* 1次 미검토 배지 */}
-      <button
-        className={`review-badge first-not-reviewed ${currentFilter === 'first_not_reviewed' ? 'active' : ''}`}
-        onClick={() => onFilterChange(currentFilter === 'first_not_reviewed' ? 'all' : 'first_not_reviewed')}
-        title={currentFilter === 'first_not_reviewed' ? '전체 보기' : '1次 미검토만'}
-      >
-        <span className="badge-label">1次</span>
-        <span className="badge-icon">○</span>
-        <span className="badge-count">{firstNotReviewedCount}</span>
-      </button>
-
-      {/* 2次 검토 완료 배지 */}
-      <button
-        className={`review-badge second-reviewed ${currentFilter === 'second_reviewed' ? 'active' : ''}`}
-        onClick={() => onFilterChange(currentFilter === 'second_reviewed' ? 'all' : 'second_reviewed')}
-        title={currentFilter === 'second_reviewed' ? '전체 보기' : '2次 검토 완료만'}
-      >
-        <span className="badge-label">2次</span>
-        <span className="badge-icon">✓</span>
-        <span className="badge-count">{secondReviewedCount}</span>
-      </button>
-
-      {/* 2次 미검토 배지 */}
-      <button
-        className={`review-badge second-not-reviewed ${currentFilter === 'second_not_reviewed' ? 'active' : ''}`}
-        onClick={() => onFilterChange(currentFilter === 'second_not_reviewed' ? 'all' : 'second_not_reviewed')}
-        title={currentFilter === 'second_not_reviewed' ? '전체 보기' : '2次 미검토만'}
-      >
-        <span className="badge-label">2次</span>
-        <span className="badge-icon">○</span>
-        <span className="badge-count">{secondNotReviewedCount}</span>
-      </button>
+        <option value="all">全体</option>
+        <option value="first_reviewed">1次検討済のみ ({firstReviewedCount})</option>
+        <option value="first_not_reviewed">1次未検討 ({firstNotReviewedCount})</option>
+        <option value="second_reviewed">2次検討済のみ ({secondReviewedCount})</option>
+        <option value="second_not_reviewed">2次未検討 ({secondNotReviewedCount})</option>
+      </select>
     </div>
   )
 }
@@ -1130,44 +1102,122 @@ const PageImageViewer = ({
     enabled: !!pdfFilename && !!pageNumber,
   })
 
+  const errorMessage =
+    error instanceof Error ? error.message : (error as unknown as { message?: string } | null)?.message
+  const isNotFound = typeof errorMessage === 'string' && errorMessage.includes('404')
+  const noImageMessage = '画像がまだ生成されていません'
+
+  const [imageScale, setImageScale] = useState(1)
+  const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const userHasZoomedRef = useRef(false)
+
+  useEffect(() => {
+    setImageScale(1)
+    setImageSize(null)
+    userHasZoomedRef.current = false
+  }, [pdfFilename, pageNumber])
+
+  const applyScaleToWidth = useCallback(() => {
+    if (!imageSize || !containerRef.current) return
+    const cw = containerRef.current.clientWidth
+    if (cw <= 0) return
+    const scaleToWidth = cw / imageSize.w
+    setImageScale((s) => (userHasZoomedRef.current ? s : scaleToWidth))
+  }, [imageSize])
+
+  useEffect(() => {
+    if (!imageSize || !containerRef.current) return
+    applyScaleToWidth()
+    const el = containerRef.current
+    const ro = new ResizeObserver(() => applyScaleToWidth())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [imageSize, applyScaleToWidth])
+
+  const handleImageZoom = useCallback((e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault()
+      userHasZoomedRef.current = true
+      setImageScale((s) => Math.min(3, Math.max(0.25, s - e.deltaY * 0.002)))
+    }
+  }, [])
+
   return (
     <div className="page-image-viewer">
       {isLoading && <div className="image-loading">画像読み込み中...</div>}
-      {error && (
+      {error && !isNotFound && (
         <div className="image-error">
           画像読み込みエラー: {error instanceof Error ? error.message : 'Unknown error'}
         </div>
       )}
-      {data && (() => {
+      {error && isNotFound && (
+        <div className="image-empty">{noImageMessage}</div>
+      )}
+      {data && data.image_url && (() => {
         // 상대 경로인 경우 백엔드 URL을 앞에 붙여서 절대 URL로 변환
         const imageUrl = data.image_url.startsWith('http')
           ? data.image_url
           : `${getApiBaseUrl()}${data.image_url}`
 
         return (
-          <div className="image-container">
-            <img
-              src={imageUrl}
-              alt={`Page ${pageNumber}`}
-              onError={(e) => {
-                console.error('Image load error:', e, 'URL:', imageUrl)
-                const target = e.currentTarget
-                target.style.display = 'none'
-                const container = target.parentElement
-                if (container) {
-                  const errorDiv = document.createElement('div')
-                  errorDiv.className = 'image-error'
-                  errorDiv.textContent = `画像の表示に失敗しました (URL: ${imageUrl})`
-                  container.appendChild(errorDiv)
+          <div
+            ref={containerRef}
+            className="image-container image-container-zoom"
+            onWheel={handleImageZoom}
+            role="img"
+            aria-label="Ctrl+ホイールで拡大縮小"
+          >
+            <div
+              className="image-zoom-wrapper"
+              style={
+                imageSize
+                  ? {
+                      width: '100%',
+                      height: imageSize.h * imageScale,
+                    }
+                  : undefined
+              }
+            >
+              <img
+                src={imageUrl}
+                alt={`Page ${pageNumber}`}
+                onError={(e) => {
+                  console.error('Image load error:', e, 'URL:', imageUrl)
+                  const target = e.currentTarget
+                  target.style.display = 'none'
+                  const container = target.parentElement
+                  if (container) {
+                    const errorDiv = document.createElement('div')
+                    errorDiv.className = 'image-error'
+                    errorDiv.textContent = `画像の表示に失敗しました (URL: ${imageUrl})`
+                    container.appendChild(errorDiv)
+                  }
+                }}
+                onLoad={(e) => {
+                  const img = e.currentTarget
+                  setImageSize({ w: img.naturalWidth, h: img.naturalHeight })
+                }}
+                style={
+                  imageSize
+                    ? {
+                        width: imageSize.w,
+                        height: imageSize.h,
+                        transform: `scale(${imageScale})`,
+                        transformOrigin: '0 0',
+                      }
+                    : undefined
                 }
-              }}
-              onLoad={() => console.log('이미지 로드 성공:', imageUrl)}
-            />
+              />
+            </div>
           </div>
         )
       })()}
+      {data && !data.image_url && !isLoading && !error && (
+        <div className="image-empty">{noImageMessage}</div>
+      )}
       {!isLoading && !error && !data && (
-        <div className="image-error">画像が見つかりません</div>
+        <div className="image-empty">{noImageMessage}</div>
       )}
     </div>
   )

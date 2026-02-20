@@ -26,6 +26,9 @@ rank-bm25>=0.2.2
 # 환경 변수 관리
 python-dotenv>=1.0.0
 
+# 비밀번호 해시 (로그인, passlib 대신 bcrypt 직접 사용)
+bcrypt>=4.0.0
+
 # 유틸리티
 pandas>=2.0.0
 numpy>=1.24.0

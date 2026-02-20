@@ -486,6 +486,8 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         # 앞뒤 공백 및 불필요한 문자 제거
         result_text = result_text.strip()
         
+        # 탭 제거 (JSON 문자열 내 탭이 파싱 오류·잘림 유발할 수 있음)
+        result_text = result_text.replace("\t", " ")
         # Python의 None을 JSON의 null로 치환 (LLM이 None을 출력하는 경우 대비)
         # 단, 문자열 내의 "None"은 치환하지 않도록 주의
         import re
@@ -502,7 +504,23 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             result_text = re.sub(r':\s*NaN\s*([,}])', r': null\1', result_text, flags=re.IGNORECASE)
             result_text = re.sub(r':\s*"NaN"\s*([,}])', r': null\1', result_text, flags=re.IGNORECASE)
             
+            # 파싱 전: 문자열 값 안의 탭·연속 공백으로 인한 잘림/오류 방지 (JSON 내부 문자열만 정규화하는 건 파싱 후에 수행)
             result_json = json.loads(result_text)
+            
+            # items 내 문자열 값 정규화: 탭·全角スペース→공백, 연속 공백/줄바꿈 하나로
+            def _normalize_item_string(s):
+                if not isinstance(s, str):
+                    return s
+                s = s.replace("\t", " ").replace("\u3000", " ").replace("\n", " ")
+                s = re.sub(r" +", " ", s).strip()
+                return s
+            
+            if isinstance(result_json.get("items"), list):
+                for item in result_json["items"]:
+                    if isinstance(item, dict):
+                        for k, v in list(item.items()):
+                            if isinstance(v, str):
+                                item[k] = _normalize_item_string(v)
             
             # result_json이 딕셔너리가 아닌 경우 처리 (리스트인 경우 등)
             if not isinstance(result_json, dict):

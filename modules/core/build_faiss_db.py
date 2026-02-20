@@ -9,6 +9,7 @@ img 폴더의 모든 하위 폴더에서:
 """
 
 import os
+import io
 import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -19,6 +20,11 @@ from modules.utils.config import get_project_root, get_extraction_method_for_upl
 from modules.utils.hash_utils import compute_page_hash, get_page_key, compute_file_fingerprint
 from modules.utils.db_manifest_manager import DBManifestManager
 from modules.utils.pdf_utils import PdfTextExtractor
+
+
+def _log(msg: str) -> None:
+    """再構築がAPI経由でスレッド実行される場合でもターミナルに即表示するため flush する"""
+    print(msg, flush=True)
 
 
 def find_pdf_pages(
@@ -57,7 +63,7 @@ def find_pdf_pages(
         if not form_dir.exists():
             continue
 
-        print(f"📁 폴더: {form_dir.name}")
+        _log(f"📁 폴더: {form_dir.name}")
 
         # 상위 폴더 기준 form_type 후보 (과거 구조: img/01/...)
         parent_form_type: Optional[str] = form_dir.name if form_dir.name.isdigit() else None
@@ -68,19 +74,24 @@ def find_pdf_pages(
             search_dirs = [base_dir]
         else:
             first_children = [d for d in form_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
-            # 직하위에 "폴더명.pdf"가 있으면 PDF 폴더가 직하위에 있는 구조
-            has_direct_pdf = any((d / f"{d.name}.pdf").exists() for d in first_children)
-            if has_direct_pdf:
-                search_dirs = [form_dir]
-            else:
-                # finet/01, mail/02 등 타입 폴더 안에서 PDF 폴더 찾기
+            # 숫자 폴더(01~05)만 있으면 mail/02, mail/03 등 양식별 하위 → 반드시 02,03,04,05 각각 스캔
+            all_digit_children = first_children and all(d.name.isdigit() for d in first_children)
+            if all_digit_children:
                 search_dirs = list(first_children)
+            else:
+                # 직하위에 "폴더명.pdf"가 있으면 PDF 폴더가 직하위에 있는 구조 (finet 등)
+                has_direct_pdf = any((d / f"{d.name}.pdf").exists() for d in first_children)
+                if has_direct_pdf:
+                    search_dirs = [form_dir]
+                else:
+                    search_dirs = list(first_children)
 
         for search_dir in search_dirs:
             # finet/01, mail/02 등일 때 현재 search_dir이 양식 코드(01~05)를 나타냄
             current_form_type: Optional[str] = None
             if search_dir.name.isdigit():
                 current_form_type = search_dir.name
+                _log(f"  ▶ 양식 {search_dir.name} 스캔 중...")
             elif parent_form_type:
                 # search_dir가 base/년-월/ 등의 하위일 때 상위 폴더명을 form_type으로 사용
                 current_form_type = parent_form_type
@@ -114,7 +125,7 @@ def find_pdf_pages(
                     print(f"  ⚠️ PDF 파일 열기 실패 ({pdf_name}): {e}")
                     continue
 
-                print(f"  - {pdf_name}: {len(answer_files)}개 answer.json 파일, {page_count}페이지")
+                _log(f"  - {pdf_name}: {len(answer_files)}개 answer.json 파일, {page_count}페이지")
 
                 for answer_file in answer_files:
                     try:
@@ -157,6 +168,154 @@ def load_answer_json(answer_path: Optional[Path]) -> Dict[str, Any]:
     except Exception as e:
         print(f"⚠️ 정답 JSON 읽기 실패 ({answer_path}): {e}")
         return {}
+
+
+def _image_path_for_page(answer_json_path: Optional[Path], page_num: int) -> Optional[Path]:
+    """answer.json と同じフォルダの Page{N}.png パスを返す。"""
+    if not answer_json_path or not answer_json_path.parent.exists():
+        return None
+    p = answer_json_path.parent / f"Page{page_num}.png"
+    return p if p.exists() else None
+
+
+def sync_img_pages_to_documents_db(
+    db,
+    pages: List[Dict[str, Any]],
+    upload_channel: str,
+    form_folder: str,
+) -> None:
+    """
+    img 폴더에서 발견한 문서·페이지를 documents_current / page_data_current に反映し、
+    さらに page_meta・items_current・page_images_current にも同期する。
+    - 画像: img 内の Page{N}.png を static/images にコピーし page_images_current に登録
+    - 正解表: answer.json の items を items_current に登録、page_meta も保存
+    """
+    if not pages:
+        return
+    try:
+        from PIL import Image
+
+        doc_info: Dict[str, Dict[str, Any]] = {}
+        for p in pages:
+            pdf_name = p.get("pdf_name") or ""
+            page_num = p.get("page_num") or 0
+            pdf_filename = f"{pdf_name}.pdf" if not pdf_name.endswith(".pdf") else pdf_name
+            if pdf_filename not in doc_info:
+                doc_info[pdf_filename] = {
+                    "total_pages": page_num,
+                    "form_type": p.get("form_type") or (form_folder if form_folder.isdigit() else None),
+                }
+            if page_num > doc_info[pdf_filename]["total_pages"]:
+                doc_info[pdf_filename]["total_pages"] = page_num
+        form_type_default = form_folder if form_folder.isdigit() else None
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            for pdf_filename, info in doc_info.items():
+                total_pages = info["total_pages"]
+                form_type = info["form_type"] or form_type_default
+                cursor.execute(
+                    """
+                    INSERT INTO documents_current (pdf_filename, form_type, upload_channel, total_pages, updated_at)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (pdf_filename) DO UPDATE SET
+                        form_type = COALESCE(EXCLUDED.form_type, documents_current.form_type),
+                        upload_channel = COALESCE(EXCLUDED.upload_channel, documents_current.upload_channel),
+                        total_pages = GREATEST(documents_current.total_pages, EXCLUDED.total_pages),
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (pdf_filename, form_type, upload_channel, total_pages),
+                )
+            conn.commit()
+
+            for pdf_filename in doc_info:
+                cursor.execute("DELETE FROM items_current WHERE pdf_filename = %s", (pdf_filename,))
+                cursor.execute("DELETE FROM page_images_current WHERE pdf_filename = %s", (pdf_filename,))
+            conn.commit()
+
+            for p in pages:
+                pdf_name = p.get("pdf_name") or ""
+                page_num = p.get("page_num") or 0
+                pdf_filename = f"{pdf_name}.pdf" if not pdf_name.endswith(".pdf") else pdf_name
+                answer_path = p.get("answer_json_path")
+                answer_json = load_answer_json(answer_path)
+                page_role = (answer_json.get("page_role") or "detail").strip() or "detail"
+                page_meta = {k: v for k, v in answer_json.items() if k not in ("items", "page_role") and v is not None}
+                page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
+
+                cursor.execute(
+                    """
+                    INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, is_rag_candidate, updated_at)
+                    VALUES (%s, %s, %s, %s::jsonb, TRUE, CURRENT_TIMESTAMP)
+                    ON CONFLICT (pdf_filename, page_number) DO UPDATE SET
+                        page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role),
+                        page_meta = COALESCE(EXCLUDED.page_meta, page_data_current.page_meta),
+                        is_rag_candidate = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (pdf_filename, page_num, page_role, page_meta_json),
+                )
+
+                items = answer_json.get("items") or []
+                if isinstance(items, list):
+                    for item_order, item_dict in enumerate(items, 1):
+                        if not isinstance(item_dict, dict):
+                            continue
+                        separated = db._separate_item_fields(item_dict, form_type=form_type_default)
+                        cursor.execute(
+                            """
+                            INSERT INTO items_current (
+                                pdf_filename, page_number, item_order,
+                                first_review_checked, second_review_checked,
+                                first_reviewed_at, second_reviewed_at,
+                                item_data
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            """,
+                            (
+                                pdf_filename,
+                                page_num,
+                                item_order,
+                                separated.get("first_review_checked", False),
+                                separated.get("second_review_checked", False),
+                                separated.get("first_reviewed_at"),
+                                separated.get("second_reviewed_at"),
+                                json.dumps(separated.get("item_data", {}), ensure_ascii=False),
+                            ),
+                        )
+
+                img_path = _image_path_for_page(answer_path, page_num)
+                if img_path and img_path.exists():
+                    try:
+                        with Image.open(img_path) as pil_img:
+                            if pil_img.mode != "RGB":
+                                pil_img = pil_img.convert("RGB")
+                            jpeg_buf = io.BytesIO()
+                            pil_img.save(jpeg_buf, format="JPEG", quality=95, optimize=True)
+                            image_data = jpeg_buf.getvalue()
+                        saved_path = db.save_image_to_file(pdf_filename, page_num, image_data)
+                        cursor.execute(
+                            """
+                            INSERT INTO page_images_current
+                            (pdf_filename, page_number, image_path, image_format, image_size)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (pdf_filename, page_number) DO UPDATE SET
+                                image_path = EXCLUDED.image_path,
+                                image_format = EXCLUDED.image_format,
+                                image_size = EXCLUDED.image_size,
+                                created_at = CURRENT_TIMESTAMP
+                            """,
+                            (pdf_filename, page_num, saved_path, "JPEG", len(image_data)),
+                        )
+                    except Exception as img_err:
+                        print(f"⚠️ 画像登録スキップ ({pdf_filename} p.{page_num}): {img_err}")
+
+            conn.commit()
+        _log(f"✅ [DB同期] フォルダ '{form_folder}': {len(doc_info)}文書, {len(pages)}ページ → documents / page_data / items / page_images に反映済み\n")
+    except Exception as e:
+        import traceback
+        print(f"⚠️ DB同期中にエラー (続行): {e}\n")
+        traceback.print_exc()
 
 
 def diff_pages_with_manifest(
@@ -334,9 +493,9 @@ def build_faiss_db(
 
     # img 하위 각 폴더(finet, mail 등) 처리
     for current_form_folder in form_folders_to_process:
-        print(f"\n{'='*60}")
-        print(f"📂 폴더 '{current_form_folder}' 처리 중")
-        print(f"{'='*60}\n")
+        _log(f"\n{'='*60}")
+        _log(f"📂 폴더 '{current_form_folder}' 처리 중")
+        _log(f"{'='*60}\n")
 
         # 폴더명을 upload_channel로 변환 (form_type → upload_channel 매핑)
         upload_channel = folder_name_to_upload_channel(current_form_folder)
@@ -345,18 +504,24 @@ def build_faiss_db(
         extraction_method = get_extraction_method_for_upload_channel(upload_channel)
         if extraction_method == text_extraction_method:
             pass
-        print(f"📝 '{current_form_folder}' → upload_channel: {upload_channel}, 추출 방법: {extraction_method}\n")
+        _log(f"📝 '{current_form_folder}' → upload_channel: {upload_channel}, 추출 방법: {extraction_method}\n")
 
         # PDF 텍스트 추출기 생성 (캐싱 지원)
         text_extractor = PdfTextExtractor(method=extraction_method, upload_channel=upload_channel)
 
         pages = find_pdf_pages(img_dir, current_form_folder)
         if not pages:
-            print(f"⚠️ 폴더 '{current_form_folder}'에 처리할 페이지가 없습니다.\n")
+            _log(f"⚠️ 폴더 '{current_form_folder}'에 처리할 페이지가 없습니다.\n")
             text_extractor.close_all()  # 캐시 정리
             continue
 
-        print(f"✅ {len(pages)}개 페이지 발견\n")
+        _log(f"✅ {len(pages)}개 페이지 발견\n")
+
+        # img 由来の文書・ページを DB に同期し、現況の文書一覧に表示されるようにする
+        if getattr(rag_manager, "db", None):
+            sync_img_pages_to_documents_db(rag_manager.db, pages, upload_channel, current_form_folder)
+        else:
+            _log("⚠️ DB 未接続のため、文書一覧（現況）には反映されません。\n")
 
         try:
             # 삭제된 페이지 감지

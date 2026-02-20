@@ -553,31 +553,11 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
         id={`file-input-${uploadChannel}`}
       />
 
-      <label
-        htmlFor={`file-input-${uploadChannel}`}
-        className={`file-input-label ${allFilesCompleted ? 'completed-state' : ''} ${isYearMonthRequired ? 'disabled-no-year-month' : ''}`}
-        style={{ 
-          opacity: isUploading ? 0.5 : isYearMonthRequired ? 0.7 : 1,
+      <div
+        className={`file-upload-zone ${allFilesCompleted ? 'completed-state' : ''} ${isYearMonthRequired ? 'disabled-no-year-month' : ''}`}
+        style={{
+          opacity: isUploading ? 0.5 : 1,
           pointerEvents: isUploading ? 'none' : 'auto',
-          cursor: isUploading ? 'not-allowed' : isYearMonthRequired ? 'pointer' : 'pointer'
-        }}
-        onClick={(e) => {
-          e.stopPropagation()
-          if (isUploading) {
-            e.preventDefault()
-            return
-          }
-          if (isYearMonthRequired) {
-            e.preventDefault()
-            e.stopPropagation()
-            alert('年・月を選択してください。')
-            return
-          }
-          // htmlFor로 인한 기본 동작을 막고, 직접 input을 클릭하여 이벤트 중복 방지
-          e.preventDefault()
-          if (fileInputRef.current) {
-            fileInputRef.current.click() // 파일 선택 대화상자 열기
-          }
         }}
         onDragOver={(e) => {
           e.preventDefault()
@@ -609,25 +589,31 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
                 newProgresses[file.name] = { status: 'pending' }
               })
               setFileProgresses(newProgresses)
-              // 드롭한 파일도 사전 체크
               void checkExistingDocuments(droppedFiles)
             }
           }
         }}
       >
-        <div className="file-upload-icon">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M12 15V3M12 3L8 7M12 3L16 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            <path d="M2 17L2 19C2 20.1046 2.89543 21 4 21L20 21C21.1046 21 22 20.1046 22 19L22 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        </div>
-        <div className="file-upload-text">
-          <span className="file-upload-main-text">PDFファイルを選択</span>
-          <span className="file-upload-sub-text">
-            {isYearMonthRequired ? '年・月を選択してください' : 'またはドラッグ＆ドロップ'}
-          </span>
-        </div>
-      </label>
+        <button
+          type="button"
+          className="file-upload-trigger-btn"
+          disabled={isUploading}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (isYearMonthRequired) {
+              alert('年・月を選択してください。')
+              return
+            }
+            fileInputRef.current?.click()
+          }}
+        >
+          <span className="file-upload-trigger-icon">↑</span>
+          PDFを選択
+        </button>
+        <span className="file-upload-hint">
+          {isYearMonthRequired ? '年・月を選択してください' : 'またはここにドラッグ'}
+        </span>
+      </div>
     </div>
   )
 }

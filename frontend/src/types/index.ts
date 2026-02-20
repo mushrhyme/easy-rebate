@@ -68,7 +68,7 @@ export interface SearchResult {
 }
 
 export interface PageImageResponse {
-  image_url: string // static file URL
+  image_url: string | null // static file URL (null = 이미지 미생성 등)
   format: string
   page_role?: string // 'cover', 'detail', 'summary', 'reply' 등
 }

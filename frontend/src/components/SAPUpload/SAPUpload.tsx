@@ -307,7 +307,7 @@ export const SAPUpload = () => {
               <div className="formulas-block">
                 <h3 className="formulas-block-title">データ入力列（양식지별）</h3>
                 <p className="formulas-edit-hint">
-                  필드명 / 수식(예: 単価+単価小数部×0.01) / 분기(예: if 数量単位=個 then 数量 else if 数量単位=CS then ケース入数×数量) 등을 입력 후 保存하면 백엔드 규칙으로 반영됩니다. 분기는 if·else if·then만 사용하며 / 는 수식의 나누기로만 씁니다.
+                  필드명 / 수식(예: 単価+単価小数部×0.01) / 분기(예: if 数量単位=個 then 数量 else if 数量単位=CS then 入数×数量) 등을 입력 후 保存하면 백엔드 규칙으로 반영됩니다. 분기는 if·else if·then만 사용하며 / 는 수식의 나누기로만 씁니다.
                 </p>
                 <div className="formulas-edit-table-wrap">
                   <table className="formulas-edit-table">

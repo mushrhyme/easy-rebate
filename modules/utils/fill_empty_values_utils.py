@@ -2,8 +2,8 @@
 빈값 채우기 유틸리티 모듈
 
 페이지별 JSON 결과에서 빈값을 채우는 로직을 제공합니다.
-answer.json item 키는 양식 무관하게 통일: 請求番号, 得意先, 備考, 税額, 得意先コード 등.
-1. 동일 페이지 내: 이전 아이템의 請求番号, 得意先, 得意先コード 로 빈칸 채우기
+answer.json item 키는 양식 무관하게 통일: 請求番号, 得意先, 備考, 税額, 得意先CD 등.
+1. 동일 페이지 내: 이전 아이템의 請求番号, 得意先, 得意先CD 로 빈칸 채우기
 2. 페이지 간: 직전 페이지에서 請求番号/得意先/備考, 다음 페이지에서 税額를 가져와 채움.
 """
 
@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional, Tuple
 # 표준화된 item 키 (양식별 매핑 없음)
 KEY_MANAGEMENT_ID = "請求番号"
 KEY_CUSTOMER = "得意先"
-KEY_CUSTOMER_CODE = "得意先コード"
+KEY_CUSTOMER_CODE = "得意先CD"
 KEY_SUMMARY = "備考"
 KEY_TAX = "税額"
 
@@ -76,7 +76,7 @@ def _get_first_tax_from_page(page_json: Dict[str, Any]) -> Optional[str]:
 def _fill_empty_values_within_page(items: List[Dict[str, Any]]) -> None:
     """
     동일 페이지 내에서 이전 아이템의 값으로 빈칸 채우기.
-    請求番号, 得意先, 得意先コード 에 대해 이전 행 값으로 채움.
+    請求番号, 得意先, 得意先CD 에 대해 이전 행 값으로 채움.
     """
     if not items:
         return
@@ -111,8 +111,8 @@ def fill_empty_values_in_page_results(
 ) -> List[Dict[str, Any]]:
     """
     페이지별 JSON 결과에서 빈값 채우기.
-    표준 키(請求番号, 得意先, 備考, 税額, 得意先コード) 기준으로 동작. form_type은 미사용(호환용).
-    - 동일 페이지 내: 이전 아이템의 請求番号, 得意先, 得意先コード 로 빈칸 채우기
+    표준 키(請求番号, 得意先, 備考, 税額, 得意先CD) 기준으로 동작. form_type은 미사용(호환용).
+    - 동일 페이지 내: 이전 아이템의 請求番号, 得意先, 得意先CD 로 빈칸 채우기
     - 페이지 간: 직전 페이지에서 請求番号/得意先/備考, 다음 페이지에서 税額를 가져와 채움.
     """
     if not page_results:
