@@ -163,11 +163,16 @@ async def global_exception_handler(request, exc):
     )
 
 
-if __name__ == "__main__":
+def run():
+    """진입점: 개발 시에는 DEBUG=true로 reload, 운영 시에는 reload 없이 실행."""
     import uvicorn
     uvicorn.run(
         "backend.main:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=settings.DEBUG
+        reload=settings.DEBUG,
     )
+
+
+if __name__ == "__main__":
+    run()

@@ -24,13 +24,15 @@ class UsersMixin:
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 try:
-                    # 新スキーマ: display_name_ja カラムあり
+                    # 新スキーマ: display_name_ja, password_hash, force_password_change
                     cursor.execute("""
                         SELECT user_id,
                                username,
                                display_name,
                                display_name_ja,
                                is_active,
+                               password_hash,
+                               force_password_change,
                                created_at,
                                last_login_at,
                                login_count,
@@ -39,13 +41,15 @@ class UsersMixin:
                         WHERE username = %s AND is_active = TRUE
                     """, (username,))
                 except Exception:
-                    # 旧スキーマ互換: display_name_ja が無い場合
+                    # 旧スキーマ互換
                     cursor.execute("""
                         SELECT user_id,
                                username,
                                display_name,
                                NULL::VARCHAR(200) AS display_name_ja,
                                is_active,
+                               NULL::VARCHAR(255) AS password_hash,
+                               COALESCE(force_password_change, TRUE) AS force_password_change,
                                created_at,
                                last_login_at,
                                login_count,
@@ -80,6 +84,8 @@ class UsersMixin:
                                display_name,
                                display_name_ja,
                                is_active,
+                               password_hash,
+                               force_password_change,
                                created_at,
                                last_login_at,
                                login_count,
@@ -94,6 +100,8 @@ class UsersMixin:
                                display_name,
                                NULL::VARCHAR(200) AS display_name_ja,
                                is_active,
+                               NULL::VARCHAR(255) AS password_hash,
+                               COALESCE(force_password_change, TRUE) AS force_password_change,
                                created_at,
                                last_login_at,
                                login_count,
@@ -156,9 +164,7 @@ class UsersMixin:
                     SELECT session_id FROM user_sessions WHERE session_id = %s
                 """, (session_id,))
                 existing = cursor.fetchone()
-                if existing:
-                    print(f"🔵 [create_user_session] 기존 세션 발견, 업데이트: session_id={session_id[:20]}...")
-                
+
                 cursor.execute("""
                     INSERT INTO user_sessions (session_id, user_id, ip_address, user_agent)
                     VALUES (%s, %s, %s, %s)
@@ -170,13 +176,8 @@ class UsersMixin:
                         expires_at = CURRENT_TIMESTAMP + INTERVAL '24 hours'
                 """, (session_id, user_id, ip_address, user_agent))
                 
-                rows_affected = cursor.rowcount
-                print(f"🔵 [create_user_session] INSERT/UPDATE 완료: rows_affected={rows_affected}")
-                
-                # 명시적으로 커밋
                 conn.commit()
-                print(f"🔵 [create_user_session] 커밋 완료")
-                
+
                 # 세션이 제대로 생성되었는지 확인 (같은 연결에서)
                 cursor.execute("""
                     SELECT session_id, user_id, expires_at, created_at 
@@ -185,11 +186,8 @@ class UsersMixin:
                 """, (session_id,))
                 result = cursor.fetchone()
                 if result:
-                    print(f"✅ [create_user_session] 세션 생성 성공: session_id={session_id[:20]}..., user_id={result[1]}, expires_at={result[2]}, created_at={result[3]}")
                     return True
-                else:
-                    print(f"❌ [create_user_session] 세션 생성 후 확인 실패: session_id={session_id[:20]}... (같은 연결에서도 조회 불가)")
-                    return False
+                return False
         except Exception as e:
             print(f"⚠️ 세션 생성 실패: {e}")
             import traceback
@@ -207,7 +205,6 @@ class UsersMixin:
             사용자 정보 딕셔너리 또는 None
         """
         try:
-            print(f"🔵 [get_session_user] 조회 시도: session_id={session_id[:20] if session_id else 'None'}...")
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 
@@ -222,26 +219,9 @@ class UsersMixin:
                 session_raw = cursor.fetchone()
                 
                 if not session_raw:
-                    print(f"⚠️ [get_session_user] 세션이 데이터베이스에 없음: session_id={session_id[:20] if session_id else 'None'}...")
-                    # 디버깅: 전체 세션 목록 확인
-                    cursor.execute("SELECT COUNT(*) as count FROM user_sessions")
-                    total_sessions = cursor.fetchone()
-                    print(f"🔵 [get_session_user] 현재 데이터베이스의 총 세션 수: {total_sessions['count'] if total_sessions else 0}")
                     return None
-                
-                session_data = dict(session_raw)
-                print(f"🔵 [get_session_user] 세션 발견: session_id={session_id[:20]}..., user_id={session_data.get('user_id')}, expires_at={session_data.get('expires_at')}, is_active={session_data.get('is_active')}")
-                
-                # 만료 시간 확인
-                from datetime import datetime
-                expires_at = session_data.get('expires_at')
-                if expires_at:
-                    if isinstance(expires_at, str):
-                        # 문자열인 경우 파싱 필요 (실제로는 datetime 객체일 수 있음)
-                        pass
-                    # 만료 여부는 SQL 쿼리에서 처리
-                
-                # 전체 조건으로 다시 조회
+
+                # 전체 조건으로 다시 조회 (만료·활성 여부는 쿼리에서 처리)
                 try:
                     cursor.execute("""
                         SELECT u.user_id,
@@ -249,6 +229,8 @@ class UsersMixin:
                                u.display_name,
                                u.display_name_ja,
                                u.is_active,
+                               u.password_hash,
+                               COALESCE(u.force_password_change, TRUE) AS force_password_change,
                                s.session_id,
                                s.created_at as session_created_at,
                                s.expires_at
@@ -265,6 +247,8 @@ class UsersMixin:
                                u.display_name,
                                NULL::VARCHAR(200) AS display_name_ja,
                                u.is_active,
+                               NULL::VARCHAR(255) AS password_hash,
+                               COALESCE(u.force_password_change, TRUE) AS force_password_change,
                                s.session_id,
                                s.created_at as session_created_at,
                                s.expires_at
@@ -276,16 +260,6 @@ class UsersMixin:
                     """, (session_id,))
 
                 result = cursor.fetchone()
-                if not result:
-                    # 왜 실패했는지 상세 확인
-                    if not session_data.get('is_active'):
-                        print(f"❌ [get_session_user] 사용자가 비활성화됨: user_id={session_data.get('user_id')}")
-                    else:
-                        print(f"❌ [get_session_user] 세션이 만료되었거나 조건 불일치: expires_at={session_data.get('expires_at')}, is_active={session_data.get('is_active')}, CURRENT_TIMESTAMP와 비교 필요")
-                
-                if result:
-                    print(f"✅ [get_session_user] 세션 검증 성공: user_id={dict(result).get('user_id')}")
-                
                 return dict(result) if result else None
         except Exception as e:
             print(f"⚠️ 세션 사용자 조회 실패: {e}")
@@ -358,24 +332,31 @@ class UsersMixin:
             print(f"⚠️ 사용자 목록 조회 실패: {e}")
             return []
 
-    def create_user(self, username: str, display_name: str, display_name_ja: str | None = None, created_by_user_id: int | None = None) -> Optional[int]:
-        """새 사용자 생성"""
+    def create_user(
+        self,
+        username: str,
+        display_name: str,
+        display_name_ja: str | None = None,
+        created_by_user_id: int | None = None,
+        password_hash: str | None = None,
+    ) -> Optional[int]:
+        """새 사용자 생성. password_hash가 없으면 초기 비밀번호(ID와 동일)로 설정하려면 호출측에서 hash(username) 전달."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute("""
+                        INSERT INTO users (username, display_name, display_name_ja, created_by_user_id, password_hash, force_password_change)
+                        VALUES (%s, %s, %s, %s, %s, TRUE)
+                        RETURNING user_id
+                    """, (username, display_name, display_name_ja, created_by_user_id, password_hash))
+                except Exception:
+                    # 旧スキーマ互換 (password_hash 없음)
+                    cursor.execute("""
                         INSERT INTO users (username, display_name, display_name_ja, created_by_user_id)
                         VALUES (%s, %s, %s, %s)
                         RETURNING user_id
                     """, (username, display_name, display_name_ja, created_by_user_id))
-                except Exception:
-                    # display_name_ja カラムが無い旧スキーマ互換
-                    cursor.execute("""
-                        INSERT INTO users (username, display_name, created_by_user_id)
-                        VALUES (%s, %s, %s)
-                        RETURNING user_id
-                    """, (username, display_name, created_by_user_id))
 
                 result = cursor.fetchone()
                 conn.commit()
@@ -434,4 +415,27 @@ class UsersMixin:
                 return True
         except Exception as e:
             print(f"⚠️ 사용자 업데이트 실패: {e}")
+            return False
+
+    def update_password(self, user_id: int, password_hash: str) -> bool:
+        """비밀번호 변경 (해시 저장 후 강제 변경 플래그 해제)"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                try:
+                    cursor.execute("""
+                        UPDATE users
+                        SET password_hash = %s, force_password_change = FALSE
+                        WHERE user_id = %s
+                    """, (password_hash, user_id))
+                except Exception:
+                    cursor.execute("""
+                        UPDATE users
+                        SET force_password_change = FALSE
+                        WHERE user_id = %s
+                    """, (user_id,))
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"⚠️ 비밀번호 업데이트 실패: {e}")
             return False
