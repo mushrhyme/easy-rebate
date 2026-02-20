@@ -19,6 +19,8 @@ CREATE TABLE users (
     role VARCHAR(100),
     category VARCHAR(100),
     is_active BOOLEAN DEFAULT TRUE,
+    password_hash VARCHAR(255),
+    force_password_change BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMP,
     login_count INTEGER DEFAULT 0,
@@ -55,7 +57,8 @@ CREATE TABLE documents_current (
     data_month INTEGER,
     is_answer_key_document BOOLEAN NOT NULL DEFAULT FALSE,
     created_by_user_id INTEGER REFERENCES users(user_id),
-    updated_by_user_id INTEGER REFERENCES users(user_id)
+    updated_by_user_id INTEGER REFERENCES users(user_id),
+    answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
 );
 
 -- documents_archive 테이블
@@ -74,7 +77,8 @@ CREATE TABLE documents_archive (
     data_month INTEGER,
     is_answer_key_document BOOLEAN NOT NULL DEFAULT FALSE,
     created_by_user_id INTEGER REFERENCES users(user_id),
-    updated_by_user_id INTEGER REFERENCES users(user_id)
+    updated_by_user_id INTEGER REFERENCES users(user_id),
+    answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
 );
 
 -- ============================================
@@ -284,11 +288,11 @@ VALUES
     ('03', 'customer', '得意先名', TRUE),
     ('04', 'customer', '得意先', TRUE),
     ('05', 'customer', '得意先', TRUE),
-    ('01', 'customer_code', '得意先コード', TRUE),
-    ('02', 'customer_code', '得意先コード', TRUE),
-    ('03', 'customer_code', '得意先コード', TRUE),
-    ('04', 'customer_code', '得意先コード', TRUE),
-    ('05', 'customer_code', '得意先コード', TRUE),
+    ('01', 'customer_code', '得意先CD', TRUE),
+    ('02', 'customer_code', '得意先CD', TRUE),
+    ('03', 'customer_code', '得意先CD', TRUE),
+    ('04', 'customer_code', '得意先CD', TRUE),
+    ('05', 'customer_code', '得意先CD', TRUE),
     ('01', 'management_id', '請求伝票番号', TRUE),
     ('02', 'management_id', '請求No（契約No）', TRUE),
     ('03', 'management_id', '請求No', TRUE),
