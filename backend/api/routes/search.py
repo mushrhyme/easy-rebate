@@ -115,7 +115,12 @@ async def get_page_image_url(
             pass
 
         if not image_path:
-            raise HTTPException(status_code=404, detail="Image not found")
+            # 이미지가 아직 DB에 없어도 404 대신 200 + image_url: null 반환 (검토 탭 등에서 에러 대신 안내 표시)
+            return {
+                "image_url": None,
+                "format": "jpeg",
+                **({"page_role": page_role} if page_role else {}),
+            }
 
         # 파일 시스템 경로를 URL 경로로 변환
         # "static/images/..." -> "/static/images/..."

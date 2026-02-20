@@ -104,7 +104,7 @@ async def get_form_types(db=Depends(get_db)):
 # form 01 기준 기본 매핑 (신규 양식 생성 시 복사)
 _DEFAULT_MAPPINGS = [
     ("customer", "得意先名"),
-    ("customer_code", "得意先コード"),
+    ("customer_code", "得意先CD"),
     ("management_id", "請求伝票番号"),
     ("summary", "備考"),
     ("tax", "消費税率"),

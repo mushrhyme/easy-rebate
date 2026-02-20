@@ -14,6 +14,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
+from modules.utils.config import get_project_root
 from database.db_items import ItemsMixin
 from database.db_locks import LocksMixin
 from database.db_users import UsersMixin
@@ -468,14 +469,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
 
     def _get_image_path(self, pdf_filename: str, page_number: int) -> str:
         """
-        이미지 파일 경로 반환
-
-        Args:
-            pdf_filename: PDF 파일명
-            page_number: 페이지 번호
-
-        Returns:
-            이미지 파일 경로
+        이미지 파일 경로 반환 (프로젝트 루트 기준 상대 경로).
+        실행 디렉터리(cwd)에 무관하게 동일한 상대 경로를 반환합니다.
         """
         image_dir = Path("static/images") / pdf_filename
         return str(image_dir / f"page_{page_number}.jpg")
@@ -487,23 +482,16 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
         image_data: bytes
     ) -> str:
         """
-        이미지를 파일 시스템에 저장
-
-        Args:
-            pdf_filename: PDF 파일명
-            page_number: 페이지 번호
-            image_data: 이미지 바이너리 데이터
-
+        이미지를 파일 시스템에 저장 (프로젝트 루트 기준 경로에 저장).
         Returns:
-            저장된 파일 경로
+            DB 저장용 상대 경로 (static/images/...)
         """
-        image_path = Path(self._get_image_path(pdf_filename, page_number))
-        image_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(image_path, 'wb') as f:
+        relative_path = self._get_image_path(pdf_filename, page_number)
+        full_path = get_project_root() / relative_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(full_path, 'wb') as f:
             f.write(image_data)
-
-        return str(image_path)
+        return relative_path
 
     def get_page_image_path(
         self,

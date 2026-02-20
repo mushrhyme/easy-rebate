@@ -484,7 +484,7 @@ def _default_formulas() -> Dict[str, Any]:
             {
                 "column": "K",
                 "byForm": {
-                    "01": {"expr": "得意先名 + ' ' + 得意先コード"},
+                    "01": {"expr": "得意先名 + ' ' + 得意先CD"},
                     "02": {"field": "得意先様"},
                     "03": {"field": "得意先名"},
                     "04": {"field": "得意先"},
@@ -499,7 +499,7 @@ def _default_formulas() -> Dict[str, Any]:
                     "01": {
                         "cond": [
                             {"if_field": "数量単位", "if_eq": "個", "then_field": "数量"},
-                            {"if_field": "数量単位", "if_eq": "CS", "then_expr": "ケース入数*数量"},
+                            {"if_field": "数量単位", "if_eq": "CS", "then_expr": "入数*数量"},
                         ]
                     },
                     "02": {"field": "取引数量合計（総数:内数）"},
@@ -514,7 +514,7 @@ def _default_formulas() -> Dict[str, Any]:
                     "01": {
                         "cond": [
                             {"if_field": "条件区分", "if_eq": "個", "then_field": "条件"},
-                            {"if_field": "条件区分", "if_eq": "CS", "then_expr": "金額/(ケース入数*数量)"},
+                            {"if_field": "条件区分", "if_eq": "CS", "then_expr": "金額/(入数*数量)"},
                         ]
                     },
                     "02": "",

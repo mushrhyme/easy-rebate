@@ -98,7 +98,370 @@ async def get_review_stats(
                 "total_pages": len(page_stats),
                 "page_stats": page_stats
             }
-    
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats/review-by-items")
+async def get_review_stats_by_items(db=Depends(get_db)):
+    """
+    検討状況をアイテム数基準で集計。detail ページ・得意先ありのアイテムのみ対象。
+    現況用：base DB（参照用・img同期文書）を除く。data_year/data_month が設定されている文書のみ集計。
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                WITH non_base_docs AS (
+                    SELECT pdf_filename FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION
+                    SELECT pdf_filename FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.pdf_filename, i.first_review_checked, i.second_review_checked
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN non_base_docs d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.pdf_filename, i.first_review_checked, i.second_review_checked
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN non_base_docs d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                )
+                SELECT
+                    COUNT(*) AS total_item_count,
+                    COUNT(DISTINCT pdf_filename) AS total_document_count,
+                    COUNT(*) FILTER (WHERE first_review_checked = true) AS first_checked_count,
+                    COUNT(*) FILTER (WHERE second_review_checked = true) AS second_checked_count
+                FROM detail_items
+            """)
+            row = cursor.fetchone()
+            total = row[0] or 0
+            total_docs = row[1] or 0
+            first_checked = row[2] or 0
+            second_checked = row[3] or 0
+            return {
+                "total_item_count": total,
+                "total_document_count": total_docs,
+                "first_checked_count": first_checked,
+                "first_not_checked_count": total - first_checked,
+                "second_checked_count": second_checked,
+                "second_not_checked_count": total - second_checked,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats/detail-summary")
+async def get_detail_summary(db=Depends(get_db)):
+    """
+    detail ページのみ・得意先ありのアイテム数で集計。
+    cover/summary/reply は含めず、page_role='detail' かつ customer が空でないものだけ。
+    現況用：base DB（参照用・img同期文書）を除く。data_year/data_month が設定されている文書のみ集計。
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                WITH doc_info AS (
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION ALL
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                )
+                SELECT
+                    COUNT(*) AS total_item_count,
+                    COUNT(DISTINCT pdf_filename) AS total_document_count
+                FROM detail_items
+            """)
+            row = cursor.fetchone()
+            total_item_count = row[0] or 0
+            total_document_count = row[1] or 0
+
+            cursor.execute("""
+                WITH doc_info AS (
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION ALL
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                )
+                SELECT COALESCE(upload_channel, '—') AS ch, COUNT(*) AS cnt
+                FROM detail_items
+                GROUP BY upload_channel
+                ORDER BY cnt DESC
+            """)
+            by_channel = [{"channel": r[0], "item_count": r[1]} for r in cursor.fetchall()]
+
+            cursor.execute("""
+                WITH doc_info AS (
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION ALL
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                )
+                SELECT COALESCE(form_type::text, '—') AS ft, COUNT(*) AS cnt
+                FROM detail_items
+                GROUP BY form_type
+                ORDER BY ft
+            """)
+            by_form_type = [{"form_type": r[0], "item_count": r[1]} for r in cursor.fetchall()]
+
+            cursor.execute("""
+                WITH doc_info AS (
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION ALL
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                )
+                SELECT COALESCE(data_year, 0) AS y, COALESCE(data_month, 0) AS m, COUNT(*) AS cnt
+                FROM detail_items
+                WHERE (data_year IS NOT NULL AND data_month IS NOT NULL)
+                GROUP BY data_year, data_month
+                ORDER BY data_year DESC, data_month DESC
+                LIMIT 6
+            """)
+            by_year_month = [{"year": r[0], "month": r[1], "item_count": r[2]} for r in cursor.fetchall()]
+
+            cursor.execute("""
+                WITH doc_info AS (
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION ALL
+                    SELECT pdf_filename, form_type, upload_channel, data_year, data_month
+                    FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN doc_info d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                )
+                SELECT COALESCE(data_year, 0) AS y, COALESCE(data_month, 0) AS m,
+                       COALESCE(form_type::text, '—') AS ft, COUNT(*) AS cnt
+                FROM detail_items
+                WHERE (data_year IS NOT NULL AND data_month IS NOT NULL)
+                GROUP BY data_year, data_month, form_type
+                ORDER BY data_year DESC, data_month DESC, form_type
+            """)
+            rows_ym_by_form = cursor.fetchall()
+            top_ym = {(d["year"], d["month"]) for d in by_year_month}
+            by_year_month_by_form = [
+                {"year": r[0], "month": r[1], "form_type": r[2], "item_count": r[3]}
+                for r in rows_ym_by_form
+                if (r[0], r[1]) in top_ym
+            ]
+
+            return {
+                "total_item_count": total_item_count,
+                "total_document_count": total_document_count,
+                "by_channel": by_channel,
+                "by_form_type": by_form_type,
+                "by_year_month": by_year_month,
+                "by_year_month_by_form": by_year_month_by_form,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats/by-customer")
+async def get_customer_stats(
+    limit: int = 100,
+    db=Depends(get_db)
+):
+    """
+    得意先別集計。detail ページのみ・得意先ありのアイテムのみ（cover 等・空・'—' は含めない）。
+    現況用：base DB（参照用・img同期文書）を除く。data_year/data_month が設定されている文書のみ集計。
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                WITH non_base_docs AS (
+                    SELECT pdf_filename FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION
+                    SELECT pdf_filename FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                all_items AS (
+                    SELECT i.pdf_filename, i.page_number,
+                           COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                               i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') AS customer_name
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN non_base_docs d ON i.pdf_filename = d.pdf_filename
+                    UNION ALL
+                    SELECT i.pdf_filename, i.page_number,
+                           COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                               i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—')
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN non_base_docs d ON i.pdf_filename = d.pdf_filename
+                )
+                SELECT customer_name,
+                       COUNT(DISTINCT pdf_filename) AS document_count,
+                       COUNT(DISTINCT (pdf_filename, page_number)) AS page_count,
+                       COUNT(*) AS item_count
+                FROM all_items
+                WHERE customer_name IS NOT NULL AND TRIM(customer_name) != '' AND customer_name != '—'
+                GROUP BY customer_name
+                ORDER BY item_count DESC
+                LIMIT %s
+            """, (max(1, min(limit, 500)),))
+            rows = cursor.fetchall()
+            return {
+                "customers": [
+                    {
+                        "customer_name": row[0] or "—",
+                        "document_count": row[1],
+                        "page_count": row[2],
+                        "item_count": row[3],
+                    }
+                    for row in rows
+                ]
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

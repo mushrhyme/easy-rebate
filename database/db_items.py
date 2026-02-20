@@ -7,7 +7,9 @@ import time
 import json
 from typing import Dict, Any, List, Optional
 from psycopg2.extras import RealDictCursor, Json
+from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
+from modules.utils.config import get_project_root
 
 
 class ItemsMixin:
@@ -594,13 +596,13 @@ class ItemsMixin:
             items = self.get_items(pdf_filename, page_num, form_type=form_type, item_key_order=item_key_order, year=data_year, month=data_month)
             
             # 5. 페이지 이미지 확인 (성능 최적화: 경로만 확인, 실제 파일 읽기 생략)
-            # 파일 읽기는 느리므로 경로 존재 여부만 확인
+            # 프로젝트 루트 기준 경로로 확인 (실행 디렉터리 무관)
             has_image = False
             try:
                 image_path = self.get_page_image_path(pdf_filename, page_num)
                 if image_path:
-                    from pathlib import Path
-                    has_image = Path(image_path).exists()
+                    full_path = Path(image_path) if Path(image_path).is_absolute() else get_project_root() / image_path
+                    has_image = full_path.exists()
             except Exception:
                 pass  # 이미지 확인 실패는 무시
                 

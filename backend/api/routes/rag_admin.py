@@ -2,9 +2,12 @@
 RAG / 벡터 DB 관리용 관리자 API
 """
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import json
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -166,6 +169,7 @@ async def build_vector_db(
         form_type = payload.get("form_type") or None
 
     # 스레드 풀에서 실행하여 이벤트 루프 블로킹 방지
+    logger.info("ベクターDB再構築 開始 (img フォルダ走査)")
     try:
         await asyncio.to_thread(
             build_faiss_db,
@@ -173,7 +177,9 @@ async def build_vector_db(
             auto_merge=True,
             text_extraction_method="excel",
         )
+        logger.info("ベクターDB再構築 完了")
     except Exception as e:
+        logger.exception("ベクターDB再構築 エラー")
         raise HTTPException(status_code=500, detail=f"벡터 DB 생성 중 오류가 발생했습니다: {e}")
 
     # 최신 통계 조회
