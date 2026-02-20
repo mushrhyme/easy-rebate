@@ -6,10 +6,11 @@ import base64
 import re
 import json
 import time
+import shutil
 from pathlib import Path
 from io import BytesIO
 from typing import List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -19,11 +20,43 @@ from database.table_selector import get_table_name, get_table_suffix
 from modules.core.processor import PdfProcessor
 from modules.utils.config import rag_config, get_project_root
 from backend.core.session import SessionManager
+
+# 분석 완료 이미지: static/images/{pdf_filename}/ 하위에 저장됨. DB 삭제 시 함께 삭제.
+def _delete_static_images_for_document(pdf_filename: str) -> None:
+    """문서(pdf_filename)에 해당하는 static 이미지 디렉터리 삭제."""
+    root = get_project_root()
+    img_dir = root / "static" / "images" / pdf_filename
+    if img_dir.exists() and img_dir.is_dir():
+        shutil.rmtree(img_dir, ignore_errors=True)
 from backend.core.config import settings
-from backend.core.auth import get_current_user_id
+from backend.core.auth import get_current_user, get_current_user_id
 from backend.api.routes.websocket import manager
 
 router = APIRouter()
+
+
+def _ensure_answer_key_designated_by_column(db):
+    """answer_key_designated_by_user_id が無ければ追加（マイグレーション）"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'documents_current' AND column_name = 'answer_key_designated_by_user_id'
+            """)
+            if cursor.fetchone():
+                return
+            cursor.execute("""
+                ALTER TABLE documents_current
+                ADD COLUMN IF NOT EXISTS answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
+            """)
+            cursor.execute("""
+                ALTER TABLE documents_archive
+                ADD COLUMN IF NOT EXISTS answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
+            """)
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _answer_key_debug_dir(pdf_filename: str) -> Path:
@@ -38,80 +71,84 @@ def query_documents_table(
     form_type: Optional[str] = None,
     upload_channel: Optional[str] = None,
     year: Optional[int] = None,
-    month: Optional[int] = None
+    month: Optional[int] = None,
+    is_answer_key_document: Optional[bool] = None,
+    answer_key_designated_by_user_id: Optional[int] = None,
 ) -> List[Tuple]:
     """
     documents 테이블 조회 헬퍼 함수 (current/archive 테이블 자동 선택)
-    
+
     Args:
-        db: 데이터베이스 인스턴스
-        form_type: 양식지 타입 필터 (선택사항)
-        year: 연도 (선택사항, 없으면 current + archive 모두 조회)
-        month: 월 (선택사항, 없으면 current + archive 모두 조회)
-    
-    Returns:
-        조회된 행 리스트
+        is_answer_key_document: True のとき正解表対象文書のみ返す。
+        answer_key_designated_by_user_id: 指定時は正解表対象のうち、この user_id が指定した文書のみ返す（管理者は指定せず全件）。
     """
-    query_start = time.perf_counter()
-    
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        
-        # 연월이 지정되면 해당 테이블만 조회
+        answer_key_filter = " AND is_answer_key_document = TRUE" if is_answer_key_document else ""
+        designated_filter = " AND answer_key_designated_by_user_id = %s" if (is_answer_key_document and answer_key_designated_by_user_id is not None) else ""
+
         if year is not None and month is not None:
             table_suffix = get_table_suffix(year, month)
             documents_table = f"documents_{table_suffix}"
-            
             filter_cond = upload_channel or form_type
             if filter_cond:
                 col, val = ("upload_channel", upload_channel) if upload_channel else ("form_type", form_type)
+                params: tuple = (val,) if not designated_filter else (val, answer_key_designated_by_user_id)
                 cursor.execute(f"""
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
-                    WHERE {col} = %s
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}
                     ORDER BY created_at DESC
-                """, (val,))
+                """, params)
             else:
+                params = () if not designated_filter else (answer_key_designated_by_user_id,)
                 cursor.execute(f"""
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
+                    WHERE 1=1{answer_key_filter}{designated_filter}
                     ORDER BY created_at DESC
-                """)
+                """, params)
             rows = cursor.fetchall()
-            query_label = f"documents_{table_suffix}" + (f" (filter={filter_cond})" if filter_cond else " (전체)")
         else:
-            # current + archive 모두 조회
             filter_cond = upload_channel or form_type
             col, val = ("upload_channel", upload_channel) if upload_channel else ("form_type", form_type)
             if filter_cond:
+                if designated_filter:
+                    params = (val, val, answer_key_designated_by_user_id, answer_key_designated_by_user_id)
+                else:
+                    params = (val, val)
                 cursor.execute(f"""
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
-                    WHERE {col} = %s
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}
                     UNION ALL
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
-                    WHERE {col} = %s
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}
                     ORDER BY created_at DESC
-                """, (val, val))
+                """, params)
             else:
-                cursor.execute("""
+                if designated_filter:
+                    params = (answer_key_designated_by_user_id, answer_key_designated_by_user_id)
+                else:
+                    params = ()
+                cursor.execute(f"""
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
+                    WHERE 1=1{answer_key_filter}{designated_filter}
                     UNION ALL
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
+                    WHERE 1=1{answer_key_filter}{designated_filter}
                     ORDER BY created_at DESC
-                """)
+                """, params)
             rows = cursor.fetchall()
-            query_label = "documents (current+archive)" + (f" (filter={filter_cond})" if filter_cond else " (전체)")
-    
     return rows
 
 
@@ -663,99 +700,325 @@ async def get_documents(
     upload_channel: Optional[str] = None,
     year: Optional[int] = None,
     month: Optional[int] = None,
+    is_answer_key_document: Optional[bool] = None,
     db=Depends(get_db)
 ):
     """
     문서 목록 조회 (current/archive 테이블 사용)
-    
+
     Args:
-        form_type: 양식지 타입 필터 (하위 호환)
-        upload_channel: 업로드 채널 필터 (finet | mail)
-        year: 연도 (선택사항)
-        month: 월 (선택사항)
-        db: 데이터베이스 인스턴스
+        is_answer_key_document: True のとき正解表対象文書のみ返す。
     """
-    total_start = time.perf_counter()
-    
     try:
-        rows = query_documents_table(db, form_type=form_type, upload_channel=upload_channel, year=year, month=month)
-        
-        # 배치로 첫 페이지의 page_meta 일괄 조회 (N+1 쿼리 문제 해결)
-        pdf_filenames = [row[0] for row in rows]
-        page_meta_rows = query_page_meta_batch(db, pdf_filenames, year=year, month=month)
-        
-        # 데이터 처리 시간 측정
-        processing_start = time.perf_counter()
+        rows = query_documents_table(
+            db,
+            form_type=form_type,
+            upload_channel=upload_channel,
+            year=year,
+            month=month,
+            is_answer_key_document=is_answer_key_document,
+        )
+        documents = _build_document_list_from_rows(db, rows, year=year, month=month)
+        return DocumentListResponse(documents=documents, total=len(documents))
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _extract_pdf_filenames_from_index_metadata(meta) -> list:
+    """rag_vector_index.metadata_json 에서 pdf_filename 목록 추출."""
+    if meta is None:
+        return []
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            return []
+    if not isinstance(meta, dict):
+        return []
+    metadata_dict = meta.get("metadata") or meta.get("Metadata") or {}
+    pdf_names = set()
+    for _doc_id, doc_data in (metadata_dict or {}).items():
+        if not isinstance(doc_data, dict):
+            continue
+        inner = doc_data.get("metadata") or doc_data.get("Metadata") or {}
+        pn = (inner or {}).get("pdf_name") or (inner or {}).get("pdf_filename")
+        if pn:
+            pdf_names.add(pn)
+    return [
+        p if (p and str(p).lower().endswith(".pdf")) else f"{p}.pdf"
+        for p in pdf_names
+    ]
+
+
+@router.get("/in-vector-index")
+async def get_documents_in_vector_index(db=Depends(get_db)):
+    """
+    현재 RAG 벡터 인덱스에 포함된 문서(pdf_filename) 목록 반환.
+    업로드 탭에서 벡터 DB 사용 여부 표시용.
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT metadata_json FROM rag_vector_index
+                WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
+                ORDER BY updated_at DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+        if not row:
+            return {"pdf_filenames": []}
+        pdf_filenames = _extract_pdf_filenames_from_index_metadata(row[0])
+        return {"pdf_filenames": pdf_filenames}
+    except Exception:
+        return {"pdf_filenames": []}
+
+
+def _build_document_list_from_rows(db, rows, year=None, month=None) -> List:
+    """query_documents_table 결과 rows를 DocumentResponse 리스트로 변환 (get_documents / for_answer_key_tab 공용)."""
+    if not rows:
+        return []
+    pdf_filenames = [row[0] for row in rows]
+    page_meta_rows = query_page_meta_batch(db, pdf_filenames, year=year, month=month)
+    documents = []
+    for row in rows:
+        pdf_filename = row[0]
+        total_pages = row[1]
+        row_form_type = row[2]
+        row_upload_channel = row[3] if len(row) > 3 else None
+        created_at = row[4] if len(row) > 4 else row[3] if len(row) == 4 else None
+        data_year = row[5] if len(row) > 5 else (row[4] if len(row) > 4 else None)
+        data_month = row[6] if len(row) > 6 else (row[5] if len(row) > 5 else None)
+        is_answer_key_document = bool(row[7]) if len(row) > 7 else False
+        created_at_str = None
+        if created_at:
+            if isinstance(created_at, str):
+                created_at_str = created_at
+            elif isinstance(created_at, datetime):
+                created_at_str = created_at.isoformat()
+            else:
+                try:
+                    created_at_str = str(created_at)
+                except Exception:
+                    created_at_str = None
+        if not data_year or not data_month:
+            for page_filename, page_meta_data in page_meta_rows:
+                if page_filename == pdf_filename and page_meta_data:
+                    try:
+                        page_meta = json.loads(page_meta_data) if isinstance(page_meta_data, str) else page_meta_data
+                        document_meta = page_meta.get('document_meta', {})
+                        if isinstance(document_meta, str):
+                            document_meta = json.loads(document_meta)
+                        billing_date = document_meta.get('請求年月') if isinstance(document_meta, dict) else page_meta.get('請求年月')
+                        if billing_date:
+                            year_month = extract_year_month_from_billing_date(billing_date)
+                            if year_month:
+                                data_year = data_year or year_month[0]
+                                data_month = data_month or year_month[1]
+                                break
+                    except Exception:
+                        pass
+        documents.append(DocumentResponse(
+            pdf_filename=pdf_filename,
+            total_pages=total_pages,
+            form_type=row_form_type,
+            upload_channel=row_upload_channel,
+            status="completed",
+            created_at=created_at_str,
+            data_year=data_year,
+            data_month=data_month,
+            is_answer_key_document=is_answer_key_document
+        ))
+    return documents
+
+
+@router.get("/for-answer-key-tab", response_model=DocumentListResponse)
+async def get_documents_for_answer_key_tab(
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """
+    正解表作成タブ用の文書一覧。管理者は全正解表対象、一般ユーザーは自分が指定した文書のみ。
+    """
+    _ensure_answer_key_designated_by_column(db)
+    user_id: int = current_user.get("user_id")
+    username: Optional[str] = current_user.get("username")
+    is_admin = username == "admin"
+    rows = query_documents_table(
+        db,
+        is_answer_key_document=True,
+        answer_key_designated_by_user_id=None if is_admin else user_id,
+    )
+    documents = _build_document_list_from_rows(db, rows)
+    return DocumentListResponse(documents=documents, total=len(documents))
+
+
+def _query_page_role_counts(db) -> Tuple[dict, dict]:
+    """
+    Returns (totals, by_doc).
+    totals: { "cover": N, "detail": N, "summary": N, "reply": N }
+    by_doc: { pdf_filename: { "cover": n, "detail": n, ... } }
+    """
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            WITH role_counts AS (
+                SELECT pdf_filename, page_role, COUNT(*) AS cnt
+                FROM page_data_current
+                WHERE page_role IS NOT NULL AND page_role != ''
+                GROUP BY pdf_filename, page_role
+                UNION ALL
+                SELECT pdf_filename, page_role, COUNT(*) AS cnt
+                FROM page_data_archive
+                WHERE page_role IS NOT NULL AND page_role != ''
+                GROUP BY pdf_filename, page_role
+            )
+            SELECT pdf_filename, page_role, SUM(cnt)::int AS cnt
+            FROM role_counts
+            GROUP BY pdf_filename, page_role
+        """)
+        rows = cursor.fetchall()
+    totals = {"cover": 0, "detail": 0, "summary": 0, "reply": 0}
+    by_doc = {}
+    for pdf_filename, page_role, cnt in rows:
+        role = (page_role or "").strip().lower()
+        if role not in totals:
+            totals[role] = 0
+        totals[role] += cnt
+        if pdf_filename not in by_doc:
+            by_doc[pdf_filename] = {"cover": 0, "detail": 0, "summary": 0, "reply": 0}
+        if role in by_doc[pdf_filename]:
+            by_doc[pdf_filename][role] += cnt
+        else:
+            by_doc[pdf_filename][role] = cnt
+    return totals, by_doc
+
+
+@router.get("/overview")
+async def get_documents_overview(
+    answer_key_only: bool = False,
+    db=Depends(get_db)
+):
+    """
+    文書一覧と様式マッピング・ページ役割(Cover/Detail/Summary/Reply)別件数を返す。
+    """
+    try:
+        rows = query_documents_table(db, is_answer_key_document=True if answer_key_only else None)
+        totals, by_doc = _query_page_role_counts(db)
         documents = []
         for row in rows:
             pdf_filename = row[0]
             total_pages = row[1]
-            row_form_type = row[2]
-            row_upload_channel = row[3] if len(row) > 3 else None
-            created_at = row[4] if len(row) > 4 else row[3] if len(row) == 4 else None
-            data_year = row[5] if len(row) > 5 else (row[4] if len(row) > 4 else None)
-            data_month = row[6] if len(row) > 6 else (row[5] if len(row) > 5 else None)
-            is_answer_key_document = bool(row[7]) if len(row) > 7 else False
-            
-            # created_at을 ISO 형식 문자열로 변환
-            created_at_str = None
-            if created_at:
-                if isinstance(created_at, str):
-                    created_at_str = created_at
-                elif isinstance(created_at, datetime):
-                    created_at_str = created_at.isoformat()
-                else:
-                    try:
-                        created_at_str = str(created_at)
-                    except Exception:
-                        created_at_str = None
-            
-            # data_year, data_month가 없으면 page_meta에서 추출 시도
-            if not data_year or not data_month:
-                for page_filename, page_meta_data in page_meta_rows:
-                    if page_filename == pdf_filename and page_meta_data:
-                        try:
-                            if isinstance(page_meta_data, str):
-                                page_meta = json.loads(page_meta_data)
-                            else:
-                                page_meta = page_meta_data
-                            
-                            document_meta = page_meta.get('document_meta', {})
-                            if isinstance(document_meta, str):
-                                document_meta = json.loads(document_meta)
-                            
-                            billing_date = None
-                            if isinstance(document_meta, dict):
-                                billing_date = document_meta.get('請求年月')
-                            else:
-                                billing_date = page_meta.get('請求年月')
-                            
-                            if billing_date:
-                                year_month = extract_year_month_from_billing_date(billing_date)
-                                if year_month:
-                                    data_year = data_year or year_month[0]
-                                    data_month = data_month or year_month[1]
-                                    break
-                        except Exception:
-                            pass
-            
-            documents.append(DocumentResponse(
-                pdf_filename=pdf_filename,
-                total_pages=total_pages,
-                form_type=row_form_type,
-                upload_channel=row_upload_channel,
-                status="completed",
-                created_at=created_at_str,
-                data_year=data_year,
-                data_month=data_month,
-                is_answer_key_document=is_answer_key_document
-            ))
-        
-        return DocumentListResponse(
-            documents=documents,
-            total=len(documents)
+            form_type = row[2]
+            is_ans = bool(row[7]) if len(row) > 7 else False
+            role_counts = by_doc.get(pdf_filename) or {"cover": 0, "detail": 0, "summary": 0, "reply": 0}
+            documents.append({
+                "pdf_filename": pdf_filename,
+                "form_type": form_type,
+                "total_pages": total_pages,
+                "is_answer_key_document": is_ans,
+                "cover": role_counts.get("cover", 0),
+                "detail": role_counts.get("detail", 0),
+                "summary": role_counts.get("summary", 0),
+                "reply": role_counts.get("reply", 0),
+            })
+        return {
+            "page_role_totals": totals,
+            "documents": documents,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _find_pdf_path_for_document(db, pdf_filename: str) -> Optional[Path]:
+    """
+    기존 문서용 PDF 파일 경로 찾기 (세션 temp, img 학습 폴더 순으로 검색).
+    """
+    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    from modules.utils.pdf_utils import find_pdf_path
+    found = find_pdf_path(pdf_name)
+    if found:
+        p = Path(found)
+        if p.exists():
+            return p
+    root = get_project_root()
+    img_dir = root / "img"
+    if img_dir.exists():
+        doc = db.get_document(pdf_filename)
+        if doc:
+            ch = doc.get("upload_channel") or "mail"
+            y, m = doc.get("data_year"), doc.get("data_month")
+            if y and m:
+                candidate = img_dir / ch / f"{y}-{m:02d}" / pdf_name / f"{pdf_name}.pdf"
+                if candidate.exists():
+                    return candidate
+        for path in img_dir.rglob(f"{pdf_name}.pdf"):
+            if path.is_file():
+                return path
+    return None
+
+
+@router.post("/{pdf_filename}/generate-page-images")
+async def generate_page_images(
+    pdf_filename: str,
+    db=Depends(get_db),
+):
+    """
+    이미지가 아직 없는 문서에 대해 PDF에서 페이지 이미지를 생성해 저장합니다.
+    PDF는 세션 temp 또는 img 학습 폴더에서 찾습니다. 없으면 해당 문서를 다시 업로드해야 합니다.
+    """
+    doc = db.get_document(pdf_filename)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    total_pages = int(doc.get("total_pages") or 0)
+    if total_pages <= 0:
+        raise HTTPException(status_code=400, detail="Document has no pages")
+    pdf_path = _find_pdf_path_for_document(db, pdf_filename)
+    if not pdf_path or not pdf_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="PDFファイルが見つかりません。一覧から該当文書を再度アップロードして解析を実行してください。",
         )
-    
+    import io
+    import fitz
+    from PIL import Image
+    try:
+        doc_fitz = fitz.open(str(pdf_path))
+        try:
+            dpi = getattr(rag_config, "dpi", 300)
+            zoom = dpi / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+            saved = 0
+            for page_idx in range(min(len(doc_fitz), total_pages)):
+                page_num = page_idx + 1
+                page = doc_fitz.load_page(page_idx)
+                pix = page.get_pixmap(matrix=matrix)
+                img_bytes = pix.tobytes("png")
+                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                jpeg_buf = io.BytesIO()
+                img.save(jpeg_buf, format="JPEG", quality=95, optimize=True)
+                image_data = jpeg_buf.getvalue()
+                image_path = db.save_image_to_file(pdf_filename, page_num, image_data)
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO page_images_current
+                        (pdf_filename, page_number, image_path, image_format, image_size)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (pdf_filename, page_number)
+                        DO UPDATE SET
+                            image_path = EXCLUDED.image_path,
+                            image_format = EXCLUDED.image_format,
+                            image_size = EXCLUDED.image_size,
+                            created_at = CURRENT_TIMESTAMP
+                    """, (pdf_filename, page_num, image_path, "JPEG", len(image_data)))
+                    conn.commit()
+                saved += 1
+        finally:
+            doc_fitz.close()
+        return {"success": True, "message": f"Generated {saved} page images", "pages": saved}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -820,21 +1083,23 @@ async def get_document(
 @router.post("/{pdf_filename}/answer-key-designate")
 async def designate_document_as_answer_key(
     pdf_filename: str,
+    current_user_id: int = Depends(get_current_user_id),
     db=Depends(get_db)
 ):
     """
     문서를 정답지 생성 대상으로 지정 (검토 탭에서 제외, 정답지 생성 탭에서만 표시)
-    - documents_current 또는 documents_archive의 is_answer_key_document = TRUE
+    - documents_current 또는 documents_archive의 is_answer_key_document = TRUE, answer_key_designated_by_user_id = 현재 사용자
     - 해당 문서의 모든 페이지에 page_data의 is_rag_candidate = TRUE
     """
+    _ensure_answer_key_designated_by_column(db)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE documents_current
-                SET is_answer_key_document = TRUE, updated_at = CURRENT_TIMESTAMP
+                SET is_answer_key_document = TRUE, answer_key_designated_by_user_id = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE pdf_filename = %s
-            """, (pdf_filename,))
+            """, (current_user_id, pdf_filename))
             if cursor.rowcount > 0:
                 cursor.execute("""
                     UPDATE page_data_current
@@ -844,9 +1109,9 @@ async def designate_document_as_answer_key(
             else:
                 cursor.execute("""
                     UPDATE documents_archive
-                    SET is_answer_key_document = TRUE, updated_at = CURRENT_TIMESTAMP
+                    SET is_answer_key_document = TRUE, answer_key_designated_by_user_id = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s
-                """, (pdf_filename,))
+                """, (current_user_id, pdf_filename))
                 if cursor.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Document not found in current or archive table")
                 cursor.execute("""
@@ -869,7 +1134,7 @@ async def revoke_document_answer_key(
 ):
     """
     문서의 정답지 생성 대상 지정 해제 (검토 탭에서 다시 표시됨)
-    - documents_current 또는 documents_archive의 is_answer_key_document = FALSE
+    - documents_current 또는 documents_archive의 is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL
     - 해당 문서의 모든 페이지에 page_data의 is_rag_candidate = FALSE
     """
     try:
@@ -877,7 +1142,7 @@ async def revoke_document_answer_key(
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE documents_current
-                SET is_answer_key_document = FALSE, updated_at = CURRENT_TIMESTAMP
+                SET is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP
                 WHERE pdf_filename = %s
             """, (pdf_filename,))
             if cursor.rowcount > 0:
@@ -889,7 +1154,7 @@ async def revoke_document_answer_key(
             else:
                 cursor.execute("""
                     UPDATE documents_archive
-                    SET is_answer_key_document = FALSE, updated_at = CURRENT_TIMESTAMP
+                    SET is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s
                 """, (pdf_filename,))
                 if cursor.rowcount == 0:
@@ -922,10 +1187,12 @@ async def generate_answer_with_gemini(
         from modules.core.extractors.gemini_extractor import GeminiVisionParser
 
         image_path = db.get_page_image_path(pdf_filename, page_number)
-        if not image_path or not Path(image_path).exists():
+        if not image_path:
             raise HTTPException(status_code=404, detail="Page image not found")
-
-        image = Image.open(image_path).convert("RGB")
+        full_path = Path(image_path) if Path(image_path).is_absolute() else get_project_root() / image_path
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+        image = Image.open(full_path).convert("RGB")
         debug_dir = _answer_key_debug_dir(pdf_filename)
         # 정답지 생성용 Gemini 모델은 전역 설정(rag_config.gemini_extractor_model)에 따라 동작
         parser = GeminiVisionParser(model_name=getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
@@ -993,10 +1260,12 @@ async def generate_answer_with_gpt(
         from modules.utils.config import load_gemini_prompt, get_gemini_prompt_path
 
         image_path = db.get_page_image_path(pdf_filename, page_number)
-        if not image_path or not Path(image_path).exists():
+        if not image_path:
             raise HTTPException(status_code=404, detail="Page image not found")
-
-        image = Image.open(image_path).convert("RGB")
+        full_path = Path(image_path) if Path(image_path).is_absolute() else get_project_root() / image_path
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+        image = Image.open(full_path).convert("RGB")
         # API 크기 제한 고려해 리사이즈 (1200 기준)
         max_size = 1200
         w, h = image.size
@@ -1123,10 +1392,12 @@ async def generate_items_from_template(
             raise HTTPException(status_code=400, detail="template_item is required")
 
         image_path = db.get_page_image_path(pdf_filename, page_number)
-        if not image_path or not Path(image_path).exists():
+        if not image_path:
             raise HTTPException(status_code=404, detail="Page image not found")
-
-        image = Image.open(image_path).convert("RGB")
+        full_path = Path(image_path) if Path(image_path).is_absolute() else get_project_root() / image_path
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="Page image not found")
+        image = Image.open(full_path).convert("RGB")
         # 템플릿 기반 생성도 동일한 Gemini 모델(rag_config.gemini_extractor_model)을 사용
         parser = GeminiVisionParser(model_name=getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
         result = await asyncio.to_thread(
@@ -1364,8 +1635,68 @@ async def delete_document(
             
             conn.commit()
         
+        # DB 삭제 후 해당 문서의 분석 완료 이미지(static)도 삭제
+        _delete_static_images_for_document(pdf_filename)
+        
         return {"message": "Document deleted successfully"}
     
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 보관 기간(년). 이 기간을 초과한 문서는 purge 시 삭제됨.
+RETENTION_YEARS = 1
+
+
+def purge_old_documents_impl(db, retention_years: float = 1.0):
+    """
+    보관 기간을 초과한 문서를 DB와 static 이미지에서 삭제.
+    스케줄러·API 공통 사용. db: DatabaseManager 인스턴스.
+    """
+    cutoff = datetime.utcnow() - timedelta(days=365 * retention_years)
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT pdf_filename FROM documents_current WHERE created_at < %s
+        """, (cutoff,))
+        current_list = [row[0] for row in cursor.fetchall()]
+        cursor.execute("""
+            SELECT pdf_filename FROM documents_archive WHERE created_at < %s
+        """, (cutoff,))
+        archive_list = [row[0] for row in cursor.fetchall()]
+        pdf_filenames = list(dict.fromkeys(current_list + archive_list))
+    if not pdf_filenames:
+        return {"message": "No documents to purge", "deleted_count": 0, "deleted_files": []}
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        for pdf_filename in pdf_filenames:
+            cursor.execute("DELETE FROM documents_current WHERE pdf_filename = %s", (pdf_filename,))
+            cursor.execute("DELETE FROM documents_archive WHERE pdf_filename = %s", (pdf_filename,))
+        conn.commit()
+    for pdf_filename in pdf_filenames:
+        _delete_static_images_for_document(pdf_filename)
+    return {
+        "message": f"Purged documents older than {retention_years} year(s)",
+        "deleted_count": len(pdf_filenames),
+        "deleted_files": pdf_filenames,
+    }
+
+
+@router.post("/purge-old", response_model=dict)
+async def purge_old_documents(
+    retention_years: Optional[float] = 1,
+    db=Depends(get_db),
+    _: int = Depends(get_current_user_id),
+):
+    """
+    보관 기간(retention_years)을 초과한 문서를 DB와 static 이미지에서 삭제합니다.
+    기본값: 최대 1년치 데이터만 유지 (1년 초과분 삭제).
+    """
+    try:
+        years = retention_years if retention_years and retention_years > 0 else RETENTION_YEARS
+        return purge_old_documents_impl(db, years)
     except HTTPException:
         raise
     except Exception as e:

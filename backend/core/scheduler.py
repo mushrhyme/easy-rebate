@@ -63,6 +63,32 @@ def setup_archive_scheduler():
         replace_existing=True
     )
     
+    # 매일 03:00에 1년 초과 문서·static 이미지 정리 (최대 1년치만 유지)
+    async def run_purge_old_documents():
+        try:
+            logger.info("🧹 1년 초과 데이터 정리 스케줄러 실행 시작")
+            from database.registry import get_db
+            from backend.api.routes.documents import purge_old_documents_impl, RETENTION_YEARS
+            db = get_db()
+            result = purge_old_documents_impl(db, RETENTION_YEARS)
+            logger.info("✅ 1년 초과 데이터 정리 완료: %s", result)
+        except Exception as e:
+            logger.error("❌ 1년 초과 데이터 정리 실패: %s", e, exc_info=True)
+    
+    scheduler.add_job(
+        run_purge_old_documents,
+        trigger=CronTrigger(
+            hour=3,
+            minute=0,
+            second=0,
+            timezone='Asia/Tokyo'
+        ),
+        id='purge_old_documents',
+        name='1년 초과 문서·이미지 정리',
+        replace_existing=True
+    )
+    
     logger.info("✅ 아카이브 마이그레이션 스케줄러 설정 완료 (매월 1일 0시 실행)")
+    logger.info("✅ 1년 초과 데이터 정리 스케줄러 설정 완료 (매일 03:00 실행)")
     
     return scheduler
