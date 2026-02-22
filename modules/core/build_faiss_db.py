@@ -397,22 +397,16 @@ def detect_deleted_pages(
     manifest: DBManifestManager
 ) -> List[Dict[str, Any]]:
     """
-    삭제된 페이지 감지 (manifest에 있지만 스캔 결과에 없음)
-
-    Args:
-        scanned_pages: 현재 스캔된 페이지 리스트
-        manifest: DBManifestManager 인스턴스
-
-    Returns:
-        삭제된 페이지 정보 리스트 [{'pdf_filename': str, 'page_number': int}, ...]
+    삭제된 페이지 감지 (manifest에 있지만 스캔 결과에 없음).
+    현재 폴더 스캔에 등장한 PDF만 대상으로 함 (다른 폴더 문서는 삭제로 오인하지 않음).
     """
-    # 스캔된 페이지를 (pdf_filename, page_number) 집합으로 변환
     scanned_set = {
         (f"{p['pdf_name']}.pdf", p['page_num'])
         for p in scanned_pages
     }
+    # 이번 폴더 스캔에 나온 PDF만 삭제 후보로 한정 (finet/mail 등 다른 폴더 페이지 제외)
+    current_folder_pdfs = {f"{p['pdf_name']}.pdf" for p in scanned_pages}
 
-    # DB에서 모든 페이지 조회
     try:
         with manifest.db.get_connection() as conn:
             cursor = conn.cursor()
@@ -426,9 +420,8 @@ def detect_deleted_pages(
             for row in cursor.fetchall():
                 pdf_filename = row[0]
                 page_number = row[1]
-                status = row[2]
-
-                # 스캔 결과에 없으면 삭제된 것으로 간주
+                if pdf_filename not in current_folder_pdfs:
+                    continue
                 if (pdf_filename, page_number) not in scanned_set:
                     deleted_pages.append({
                         'pdf_filename': pdf_filename,
@@ -537,9 +530,22 @@ def build_faiss_db(
             # manifest와 비교하여 변경분만 필터링
             print(f"🔍 Manifest와 비교하여 변경분 확인 중... (텍스트 추출 방법: {extraction_method})")
             new_pages = diff_pages_with_manifest(pages, manifest, text_extractor, extraction_method)
+            print(f"   스캔 {len(pages)}개 → 변경분 {len(new_pages)}개")
 
             if not new_pages:
-                print(f"✅ 폴더 '{current_form_folder}': 변경된 페이지가 없습니다.\n")
+                print(f"✅ 폴더 '{current_form_folder}': 변경된 페이지가 없습니다.")
+                # 변경 없어도 벡터 DB 구축 결과 요약은 동일 형식으로 출력 (mail 등 누락 오해 방지)
+                existing_count = rag_manager.count_examples()
+                print("="*60)
+                print(f"📊 폴더 '{current_form_folder}' 벡터 DB 구축 결과")
+                print("="*60)
+                print(f"✅ 처리된 페이지: 0개 (변경 없음)")
+                print(f"📈 기존 벡터 DB 예제 수: {existing_count}개")
+                print(f"💾 최종 벡터 DB 예제 수: {existing_count}개")
+                if deleted_pages:
+                    print(f"🗑️ 삭제된 페이지: {len(deleted_pages)}개")
+                print("="*60)
+                print()
                 continue
 
             print(f"📝 변경된 페이지: {len(new_pages)}개 발견\n")
