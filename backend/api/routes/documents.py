@@ -12,7 +12,7 @@ from io import BytesIO
 from typing import List, Optional, Tuple
 from datetime import datetime, timedelta
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 
 from database.registry import get_db
@@ -66,6 +66,56 @@ def _answer_key_debug_dir(pdf_filename: str) -> Path:
     return get_project_root() / "debug" / "answer_key" / safe_name
 
 
+def _get_ocr_text_azure_sync(db, pdf_filename: str, page_number: int) -> str:
+    """
+    해당 페이지의 OCR 텍스트를 Azure(표 복원) 경로로만 추출. 정답 생성 RAG용.
+    우선순위: debug2 → 저장된 이미지 Azure(표 복원) → PDF Azure(표 복원).
+    """
+    root = get_project_root()
+    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    ocr_text = ""
+    # 1) debug2 (RAG 파싱 시 저장된 OCR = 이미 Azure 표 복원)
+    try:
+        debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
+        if debug2_file.exists():
+            ocr_text = debug2_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    # 2) 저장된 페이지 이미지 → Azure(표 복원)
+    if not ocr_text.strip():
+        try:
+            image_path = db.get_page_image_path(pdf_filename, page_number)
+            if image_path:
+                full_path = Path(image_path) if Path(image_path).is_absolute() else root / image_path
+                if full_path.exists():
+                    from modules.core.extractors.azure_extractor import get_azure_extractor
+                    from modules.utils.table_ocr_utils import raw_to_table_restored_text
+                    extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
+                    raw = extractor.extract_from_image_raw(image_path=full_path)
+                    if raw:
+                        ocr_text = raw_to_table_restored_text(raw) or ""
+        except Exception:
+            pass
+    # 3) PDF → Azure(표 복원)
+    if not ocr_text.strip():
+        try:
+            from modules.utils.pdf_utils import find_pdf_path, PdfTextExtractor
+            pdf_path_str = find_pdf_path(pdf_name)
+            if pdf_path_str:
+                ext = PdfTextExtractor(upload_channel="mail")
+                try:
+                    ocr_text = ext.extract_text(Path(pdf_path_str), page_number) or ""
+                finally:
+                    ext.close_all()
+        except Exception:
+            pass
+    return (ocr_text or "").strip()
+
+
+# 업로드 탭 목록에서 제외: img 동기화(벡터 DB 시드) 문서는 data_year/data_month 가 NULL
+UPLOAD_LIST_EXCLUDE_SEED = " AND data_year IS NOT NULL AND data_month IS NOT NULL"
+
+
 def query_documents_table(
     db,
     form_type: Optional[str] = None,
@@ -77,6 +127,7 @@ def query_documents_table(
 ) -> List[Tuple]:
     """
     documents 테이블 조회 헬퍼 함수 (current/archive 테이블 자동 선택)
+    벡터 DB 시드(img 동기화) 문서는 목록에 포함하지 않음 (data_year/data_month 가 있는 문서만).
 
     Args:
         is_answer_key_document: True のとき正解表対象文書のみ返す。
@@ -98,7 +149,7 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
-                    WHERE {col} = %s{answer_key_filter}{designated_filter}
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
                     ORDER BY created_at DESC
                 """, params)
             else:
@@ -107,7 +158,7 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
-                    WHERE 1=1{answer_key_filter}{designated_filter}
+                    WHERE 1=1{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
                     ORDER BY created_at DESC
                 """, params)
             rows = cursor.fetchall()
@@ -123,12 +174,12 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
-                    WHERE {col} = %s{answer_key_filter}{designated_filter}
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
                     UNION ALL
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
-                    WHERE {col} = %s{answer_key_filter}{designated_filter}
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
                     ORDER BY created_at DESC
                 """, params)
             else:
@@ -140,12 +191,12 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
-                    WHERE 1=1{answer_key_filter}{designated_filter}
+                    WHERE 1=1{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
                     UNION ALL
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
-                    WHERE 1=1{answer_key_filter}{designated_filter}
+                    WHERE 1=1{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
                     ORDER BY created_at DESC
                 """, params)
             rows = cursor.fetchall()
@@ -354,7 +405,7 @@ async def upload_documents(
     PDF 파일 업로드 및 처리
     
     Args:
-        upload_channel: finet(엑셀) | mail(Upstage OCR)
+        upload_channel: finet(엑셀) | mail(Azure OCR, 표 복원)
         form_type: 하위 호환 (01-06, 더 이상 upload_channel 추론에는 사용하지 않음)
         files: 업로드된 PDF 파일 리스트
         year: 연도 (선택사항)
@@ -469,7 +520,7 @@ async def upload_documents_with_bbox(
     db=Depends(get_db)
 ):
     """
-    PDF 업로드 후 좌표 포함 파싱. mail 채널에서 Upstage 단어 좌표 + LLM _word_indices → _bbox 부여.
+    PDF 업로드 후 좌표 포함 파싱. mail 채널에서 Azure(표 복원) + RAG+LLM, 필요 시 _word_indices → _bbox 부여.
     """
     # 옵션 1: 무조건 upload_channel로만 동작
     if not upload_channel or upload_channel not in ("finet", "mail"):
@@ -1023,6 +1074,162 @@ async def generate_page_images(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _list_answer_keys_from_img():
+    """img 폴더 스캔 → RAG DB 소스(Page*_answer.json 보유) 정답지 목록을 form_type별 반환."""
+    from modules.core.build_faiss_db import find_pdf_pages
+    root = get_project_root()
+    img_dir = root / "img"
+    if not img_dir.exists():
+        return {"by_form_type": {}}
+    form_folders = sorted(
+        d.name for d in img_dir.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    )
+    seen = {}
+    for form_folder in form_folders:
+        pages = find_pdf_pages(img_dir, form_folder)
+        for p in pages:
+            ft = p.get("form_type") or ""
+            pdf_name = p.get("pdf_name") or ""
+            if not pdf_name:
+                continue
+            key = (ft, pdf_name)
+            if key not in seen:
+                ap = p.get("answer_json_path")
+                try:
+                    # 폴더 경로만 저장 (파일 경로가 아니라) — answer-json-from-img 가 폴더 기준으로 동작
+                    parent = ap.parent if ap and getattr(ap, "parent", None) else None
+                    rel = parent.relative_to(img_dir) if parent else None
+                except Exception:
+                    rel = None
+                rel_str = str(rel).replace("\\", "/") if rel else None
+                seen[key] = {"form_type": ft, "pdf_name": pdf_name, "relative_path": rel_str, "total_pages": 0}
+            seen[key]["total_pages"] += 1
+    by_form = {}
+    for v in seen.values():
+        ft = v["form_type"]
+        if ft not in by_form:
+            by_form[ft] = []
+        by_form[ft].append({"pdf_name": v["pdf_name"], "relative_path": v["relative_path"], "total_pages": v["total_pages"]})
+    for lst in by_form.values():
+        lst.sort(key=lambda x: (x["pdf_name"] or ""))
+    return {"by_form_type": by_form}
+
+
+@router.get("/answer-keys-from-img")
+async def get_answer_keys_from_img():
+    """RAG DB 소스: img 폴더 내 Page*_answer.json 있는 문서 목록을 form_type별로 반환."""
+    try:
+        return _list_answer_keys_from_img()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _load_answer_json_from_img_folder(relative_path: str):
+    """img 폴더 내 relative_path 에서 Page*_answer*.json 읽어 합쳐 반환."""
+    from modules.core.build_faiss_db import load_answer_json
+    import re
+    root = get_project_root()
+    img_dir = root / "img"
+    safe = relative_path.replace("..", "").strip("/\\").replace("\\", "/")
+    folder = (img_dir / safe).resolve()
+    try:
+        folder.relative_to(img_dir.resolve())
+    except (ValueError, TypeError):
+        return None
+    if not folder.is_dir():
+        return None
+    files = sorted(folder.glob("Page*_answer*.json"))
+    pages = []
+    for f in files:
+        m = re.search(r"Page(\d+)", f.name, re.IGNORECASE)
+        page_num = int(m.group(1)) if m else 0
+        data = load_answer_json(f)
+        if data:
+            data = {k: v for k, v in data.items() if v is not None}
+        data["page_number"] = page_num
+        pages.append(data)
+    pages.sort(key=lambda p: p.get("page_number") or 0)
+    pdf_name = folder.name
+    form_type = folder.parent.name if folder.parent != img_dir and folder.parent.name.isdigit() else None
+    if not form_type and folder.parent != img_dir:
+        form_type = folder.parent.name
+    return {
+        "pdf_filename": f"{pdf_name}.pdf",
+        "form_type": form_type,
+        "total_pages": len(pages),
+        "pages": pages,
+    }
+
+
+@router.get("/answer-json-from-img")
+async def get_answer_json_from_img(relative_path: str):
+    """img 폴더 내 정답지 폴더(relative_path)의 Page*_answer.json 전체 반환."""
+    if not relative_path or ".." in relative_path:
+        raise HTTPException(status_code=400, detail="Invalid relative_path")
+    result = _load_answer_json_from_img_folder(relative_path)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Folder not found or no answer files")
+    return result
+
+
+@router.get("/img-page-image")
+async def get_img_page_image(relative_path: str, page_number: int = 1):
+    """img 폴더 내 정답지 폴더의 Page{N}.png 이미지 서빙 (참조 뷰용)."""
+    if not relative_path or ".." in relative_path or page_number < 1:
+        raise HTTPException(status_code=400, detail="Invalid parameters")
+    root = get_project_root()
+    img_dir = root / "img"
+    safe = relative_path.replace("..", "").strip("/\\").replace("\\", "/")
+    folder = (img_dir / safe).resolve()
+    try:
+        folder.relative_to(img_dir.resolve())
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Not found")
+    for ext in ("png", "jpg", "jpeg"):
+        path = folder / f"Page{page_number}.{ext}"
+        if path.is_file():
+            return FileResponse(path, media_type=f"image/{ext}" if ext != "jpg" else "image/jpeg")
+    raise HTTPException(status_code=404, detail="Image not found")
+
+
+@router.get("/{pdf_filename}/answer-json")
+async def get_document_answer_json(
+    pdf_filename: str,
+    db=Depends(get_db)
+):
+    """
+    정답지 조회: 문서 전체의 answer.json 형태 (form_type별 기존 정답지 보기용).
+    반환: { pdf_filename, form_type, pages: [ { page_number, page_role, ...page_meta, items }, ... ] }
+    items는 item_data만 담은 리스트 (answer.json 스타일).
+    """
+    doc = db.get_document(pdf_filename)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    total_pages = doc.get("total_pages") or 0
+    form_type = doc.get("form_type")
+    # get_page_results: page_data가 있는 페이지만 반환. 빈 페이지는 page_number 기준으로 채움.
+    page_results = db.get_page_results(pdf_filename)
+    # answer.json 스타일: items는 item_data만 포함한 리스트
+    pages = []
+    for pr in page_results:
+        items = pr.get("items") or []
+        items_plain = [it.get("item_data") if isinstance(it, dict) else it for it in items]
+        page_obj = {k: v for k, v in pr.items() if k != "items"}
+        page_obj["items"] = items_plain
+        pages.append(page_obj)
+    # 페이지 번호 순 정렬
+    pages.sort(key=lambda p: p.get("page_number") or 0)
+    return {
+        "pdf_filename": pdf_filename,
+        "form_type": form_type,
+        "total_pages": total_pages,
+        "pages": pages,
+    }
+
+
 @router.get("/{pdf_filename}")
 async def get_document(
     pdf_filename: str,
@@ -1243,6 +1450,60 @@ async def generate_answer_with_gemini(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/{pdf_filename}/pages/{page_number:int}/generate-answer-rag")
+async def generate_answer_with_rag(
+    pdf_filename: str,
+    page_number: int,
+    db=Depends(get_db)
+):
+    """
+    Azure OCR(표 복원) + RAG+LLM으로 해당 페이지의 정답지(items) 생성.
+    표 구조가 보존된 OCR 텍스트를 사용하므로, Vision 대신 이 경로를 쓰면 열/행 구조가 안정적.
+    """
+    try:
+        ocr_text = await asyncio.to_thread(_get_ocr_text_azure_sync, db, pdf_filename, page_number)
+        if not ocr_text:
+            raise HTTPException(
+                status_code=404,
+                detail="OCR text not found. Save page image or run RAG extraction first."
+            )
+        doc = db.get_document(pdf_filename)
+        form_type = doc.get("form_type") if doc else None
+        debug_dir = str(_answer_key_debug_dir(pdf_filename))
+        from modules.core.extractors.rag_extractor import extract_json_with_rag
+        result = await asyncio.to_thread(
+            extract_json_with_rag,
+            ocr_text=ocr_text,
+            form_type=form_type,
+            debug_dir=debug_dir,
+            page_num=page_number,
+        )
+        items = result.get("items")
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            items = []
+        page_role = result.get("page_role") or "detail"
+        # 정답지 포맷에는 RAG 내부 메타 제외 (answer.json 스타일만)
+        exclude_from_page_meta = ("items", "page_role", "_rag_reference")
+        page_meta = {
+            k: v for k, v in result.items()
+            if k not in exclude_from_page_meta and v is not None
+        }
+        return {
+            "success": True,
+            "page_number": page_number,
+            "page_role": page_role,
+            "page_meta": page_meta if page_meta else None,
+            "items": items,
+            "provider": "rag",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/{pdf_filename}/pages/{page_number:int}/generate-answer-gpt")
 async def generate_answer_with_gpt(
     pdf_filename: str,
@@ -1370,6 +1631,7 @@ class CreateItemsFromAnswerRequest(BaseModel):
 class GenerateItemsFromTemplateRequest(BaseModel):
     """첫 행(템플릿)으로 나머지 행 LLM 생성 요청"""
     template_item: dict  # 한 행의 키-값 (키 추가/삭제/편집 가능)
+    provider: Optional[str] = "gpt-5.2"  # "gemini" | "gpt-5.2" — 정답지 탭 드롭다운과 동일
 
 
 @router.post("/{pdf_filename}/pages/{page_number:int}/generate-items-from-template")
@@ -1377,19 +1639,20 @@ async def generate_items_from_template(
     pdf_filename: str,
     page_number: int,
     body: GenerateItemsFromTemplateRequest,
-    db=Depends(get_db)
+    db=Depends(get_db),
 ):
     """
-    첫 행(템플릿)만 사용자가 편집한 뒤, LLM으로 같은 키 구조의 나머지 행을 생성하여 페이지 전체 items로 교체.
+    첫 행(템플릿)만 사용자가 편집한 뒤, 선택한 모델(GPT 또는 Gemini) Vision으로 같은 키 구조의 나머지 행을 생성.
     """
     import json
     try:
         from PIL import Image
-        from modules.core.extractors.gemini_extractor import GeminiVisionParser
 
         template_item = body.template_item if isinstance(body.template_item, dict) else {}
         if not template_item:
             raise HTTPException(status_code=400, detail="template_item is required")
+        provider = (body.provider or "gpt-5.2").strip().lower()
+        use_gemini = provider == "gemini"
 
         image_path = db.get_page_image_path(pdf_filename, page_number)
         if not image_path:
@@ -1398,11 +1661,64 @@ async def generate_items_from_template(
         if not full_path.exists():
             raise HTTPException(status_code=404, detail="Page image not found")
         image = Image.open(full_path).convert("RGB")
-        # 템플릿 기반 생성도 동일한 Gemini 모델(rag_config.gemini_extractor_model)을 사용
-        parser = GeminiVisionParser(model_name=getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
-        result = await asyncio.to_thread(
-            parser.parse_image_with_template, image, template_item, max_size=1200
-        )
+        max_size = 1200
+        w, h = image.size
+        if w > max_size or h > max_size:
+            ratio = min(max_size / w, max_size / h)
+            image = image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+
+        if use_gemini:
+            from modules.core.extractors.gemini_extractor import GeminiVisionParser
+            model_name = getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite")
+            parser = GeminiVisionParser(model_name=model_name)
+            result = await asyncio.to_thread(
+                parser.parse_image_with_template, image, template_item, max_size=max_size
+            )
+        else:
+            from openai import OpenAI
+            buf = BytesIO()
+            image.save(buf, format="JPEG", quality=85)
+            b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+            template_json = json.dumps(template_item, ensure_ascii=False, indent=2)
+            prompt = f"""You are given a document page image and ONE example row (template) with the following keys and values.
+Your task: Look at the image and generate ALL rows on this page. Each row must have exactly the same keys as the template.
+Output ONLY a single JSON object with key "items" (array of objects). No other text.
+
+Template (one row, keys and example value):
+{template_json}
+
+Output format: {{ "items": [ {{ ... }}, {{ ... }}, ... ] }}
+Use the same key names as the template. Fill values from the document for each row."""
+            api_key = getattr(settings, "openai_api_key", None) or __import__("os").getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+            client = OpenAI(api_key=api_key)
+            gpt_model = "gpt-5.2-2025-12-11"  # 정답지 탭 GPT 5.2와 동일
+            response = await asyncio.to_thread(
+                lambda: client.chat.completions.create(
+                    model=gpt_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            ],
+                        }
+                    ],
+                    max_completion_tokens=4096,
+                )
+            )
+            raw_text = (response.choices[0].message.content or "").strip()
+            if not raw_text:
+                raise HTTPException(status_code=502, detail="GPT returned empty content")
+            json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+            result = {"items": [], "page_role": "detail"}
+            if json_match:
+                try:
+                    result = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
 
         items = result.get("items") or []
         if not isinstance(items, list):
@@ -1462,8 +1778,8 @@ async def generate_items_from_template(
     except HTTPException:
         raise
     except ValueError as e:
-        if "GEMINI_API_KEY" in str(e):
-            raise HTTPException(status_code=503, detail="GEMINI_API_KEY가 설정되지 않았습니다.")
+        if "OPENAI_API_KEY" in str(e):
+            raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1751,14 +2067,10 @@ async def get_page_meta(
         if not page_result:
             raise HTTPException(status_code=404, detail="Page not found")
         
-        # page_meta 추출: page_role과 items를 제외한 모든 키가 page_meta
-        # get_page_result는 page_meta를 spread해서 최상위 키로 추가하므로,
-        # page_role과 items를 제외한 나머지를 page_meta로 구성
+        # page_meta 추출: page_role, items, 내부 메타(_rag_reference 등) 제외
         page_role = page_result.get('page_role')
         page_meta = {}
-        
-        # page_role과 items, page_number를 제외한 모든 키를 page_meta로 구성
-        exclude_keys = {'page_role', 'items', 'page_number', 'customer'}
+        exclude_keys = {'page_role', 'items', 'page_number', 'customer', '_rag_reference'}
         for key, value in page_result.items():
             if key not in exclude_keys:
                 page_meta[key] = value
@@ -1775,8 +2087,9 @@ async def get_page_meta(
 
 
 class PageMetaUpdateRequest(BaseModel):
-    """page_meta 업데이트 요청"""
+    """page_meta 업데이트 요청 (page_role 선택 편집 포함)"""
     page_meta: dict
+    page_role: Optional[str] = None  # "cover" | "detail" | "summary" | "reply" — 지정 시 함께 갱신
 
 
 @router.patch("/{pdf_filename}/pages/{page_number}/meta")
@@ -1787,24 +2100,43 @@ async def update_page_meta(
     db=Depends(get_db)
 ):
     """
-    특정 페이지의 page_meta 업데이트 (정답지 생성 탭에서 편집 저장용)
+    특정 페이지의 page_meta 업데이트 (정답지 생성 탭에서 편집 저장용).
+    page_role이 있으면 유효한 값일 때만 DB의 page_role 컬럼도 갱신.
     """
     try:
         page_meta_json = json.dumps(body.page_meta, ensure_ascii=False) if body.page_meta else "{}"
+        page_role = (body.page_role or "").strip().lower() or None
+        if page_role and page_role not in ("cover", "detail", "summary", "reply"):
+            page_role = None  # 무효 시 갱신하지 않음
+
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE page_data_current
-                SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
-                WHERE pdf_filename = %s AND page_number = %s
-            """, (page_meta_json, pdf_filename, page_number))
+            if page_role is not None:
+                cursor.execute("""
+                    UPDATE page_data_current
+                    SET page_meta = %s::jsonb, page_role = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s AND page_number = %s
+                """, (page_meta_json, page_role, pdf_filename, page_number))
+            else:
+                cursor.execute("""
+                    UPDATE page_data_current
+                    SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s AND page_number = %s
+                """, (page_meta_json, pdf_filename, page_number))
             if cursor.rowcount > 0:
                 return {"success": True, "message": "page_meta updated"}
-            cursor.execute("""
-                UPDATE page_data_archive
-                SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
-                WHERE pdf_filename = %s AND page_number = %s
-            """, (page_meta_json, pdf_filename, page_number))
+            if page_role is not None:
+                cursor.execute("""
+                    UPDATE page_data_archive
+                    SET page_meta = %s::jsonb, page_role = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s AND page_number = %s
+                """, (page_meta_json, page_role, pdf_filename, page_number))
+            else:
+                cursor.execute("""
+                    UPDATE page_data_archive
+                    SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s AND page_number = %s
+                """, (page_meta_json, pdf_filename, page_number))
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Page not found")
         return {"success": True, "message": "page_meta updated"}

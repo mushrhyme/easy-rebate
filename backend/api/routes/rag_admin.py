@@ -2,6 +2,7 @@
 RAG / 벡터 DB 관리용 관리자 API
 """
 import asyncio
+import csv
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
@@ -66,35 +67,10 @@ def _ensure_admin(user: Dict[str, Any]) -> None:
         raise HTTPException(status_code=403, detail="관리자만 접근할 수 있습니다")
 
 
-def _ocr_text_from_upstage_result(result: dict) -> str:
-    """Upstage OCR 응답 dict에서 전체 텍스트 추출."""
-    if not result or not isinstance(result, dict):
-        return ""
-    text = result.get("text") or result.get("result") or result.get("content")
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-    if "pages" in result:
-        pages = result.get("pages") or []
-        parts = []
-        for page in pages:
-            if not isinstance(page, dict):
-                continue
-            pt = page.get("text") or page.get("content")
-            if isinstance(pt, str) and pt.strip():
-                parts.append(pt.strip())
-                continue
-            words = page.get("words") or []
-            if words:
-                parts.append(" ".join(w.get("text", "") for w in words if isinstance(w, dict)))
-        if parts:
-            return "\n".join(parts)
-    return ""
-
-
 def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     """
     페이지 이미지에서 실제 OCR 텍스트 추출 (임베딩용).
-    search.get_page_ocr_text와 동일한 우선순위: debug2 → 이미지 Upstage → PDF → result
+    우선순위: debug2 → 이미지 Azure(표 복원) → PDF Azure(표 복원) → result
     """
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
     ocr_text = ""
@@ -108,7 +84,7 @@ def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     except Exception:
         pass
 
-    # 2) 저장된 페이지 이미지로 Upstage OCR
+    # 2) 저장된 페이지 이미지로 Azure OCR + 표 복원
     if not ocr_text.strip():
         try:
             image_path = db.get_page_image_path(pdf_filename, page_number)
@@ -116,22 +92,22 @@ def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
                 root = get_project_root()
                 full_path = Path(image_path) if Path(image_path).is_absolute() else root / image_path
                 if full_path.exists():
-                    image_bytes = full_path.read_bytes()
-                    from modules.core.extractors.upstage_extractor import get_upstage_extractor
-                    extractor = get_upstage_extractor(enable_cache=False)
-                    raw = extractor.extract_from_image_raw(image_bytes=image_bytes)
+                    from modules.core.extractors.azure_extractor import get_azure_extractor
+                    from modules.utils.table_ocr_utils import raw_to_table_restored_text
+                    extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
+                    raw = extractor.extract_from_image_raw(image_path=full_path)
                     if raw:
-                        ocr_text = _ocr_text_from_upstage_result(raw)
+                        ocr_text = raw_to_table_restored_text(raw)
         except Exception:
             pass
 
-    # 3) PDF 파일에서 직접 추출
+    # 3) PDF 파일에서 Azure(표 복원) 또는 PyMuPDF 폴백
     if not ocr_text.strip():
         try:
             from modules.utils.pdf_utils import find_pdf_path, PdfTextExtractor
             pdf_path_str = find_pdf_path(pdf_name)
             if pdf_path_str:
-                extractor = PdfTextExtractor()
+                extractor = PdfTextExtractor(upload_channel="mail")
                 ocr_text = extractor.extract_text(Path(pdf_path_str), page_number) or ""
                 extractor.close_all()
         except Exception:
@@ -537,6 +513,65 @@ async def build_vector_from_learning_pages(
         "total_vectors": int(total_vectors),
         "per_form_type": per_form,
     }
+
+
+SUPER_IMPORT_CSV_PATH = get_project_root() / "database" / "super_import.csv"
+
+
+@router.get("/super-import-csv")
+async def get_super_import_csv(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """super_import.csv をそのまま読み、一覧を返す（管理者専用）。担当・スーパータブで CSV 内容を表示。"""
+    _ensure_admin(current_user)
+    rows: List[Dict[str, str]] = []
+    if not SUPER_IMPORT_CSV_PATH.exists():
+        return {"rows": rows}
+    try:
+        with open(SUPER_IMPORT_CSV_PATH, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append({
+                    "super_code": (row.get("대표슈퍼코드") or "").strip(),
+                    "super_name": (row.get("대표슈퍼명") or "").strip(),
+                    "person_id": (row.get("담당자ID") or "").strip(),
+                    "person_name": (row.get("담당자명") or "").strip(),
+                    "username": (row.get("ID") or "").strip(),
+                })
+    except Exception as e:
+        logger.exception("super_import.csv read failed: %s", e)
+        raise HTTPException(status_code=500, detail="CSVの読み込みに失敗しました")
+    return {"rows": rows}
+
+
+class SuperImportCsvPutBody(BaseModel):
+    """super_import.csv 全体を上書きする用。"""
+    rows: List[Dict[str, str]]
+
+
+@router.put("/super-import-csv")
+async def put_super_import_csv(
+    body: SuperImportCsvPutBody,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """super_import.csv を指定内容で上書き（管理者専用）。"""
+    _ensure_admin(current_user)
+    try:
+        with open(SUPER_IMPORT_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["대표슈퍼코드", "대표슈퍼명", "담당자ID", "담당자명", "ID"])
+            for r in body.rows:
+                writer.writerow([
+                    (r.get("super_code") or "").strip(),
+                    (r.get("super_name") or "").strip(),
+                    (r.get("person_id") or "").strip(),
+                    (r.get("person_name") or "").strip(),
+                    (r.get("username") or "").strip(),
+                ])
+    except Exception as e:
+        logger.exception("super_import.csv write failed: %s", e)
+        raise HTTPException(status_code=500, detail="CSVの書き込みに失敗しました")
+    return {"message": "保存しました", "rows_count": len(body.rows)}
 
 
 # ---- 基準管理 (master_code.xlsx) ----
