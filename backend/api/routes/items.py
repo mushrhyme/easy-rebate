@@ -1,14 +1,21 @@
 """
 아이템 관리 API
 """
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel
 
 from database.registry import get_db
 from backend.api.routes.websocket import manager
+from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
 
 router = APIRouter()
+
+# 프로젝트 루트 (items.py: backend/api/routes/items.py -> parent*4 = project_root)
+_ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+_UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "unit_price.csv"
 
 
 # 통계 API는 반드시 동적 경로보다 먼저 정의해야 함
@@ -162,6 +169,85 @@ async def get_review_stats_by_items(db=Depends(get_db)):
                 "first_not_checked_count": total - first_checked,
                 "second_checked_count": second_checked,
                 "second_not_checked_count": total - second_checked,
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats/review-by-user")
+async def get_review_stats_by_user(db=Depends(get_db)):
+    """
+    検討チェックを誰が何件したか（증빙용 현황판）。
+    detail ページ・得意先ありのアイテムのみ対象（review-by-items と同条件）。
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                WITH non_base_docs AS (
+                    SELECT pdf_filename FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION
+                    SELECT pdf_filename FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ),
+                detail_items AS (
+                    SELECT i.first_reviewed_by_user_id, i.second_reviewed_by_user_id
+                    FROM items_current i
+                    INNER JOIN page_data_current p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN non_base_docs d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                    UNION ALL
+                    SELECT i.first_reviewed_by_user_id, i.second_reviewed_by_user_id
+                    FROM items_archive i
+                    INNER JOIN page_data_archive p
+                      ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                      AND p.page_role = 'detail'
+                    INNER JOIN non_base_docs d ON i.pdf_filename = d.pdf_filename
+                    WHERE NULLIF(TRIM(COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '')), '') IS NOT NULL
+                      AND COALESCE(NULLIF(TRIM(i.customer), ''), i.item_data->>'得意先',
+                        i.item_data->>'得意先名', i.item_data->>'得意先様', i.item_data->>'取引先', '—') != '—'
+                ),
+                first_agg AS (
+                    SELECT first_reviewed_by_user_id AS user_id, COUNT(*) AS first_checked_count
+                    FROM detail_items
+                    WHERE first_reviewed_by_user_id IS NOT NULL
+                    GROUP BY first_reviewed_by_user_id
+                ),
+                second_agg AS (
+                    SELECT second_reviewed_by_user_id AS user_id, COUNT(*) AS second_checked_count
+                    FROM detail_items
+                    WHERE second_reviewed_by_user_id IS NOT NULL
+                    GROUP BY second_reviewed_by_user_id
+                )
+                SELECT
+                    u.user_id,
+                    COALESCE(u.display_name_ja, u.display_name, u.username) AS display_name,
+                    COALESCE(f.first_checked_count, 0) AS first_checked_count,
+                    COALESCE(s.second_checked_count, 0) AS second_checked_count
+                FROM users u
+                LEFT JOIN first_agg f ON u.user_id = f.user_id
+                LEFT JOIN second_agg s ON u.user_id = s.user_id
+                WHERE f.user_id IS NOT NULL OR s.user_id IS NOT NULL
+                ORDER BY (COALESCE(f.first_checked_count, 0) + COALESCE(s.second_checked_count, 0)) DESC
+            """)
+            rows = cursor.fetchall()
+            return {
+                "by_user": [
+                    {
+                        "user_id": r[0],
+                        "display_name": r[1] or str(r[0]),
+                        "first_checked_count": int(r[2] or 0),
+                        "second_checked_count": int(r[3] or 0),
+                    }
+                    for r in rows
+                ],
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -516,18 +602,15 @@ async def get_page_items(
             doc = db.get_document(pdf_filename)
             if doc:
                 form_type = doc.get("form_type")
-                print(f"[items API] pdf={pdf_filename} form_type={form_type}")
                 doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else None
                 if doc_meta and doc_meta.get("item_data_keys"):
                     item_data_keys = doc_meta["item_data_keys"]
-                    print(f"[items API] 문서 자체 key_order 사용(파싱 시 참조한 RAG 기준) 개수={len(item_data_keys)} 순서={item_data_keys[:15]}{'...' if len(item_data_keys) > 15 else ''}")
                 elif form_type:
                     from modules.core.rag_manager import get_rag_manager
                     rag = get_rag_manager()
                     key_order = rag.get_key_order_by_form_type(form_type)
                     if key_order and key_order.get("item_keys"):
                         item_data_keys = key_order["item_keys"]
-                        print(f"[items API] item_data_keys(RAG form_type 기준) 개수={len(item_data_keys)} 순서={item_data_keys}")
                     else:
                         print(f"[items API] key_order 없음 또는 item_keys 비어있음 key_order={key_order}")
                 else:
@@ -538,20 +621,39 @@ async def get_page_items(
             print(f"[items API] key_order 조회 예외: {e}")
             pass
         
+        # reviewed_by_user_id → display_name 캐시 (증빙용 툴팁)
+        user_id_to_name: Dict[int, str] = {}
+        for item in items:
+            for key in ("first_review", "second_review"):
+                rs = (item.get("review_status") or {}).get(key) or {}
+                uid = rs.get("reviewed_by_user_id")
+                if uid and uid not in user_id_to_name:
+                    u = db.get_user_by_id(uid)
+                    user_id_to_name[uid] = (
+                        (u.get("display_name_ja") or u.get("display_name") or u.get("username") or str(uid))
+                        if u else str(uid)
+                    )
+        
         # 응답 형식 변환
         # db.get_items()는 이미 모든 필드를 평탄화해서 반환하므로,
         # Streamlit 앱과 동일하게 모든 필드를 item_data에 포함
         item_list = []
         for item in items:
-            # review_status 구성 (db.get_items()는 review_status 객체로 반환)
-            existing_review_status = item.get('review_status', {})
+            # review_status 구성 (checked, reviewed_at, reviewed_by)
+            existing_review_status = item.get("review_status", {})
+            fr = existing_review_status.get("first_review") or {}
+            sr = existing_review_status.get("second_review") or {}
             review_status = {
                 "first_review": {
-                    "checked": existing_review_status.get('first_review', {}).get('checked', False)
+                    "checked": fr.get("checked", False),
+                    "reviewed_at": fr.get("reviewed_at"),
+                    "reviewed_by": user_id_to_name.get(fr.get("reviewed_by_user_id")) if fr.get("reviewed_by_user_id") else None,
                 },
                 "second_review": {
-                    "checked": existing_review_status.get('second_review', {}).get('checked', False)
-                }
+                    "checked": sr.get("checked", False),
+                    "reviewed_at": sr.get("reviewed_at"),
+                    "reviewed_by": user_id_to_name.get(sr.get("reviewed_by_user_id")) if sr.get("reviewed_by_user_id") else None,
+                },
             }
             
             # item_data 추출: Streamlit 앱과 동일하게 메타데이터만 제외
@@ -569,7 +671,41 @@ async def get_page_items(
             for key, value in item.items():
                 if key not in exclude_keys:
                     item_data[key] = value
-            
+
+            # 商品名이 있으면 unit_price에서 시키리/본부장 자동 매칭 → 그리드에 표시
+            if _UNIT_PRICE_CSV.exists():
+                product_name = item_data.get("商品名")
+                if product_name is not None and str(product_name).strip():
+                    try:
+                        base_name, capacity = split_name_and_capacity(str(product_name))
+                        sub_query = capacity if capacity else None
+                        df = find_similar_products(
+                            query=base_name,
+                            csv_path=_UNIT_PRICE_CSV,
+                            col="제품명",
+                            top_k=1,
+                            min_similarity=0.2,
+                            sub_col="제품용량",
+                            sub_query=sub_query,
+                            sub_min_similarity=0.0,
+                        )
+                        if not df.empty:
+                            row = df.iloc[0]
+                            shikiri = row.get("시키리")
+                            honbu = row.get("본부장")
+                            if shikiri is not None:
+                                try:
+                                    item_data["仕切"] = float(shikiri) if hasattr(shikiri, "__float__") else shikiri
+                                except (TypeError, ValueError):
+                                    item_data["仕切"] = shikiri
+                            if honbu is not None:
+                                try:
+                                    item_data["本部長"] = float(honbu) if hasattr(honbu, "__float__") else honbu
+                                except (TypeError, ValueError):
+                                    item_data["本部長"] = honbu
+                    except Exception:
+                        pass
+
             item_list.append(
                 ItemResponse(
                     item_id=item['item_id'],
@@ -584,7 +720,6 @@ async def get_page_items(
         # 첫 아이템의 item_data 키 순서 로그 (DB에서 온 순서인지 확인)
         if item_list and item_list[0].item_data:
             first_keys = list(item_list[0].item_data.keys())
-            print(f"[items API] 첫 아이템 item_data 키 순서(응답에 담기는 순서)={first_keys}")
         return {"items": item_list, "item_data_keys": item_data_keys}
 
     except Exception as e:
@@ -805,6 +940,10 @@ async def update_item(
         expected_version = update_data.expected_version
         session_id = update_data.session_id
         
+        # 체크 시 "누가/언제" 저장용: 세션에서 현재 사용자 ID 조회
+        user_info = db.get_session_user(session_id)
+        current_user_id = user_info.get("user_id") if user_info else None
+        
         # 아이템 조회
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -861,7 +1000,7 @@ async def update_item(
             set_clauses = []
             params = []
             
-            # 검토 상태 업데이트
+            # 검토 상태 업데이트 (체크 시 reviewed_at, reviewed_by_user_id 저장)
             if update_data.review_status:
                 first_review = update_data.review_status.get('first_review', {})
                 second_review = update_data.review_status.get('second_review', {})
@@ -869,12 +1008,20 @@ async def update_item(
                 if 'checked' in first_review:
                     checked_value = first_review['checked']
                     set_clauses.append("first_review_checked = %s")
-                    params.append(bool(checked_value))  # 명시적으로 boolean으로 변환
+                    params.append(bool(checked_value))
+                    set_clauses.append("first_reviewed_at = %s")
+                    params.append(datetime.now(timezone.utc) if checked_value else None)
+                    set_clauses.append("first_reviewed_by_user_id = %s")
+                    params.append(current_user_id if checked_value else None)
                 
                 if 'checked' in second_review:
                     checked_value = second_review['checked']
                     set_clauses.append("second_review_checked = %s")
-                    params.append(bool(checked_value))  # 명시적으로 boolean으로 변환
+                    params.append(bool(checked_value))
+                    set_clauses.append("second_reviewed_at = %s")
+                    params.append(datetime.now(timezone.utc) if checked_value else None)
+                    set_clauses.append("second_reviewed_by_user_id = %s")
+                    params.append(current_user_id if checked_value else None)
             
             # JSONB 필드 업데이트
             if 'item_data' in separated:

@@ -101,9 +101,8 @@ async def get_form_types(db=Depends(get_db)):
     return {"form_types": form_types}
 
 
-# form 01 기준 기본 매핑 (신규 양식 생성 시 복사)
+# form 01 기준 기본 매핑 (신규 양식 생성 시 복사). 거래처는 코드에서 항상 得意先로 통일하므로 customer 행 없음
 _DEFAULT_MAPPINGS = [
-    ("customer", "得意先名"),
     ("customer_code", "得意先CD"),
     ("management_id", "請求伝票番号"),
     ("summary", "備考"),
@@ -248,6 +247,41 @@ async def create_form_type(body: CreateFormTypeRequest, db=Depends(get_db)):
         "display_name": display_name,
         "message": "Form type created",
     }
+
+
+@router.delete("/{form_code}", response_model=dict)
+async def delete_form_type(form_code: str, db=Depends(get_db)):
+    """
+    양식지 종류 삭제. 해당 form_type을 사용하는 문서가 하나라도 있으면 409.
+    삭제 시 form_type_labels, form_field_mappings 에서 제거.
+    """
+    code = form_code.strip()
+    if not code or len(code) > 10:
+        raise HTTPException(status_code=400, detail="form_code must be 1-10 characters")
+    with db.get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM documents_current WHERE form_type = %s LIMIT 1",
+            (code,),
+        )
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail="この様式を使用している文書があるため削除できません。",
+            )
+        cur.execute(
+            "SELECT 1 FROM documents_archive WHERE form_type = %s LIMIT 1",
+            (code,),
+        )
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail="この様式を使用している文書があるため削除できません。",
+            )
+        cur.execute("DELETE FROM form_type_labels WHERE form_code = %s", (code,))
+        cur.execute("DELETE FROM form_field_mappings WHERE form_code = %s", (code,))
+        conn.commit()
+    return {"form_code": code, "message": "Form type deleted"}
 
 
 @router.post("/{form_code}/preview-image", response_model=dict)
