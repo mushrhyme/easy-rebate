@@ -224,7 +224,9 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
         customer_name: str,
         pdf_filename: Optional[str] = None,
         exact_match: bool = False,
-        form_type: Optional[str] = None
+        form_type: Optional[str] = None,
+        super_names: Optional[List[str]] = None,
+        min_similarity: float = 0.9
     ) -> List[Dict[str, Any]]:
         """
         거래처명으로 항목 검색 (items 테이블에서 직접 조회)
@@ -234,6 +236,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
             pdf_filename: PDF 파일명 (None이면 전체 DB에서 검색)
             exact_match: True면 정확히 일치, False면 부분 일치 (ILIKE 검색)
             form_type: 양식지 번호 (01, 02, 03, 04, 05). None이면 모든 양식지
+            super_names: 로그인 사용자 담당 슈퍼명 목록. 있으면 유사도(min_similarity) 이상만 반환
+            min_similarity: 슈퍼명 유사도 최소 기준 (0~1, 기본 0.9)
             
         Returns:
             검색된 항목 리스트 (공통 필드 + item_data 병합)
@@ -242,24 +246,16 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 
-                # 검색 값 준비
+                # 검색 값 준비 (거래처는 得意先로 통일, 양식 무관)
                 search_value = customer_name if exact_match else f'%{customer_name}%'
                 operator = "=" if exact_match else "ILIKE"
-                
-                # WHERE 조건: customer 컬럼 + item_data 내 거래처 관련 키 + item_data 전체 텍스트
-                # (RAG/LLM이 양식별로 得意先名, 得意先様, 得意先, 取引先 등 다양한 키로 저장함)
-                customer_keys = ["得意先", "得意先名", "得意先様", "取引先"]
-                or_parts = [
-                    f"(i.customer IS NOT NULL AND i.customer {operator} %s)"
-                ]
-                or_parts.extend([
-                    f"(i.item_data ->> {repr(k)} IS NOT NULL AND (i.item_data ->> {repr(k)}) {operator} %s)"
-                    for k in customer_keys
-                ])
-                # 키 이름이 다른 경우를 위해 item_data JSON 전체에서도 검색
-                or_parts.append(f"(i.item_data IS NOT NULL AND i.item_data::text {operator} %s)")
-                condition = "(" + " OR ".join(or_parts) + ")"
-                params = [search_value] * (1 + len(customer_keys) + 1)
+                cust_expr = self._item_customer_expr()
+                # 得意先 필드로 매칭되거나, item_data 전체 텍스트에 검색어가 있으면 히트 (키 이름/저장 방식 차이 대비)
+                condition = (
+                    f"((({cust_expr}) <> '' AND ({cust_expr}) {operator} %s) "
+                    f"OR (i.item_data IS NOT NULL AND i.item_data::text {operator} %s))"
+                )
+                params: List[Any] = [search_value, search_value]
                 
                 # pdf_filename / form_type 필터
                 conditions = [condition]
@@ -269,6 +265,14 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 if form_type:
                     conditions.append("d.form_type = %s")
                     params.append(form_type)
+                # 내 담당만: 슈퍼명 유사도 90% 이상 (pg_trgm). detail 得意先와 동일한 값으로 비교
+                if super_names and len(super_names) > 0:
+                    cust_expr = self._item_customer_expr()
+                    conditions.append(
+                        f"({cust_expr}) <> '' "
+                        f"AND EXISTS (SELECT 1 FROM unnest(%s::text[]) AS sn WHERE similarity({cust_expr}, sn) >= %s))"
+                    )
+                    params.extend([super_names, min_similarity])
                 where_clause = " AND ".join(conditions)
                 
                 # SQL 쿼리 구성 (items_current와 items_archive 모두 조회)
@@ -285,6 +289,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             i.second_review_checked,
                             i.first_reviewed_at,
                             i.second_reviewed_at,
+                            i.first_reviewed_by_user_id,
+                            i.second_reviewed_by_user_id,
                             i.item_data,
                             i.version,
                             d.form_type
@@ -301,6 +307,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             i.second_review_checked,
                             i.first_reviewed_at,
                             i.second_reviewed_at,
+                            i.first_reviewed_by_user_id,
+                            i.second_reviewed_by_user_id,
                             i.item_data,
                             i.version,
                             d.form_type
@@ -320,6 +328,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             i.second_review_checked,
                             i.first_reviewed_at,
                             i.second_reviewed_at,
+                            i.first_reviewed_by_user_id,
+                            i.second_reviewed_by_user_id,
                             i.item_data,
                             i.version,
                             d.form_type
@@ -336,6 +346,8 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                             i.second_review_checked,
                             i.first_reviewed_at,
                             i.second_reviewed_at,
+                            i.first_reviewed_by_user_id,
+                            i.second_reviewed_by_user_id,
                             i.item_data,
                             i.version,
                             d.form_type
@@ -398,16 +410,18 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     if item_data.get('商品名') is not None:
                         merged_item['商品名'] = item_data['商品名']
                     
-                    # 검토 상태 추가
+                    # 검토 상태 추가 (증빙용: 누가/언제)
                     merged_item['review_status'] = {
                         'first_review': {
                             'checked': row_dict.get('first_review_checked', False),
-                            'reviewed_at': row_dict.get('first_reviewed_at')
+                            'reviewed_at': row_dict.get('first_reviewed_at'),
+                            'reviewed_by_user_id': row_dict.get('first_reviewed_by_user_id'),
                         },
                         'second_review': {
                             'checked': row_dict.get('second_review_checked', False),
-                            'reviewed_at': row_dict.get('second_reviewed_at')
-                        }
+                            'reviewed_at': row_dict.get('second_reviewed_at'),
+                            'reviewed_by_user_id': row_dict.get('second_reviewed_by_user_id'),
+                        },
                     }
                     
                     # 키 순서 정렬
@@ -462,7 +476,116 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 return [dict(r) for r in rows]
         except Exception:
             return []
-    
+
+    def get_page_keys_by_super_names(
+        self,
+        super_names: List[str],
+        form_type: Optional[str] = None,
+        min_similarity: float = 0.9,
+    ) -> List[Dict[str, Any]]:
+        """
+        담당 슈퍼명 목록과 유사도 이상인 거래처가 있는 페이지 목록 반환.
+        super_import.csv 기반 목록을 인자로 받음 (DB 테이블 미사용).
+
+        Args:
+            super_names: 슈퍼명 목록 (CSV에서 username별로 조회한 값)
+            form_type: 양식지 번호. None이면 전체
+            min_similarity: 슈퍼명 유사도 최소 기준 (0~1)
+
+        Returns:
+            [{ pdf_filename, page_number, form_type }, ...]
+        """
+        names_trimmed = [n.strip() for n in super_names if n and n.strip()]
+        if not names_trimmed:
+            return []
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cust_expr = self._item_customer_expr()
+                base_cond = (
+                    f"({cust_expr}) <> '' "
+                    f"AND EXISTS (SELECT 1 FROM unnest(%s::text[]) AS sn "
+                    f"WHERE similarity({cust_expr}, sn) >= %s)"
+                )
+                conditions = [base_cond]
+                params: List[Any] = [names_trimmed, min_similarity]
+                if form_type:
+                    conditions.append("d.form_type = %s")
+                    params.append(form_type)
+                where_clause = " AND ".join(conditions)
+                sql = """
+                    SELECT DISTINCT i.pdf_filename, i.page_number, d.form_type
+                    FROM items_current i
+                    INNER JOIN documents_current d ON i.pdf_filename = d.pdf_filename
+                    WHERE """ + where_clause + """
+                    UNION
+                    SELECT DISTINCT i.pdf_filename, i.page_number, d.form_type
+                    FROM items_archive i
+                    INNER JOIN documents_archive d ON i.pdf_filename = d.pdf_filename
+                    WHERE """ + where_clause + """
+                    ORDER BY pdf_filename, page_number
+                """
+                cursor.execute(sql, params * 2)
+                rows = cursor.fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            print(f"⚠️ get_page_keys_by_super_names 실패: {e}")
+            return []
+
+    def _item_customer_expr(self) -> str:
+        """거래처는 得意先로 통일 (양식 무관). item_data->>'得意先' 없으면 customer 컬럼."""
+        return """COALESCE(
+            NULLIF(trim(i.item_data->>'得意先'), ''),
+            NULLIF(trim(i.customer), ''),
+            ''
+        )"""
+
+    def get_page_keys_by_customer_names(
+        self,
+        customer_names: List[str],
+        form_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        detail 페이지 得意先와 동일한 값이 주어진 목록에 포함된 항목이 있는 페이지 목록 반환 (완전 일치).
+        item_data 得意先/得意先名 등 + customer 컬럼 반영.
+
+        Returns:
+            [{ pdf_filename, page_number, form_type }, ...]
+        """
+        names_trimmed = [n.strip() for n in customer_names if n and n.strip()]
+        if not names_trimmed:
+            return []
+        cust_expr = self._item_customer_expr()
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                placeholders = ", ".join(["%s"] * len(names_trimmed))
+                cond = f"({cust_expr}) IN ({placeholders})"
+                conditions = [cond]
+                params: List[Any] = list(names_trimmed)
+                if form_type:
+                    conditions.append("d.form_type = %s")
+                    params.append(form_type)
+                where_clause = " AND ".join(conditions)
+                sql = f"""
+                    SELECT DISTINCT i.pdf_filename, i.page_number, d.form_type
+                    FROM items_current i
+                    INNER JOIN documents_current d ON i.pdf_filename = d.pdf_filename
+                    WHERE {where_clause}
+                    UNION
+                    SELECT DISTINCT i.pdf_filename, i.page_number, d.form_type
+                    FROM items_archive i
+                    INNER JOIN documents_archive d ON i.pdf_filename = d.pdf_filename
+                    WHERE {where_clause}
+                    ORDER BY pdf_filename, page_number
+                """
+                cursor.execute(sql, params * 2)
+                rows = cursor.fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            print(f"⚠️ get_page_keys_by_customer_names 실패: {e}")
+            return []
+
     # ============================================
     # 이미지 관리 메서드
     # ============================================
@@ -664,5 +787,103 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 """)
                 return [row[0] for row in cursor.fetchall()]
         except Exception:
+            return []
+
+    def get_review_tab_pdf_filenames(
+        self,
+        in_vector_pdf_filenames: List[str],
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+    ) -> List[str]:
+        """
+        검토 탭에 해당하는 PDF 파일명 목록 (정답지 제외, 벡터 인덱스 제외).
+        data_year/data_month 가 있는 문서만 포함.
+
+        Args:
+            in_vector_pdf_filenames: 벡터 인덱스에 포함된 pdf_filename 목록 (제외 대상)
+            year: 연도 (None이면 전체)
+            month: 월 (None이면 전체)
+
+        Returns:
+            검토 탭 PDF 파일명 리스트
+        """
+        in_vector_set = set(f.strip().lower() for f in (in_vector_pdf_filenames or []) if f)
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if year is not None and month is not None:
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT pdf_filename
+                        FROM (
+                            SELECT pdf_filename FROM documents_current
+                            WHERE (is_answer_key_document IS NULL OR is_answer_key_document = FALSE)
+                              AND data_year IS NOT NULL AND data_month IS NOT NULL
+                              AND data_year = %s AND data_month = %s
+                            UNION ALL
+                            SELECT pdf_filename FROM documents_archive
+                            WHERE (is_answer_key_document IS NULL OR is_answer_key_document = FALSE)
+                              AND data_year IS NOT NULL AND data_month IS NOT NULL
+                              AND data_year = %s AND data_month = %s
+                        ) t
+                        ORDER BY pdf_filename
+                        """,
+                        (year, month, year, month),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT pdf_filename
+                        FROM (
+                            SELECT pdf_filename FROM documents_current
+                            WHERE (is_answer_key_document IS NULL OR is_answer_key_document = FALSE)
+                              AND data_year IS NOT NULL AND data_month IS NOT NULL
+                            UNION ALL
+                            SELECT pdf_filename FROM documents_archive
+                            WHERE (is_answer_key_document IS NULL OR is_answer_key_document = FALSE)
+                              AND data_year IS NOT NULL AND data_month IS NOT NULL
+                        ) t
+                        ORDER BY pdf_filename
+                        """
+                    )
+                rows = cursor.fetchall()
+                pdfs = [row[0] for row in rows if row[0]]
+                return [p for p in pdfs if (p or "").strip().lower() not in in_vector_set]
+        except Exception as e:
+            print(f"⚠️ get_review_tab_pdf_filenames 실패: {e}")
+            return []
+
+    def get_distinct_customer_names_for_pdfs(self, pdf_filenames: List[str]) -> List[str]:
+        """
+        지정한 PDF 목록에 등장하는 거래처명(得意先/customer) 중복 제거 목록.
+
+        Args:
+            pdf_filenames: PDF 파일명 리스트
+
+        Returns:
+            거래처명 리스트 (빈 문자열 제외, 정렬)
+        """
+        if not pdf_filenames:
+            return []
+        cust_expr = self._item_customer_expr()
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                placeholders = ", ".join(["%s"] * len(pdf_filenames))
+                sql = f"""
+                    SELECT DISTINCT {cust_expr} AS name
+                    FROM items_current i
+                    WHERE i.pdf_filename IN ({placeholders})
+                    UNION
+                    SELECT DISTINCT {cust_expr} AS name
+                    FROM items_archive i
+                    WHERE i.pdf_filename IN ({placeholders})
+                """
+                cursor.execute(sql, pdf_filenames + pdf_filenames)
+                rows = cursor.fetchall()
+                names = [r[0].strip() for r in rows if r and r[0] and str(r[0]).strip()]
+                return sorted(set(names))
+        except Exception as e:
+            print(f"⚠️ get_distinct_customer_names_for_pdfs 실패: {e}")
             return []
 

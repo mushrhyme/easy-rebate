@@ -37,6 +37,9 @@ CREATE TABLE user_sessions (
     user_agent TEXT
 );
 
+-- pg_trgm: 슈퍼명 유사도 검색(90% 이상)용 (super_import.csv 기반 담당 필터에 사용)
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 -- ============================================
 -- 2. 문서 메타데이터 테이블 (current/archive)
 -- ============================================
@@ -280,14 +283,9 @@ CREATE TABLE form_field_mappings (
     UNIQUE(form_code, logical_key)
 );
 
--- 기본값 시드 (config 하드코딩과 동일)
+-- 기본값 시드 (거래처는 코드에서 항상 得意先로 통일, customer 매핑 없음)
 INSERT INTO form_field_mappings (form_code, logical_key, physical_key, is_active)
 VALUES
-    ('01', 'customer', '得意先名', TRUE),
-    ('02', 'customer', '得意先様', TRUE),
-    ('03', 'customer', '得意先名', TRUE),
-    ('04', 'customer', '得意先', TRUE),
-    ('05', 'customer', '得意先', TRUE),
     ('01', 'customer_code', '得意先CD', TRUE),
     ('02', 'customer_code', '得意先CD', TRUE),
     ('03', 'customer_code', '得意先CD', TRUE),
@@ -487,5 +485,21 @@ ON CONFLICT (username) DO UPDATE SET
     is_active = EXCLUDED.is_active;
 
 -- ============================================
--- 초기화 완료
+-- 거래처 검색 속도: ILIKE/부분일치용 트리그램 인덱스 (pg_trgm)
+-- ============================================
+CREATE INDEX IF NOT EXISTS idx_items_current_customer_expr_trgm
+  ON items_current USING gin ((COALESCE(NULLIF(trim(item_data->>'得意先'), ''), NULLIF(trim(customer), ''), '')) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_items_archive_customer_expr_trgm
+  ON items_archive USING gin ((COALESCE(NULLIF(trim(item_data->>'得意先'), ''), NULLIF(trim(customer), ''), '')) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_items_current_item_data_text_trgm
+  ON items_current USING gin ((item_data::text) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_items_archive_item_data_text_trgm
+  ON items_archive USING gin ((item_data::text) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_page_data_current_page_meta_trgm
+  ON page_data_current USING gin ((page_meta::text) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_page_data_archive_page_meta_trgm
+  ON page_data_archive USING gin ((page_meta::text) gin_trgm_ops);
+
+-- ============================================
+-- 초기화 완료 (담당·슈퍼는 super_import.csv 파일만 사용、DB 테이블 없음)
 -- ============================================

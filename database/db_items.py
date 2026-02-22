@@ -299,6 +299,8 @@ class ItemsMixin:
                                 second_review_checked,
                                 first_reviewed_at,
                                 second_reviewed_at,
+                                first_reviewed_by_user_id,
+                                second_reviewed_by_user_id,
                                 item_data,
                                 version
                             FROM {items_table}
@@ -316,6 +318,8 @@ class ItemsMixin:
                                 second_review_checked,
                                 first_reviewed_at,
                                 second_reviewed_at,
+                                first_reviewed_by_user_id,
+                                second_reviewed_by_user_id,
                                 item_data,
                                 version
                             FROM {items_table}
@@ -338,6 +342,8 @@ class ItemsMixin:
                                 second_review_checked,
                                 first_reviewed_at,
                                 second_reviewed_at,
+                                first_reviewed_by_user_id,
+                                second_reviewed_by_user_id,
                                 item_data,
                                 version
                             FROM items_current
@@ -358,6 +364,8 @@ class ItemsMixin:
                                     second_review_checked,
                                     first_reviewed_at,
                                     second_reviewed_at,
+                                    first_reviewed_by_user_id,
+                                    second_reviewed_by_user_id,
                                     item_data,
                                     version
                                 FROM items_archive
@@ -377,6 +385,8 @@ class ItemsMixin:
                                 second_review_checked,
                                 first_reviewed_at,
                                 second_reviewed_at,
+                                first_reviewed_by_user_id,
+                                second_reviewed_by_user_id,
                                 item_data,
                                 version
                             FROM items_current
@@ -391,6 +401,8 @@ class ItemsMixin:
                                 second_review_checked,
                                 first_reviewed_at,
                                 second_reviewed_at,
+                                first_reviewed_by_user_id,
+                                second_reviewed_by_user_id,
                                 item_data,
                                 version
                             FROM items_archive
@@ -411,7 +423,6 @@ class ItemsMixin:
                                 doc_meta = doc_info.get("document_metadata")
                                 if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
                                     item_key_order = doc_meta["item_data_keys"]
-                                    print(f"[db_items get_items] 문서 자체 key_order 사용(파싱 시 참조한 RAG 기준) 개수={len(item_key_order)}")
                     except Exception:
                         pass
                 
@@ -471,16 +482,18 @@ class ItemsMixin:
                     if item_data.get('商品名') is not None:
                         merged_item['商品名'] = item_data['商品名']
                     
-                    # 검토 상태 추가
+                    # 검토 상태 추가 (증빙용: 누가/언제 체크했는지)
                     merged_item['review_status'] = {
                         'first_review': {
                             'checked': row_dict.get('first_review_checked', False),
-                            'reviewed_at': row_dict.get('first_reviewed_at')
+                            'reviewed_at': row_dict.get('first_reviewed_at'),
+                            'reviewed_by_user_id': row_dict.get('first_reviewed_by_user_id'),
                         },
                         'second_review': {
                             'checked': row_dict.get('second_review_checked', False),
-                            'reviewed_at': row_dict.get('second_reviewed_at')
-                        }
+                            'reviewed_at': row_dict.get('second_reviewed_at'),
+                            'reviewed_by_user_id': row_dict.get('second_reviewed_by_user_id'),
+                        },
                     }
                     
                     # 키 순서 정렬
@@ -497,8 +510,6 @@ class ItemsMixin:
                             merged_item = reordered_item
                             if len(results) == 0:  # 첫 행만 로그
                                 after_keys = list(merged_item.keys())[:10]
-                                print(f"[db_items get_items] 첫 행 재정렬 전 키(앞 10개)={before_keys}")
-                                print(f"[db_items get_items] 첫 행 재정렬 후 키(앞 10개)={after_keys}")
                         except Exception as e:
                             print(f"[db_items get_items] 재정렬 예외: {e}")
                             pass
