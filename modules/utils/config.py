@@ -47,10 +47,10 @@ class RAGConfig:
     text_extraction_method: str = None
 
     def __post_init__(self):
-        # upload_channel: finet(엑셀) / mail(우편물, Upstage OCR)
+        # upload_channel: finet(엑셀) / mail(우편물, Azure OCR + 표 복원)
         self.upload_channel_extraction_method = {
             "finet": "excel",
-            "mail": "upstage",
+            "mail": "azure",
         }
     top_k: int = 15
     similarity_threshold: float = 0.7
@@ -81,19 +81,19 @@ rag_config = RAGConfig()
 
 
 def get_extraction_method_for_upload_channel(upload_channel: str = None) -> str:
-    """upload_channel에 따라 추출 방법 반환. finet→excel, mail→upstage."""
+    """upload_channel에 따라 추출 방법 반환. finet→excel, mail→azure(표 복원)."""
     if upload_channel and rag_config.upload_channel_extraction_method:
-        return rag_config.upload_channel_extraction_method.get(upload_channel, "upstage")
-    return "upstage"
+        return rag_config.upload_channel_extraction_method.get(upload_channel, "azure")
+    return "azure"
 
 
 def folder_name_to_upload_channel(folder_name: str) -> str:
     """
     폴더명을 upload_channel로 변환합니다.
 
-    img 구조: finet/ (엑셀), mail/ (Upstage)
+    img 구조: finet/ (엑셀), mail/ (Azure 표 복원)
     - finet → excel 추출
-    - mail  → upstage 추출
+    - mail  → azure 추출
     알 수 없는 폴더명은 기본값 "mail".
     """
     if not folder_name:

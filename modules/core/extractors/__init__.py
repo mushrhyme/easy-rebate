@@ -10,6 +10,7 @@ from .rag_pages_extractor import extract_pages_with_rag
 from .pdf_processor import PdfImageConverter
 from .gemini_extractor import GeminiVisionParser
 from .upstage_extractor import UpstageExtractor, get_upstage_extractor
+from .azure_extractor import AzureExtractor, get_azure_extractor
 
 __all__ = [
     'extract_json_with_rag',
@@ -19,5 +20,7 @@ __all__ = [
     'GeminiVisionParser',
     'UpstageExtractor',
     'get_upstage_extractor',
+    'AzureExtractor',
+    'get_azure_extractor',
 ]
 
