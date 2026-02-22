@@ -12,6 +12,28 @@ import type { Document } from '@/types'
 import { getDocumentYearMonth } from '@/utils/documentDate'
 import './CustomerSearch.css'
 
+/** 문자열 유사도 0~1 (difflib SequenceMatcher.ratio와 유사). Levenshtein 기반. */
+function stringSimilarity(a: string, b: string): number {
+  const x = (a ?? '').trim()
+  const y = (b ?? '').trim()
+  if (!x || !y) return 0
+  const n = x.length
+  const m = y.length
+  const dp: number[][] = Array(n + 1)
+  for (let i = 0; i <= n; i++) dp[i] = Array(m + 1).fill(0)
+  for (let i = 0; i <= n; i++) dp[i][0] = i
+  for (let j = 0; j <= m; j++) dp[0][j] = j
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const cost = x[i - 1] === y[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    }
+  }
+  const dist = dp[n][m]
+  const maxLen = Math.max(n, m, 1)
+  return 1 - dist / maxLen
+}
+
 // 페이지 타입
 interface Page {
   pdfFilename: string
@@ -45,6 +67,26 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   const [imageHeightPercent, setImageHeightPercent] = useState(50) // 이미지 영역 높이 비율 (20~80)
   const [isResizing, setIsResizing] = useState(false)
   const [pageJumpInput, setPageJumpInput] = useState<string>('') // 원하는 페이지 번호 입력값
+  const [showCustomerListModal, setShowCustomerListModal] = useState(false)
+  const [selectedCustomerNamesForFilter, setSelectedCustomerNamesForFilter] = useState<string[]>([])
+  const [checkedFilterNames, setCheckedFilterNames] = useState<Set<string>>(new Set())
+  const [bulkCheckType, setBulkCheckType] = useState<'first' | 'second' | null>(null) // 1次/2次 一括 진행 중
+  const [bulkCheckState, setBulkCheckState] = useState({
+    allFirstChecked: false,
+    allSecondChecked: false,
+    someFirstChecked: false,
+    someSecondChecked: false,
+  })
+  const bulkFirstCheckboxRef = useRef<HTMLInputElement>(null)
+  const bulkSecondCheckboxRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (bulkFirstCheckboxRef.current) {
+      bulkFirstCheckboxRef.current.indeterminate = bulkCheckState.someFirstChecked && !bulkCheckState.allFirstChecked
+    }
+    if (bulkSecondCheckboxRef.current) {
+      bulkSecondCheckboxRef.current.indeterminate = bulkCheckState.someSecondChecked && !bulkCheckState.allSecondChecked
+    }
+  }, [bulkCheckState])
   const contentWrapperRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<ItemsGridRdgHandle>(null)
 
@@ -106,9 +148,17 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
 
   // 거래처명으로 검색 (검색어가 있을 때만 실행)
   const { data: searchResult, isLoading: searchLoading, error: searchError } = useQuery({
-    queryKey: ['search', 'customer', searchQuery],
-    queryFn: () => searchApi.byCustomer(searchQuery, false), // 부분 일치 검색
-    enabled: !!searchQuery.trim(), // 검색어가 있을 때만 실행
+    queryKey: ['search', 'customer', searchQuery, formTypeFilter],
+    queryFn: () => searchApi.byCustomer(searchQuery, false, formTypeFilter ?? undefined, false),
+    enabled: !!searchQuery.trim(),
+  })
+
+  // 거래처 목록 모달: 내 담당 거래처 (로그인 필요)
+  const { data: mySupersData, isLoading: mySupersLoading, error: mySupersError } = useQuery({
+    queryKey: ['search', 'my-supers'],
+    queryFn: () => searchApi.getMySupers(),
+    enabled: showCustomerListModal,
+    retry: false,
   })
 
   // 현재 연월 계산
@@ -174,6 +224,43 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     return currentYearMonth
   }, [selectedYearMonth, availableYearMonths, currentYearMonth])
 
+  // 모달 열릴 때 체크 상태를 현재 필터와 동기화
+  useEffect(() => {
+    if (showCustomerListModal) {
+      setCheckedFilterNames(new Set(selectedCustomerNamesForFilter))
+    }
+  }, [showCustomerListModal, selectedCustomerNamesForFilter])
+
+  // 거래처 목록 모달: 검토 탭 전체 거래처 (선택 연월 기준)
+  const { data: reviewTabCustomersData, isLoading: reviewTabCustomersLoading } = useQuery({
+    queryKey: ['search', 'review-tab-customers', effectiveYearMonth.year, effectiveYearMonth.month],
+    queryFn: () => searchApi.getReviewTabCustomers(effectiveYearMonth.year, effectiveYearMonth.month),
+    enabled: showCustomerListModal,
+  })
+
+  // 왼쪽(실제 거래처) 기준 유사도 매핑: 각 왼쪽에 가장 유사한 오른쪽(担当) 1개 + 매핑 안 된 오른쪽은 왼쪽 공란으로
+  const customerMappingRows = useMemo(() => {
+    const leftList = reviewTabCustomersData?.customer_names ?? []
+    const rightList = mySupersError ? [] : (mySupersData?.super_names ?? [])
+    const mapped: { left: string; right: string; score: number }[] = []
+    const usedRights = new Set<string>()
+    for (const left of leftList) {
+      let bestRight = ''
+      let bestScore = 0
+      for (const right of rightList) {
+        const score = stringSimilarity(left, right)
+        if (score > bestScore) {
+          bestScore = score
+          bestRight = right
+        }
+      }
+      if (bestRight) usedRights.add(bestRight)
+      mapped.push({ left, right: bestRight, score: bestScore })
+    }
+    const unmappedRights = rightList.filter((r) => !usedRights.has(r))
+    return { mapped, unmappedRights }
+  }, [reviewTabCustomersData?.customer_names, mySupersData?.super_names, mySupersError])
+
   // 모든 페이지를 평탄화하여 리스트 생성 (검색어가 없을 때 사용)
   // 선택된 연월(또는 기본 최신 연월)의 데이터만 필터링 (정답지 대상 문서 제외)
   const allPages: Page[] = useMemo(() => {
@@ -221,9 +308,32 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     }))
   }, [searchResult])
 
-  // 검색어가 있으면 검색 결과, 없으면 전체 페이지 사용 + 검토 필터 + 참조 양식지 필터 적용
+  // 선택한 거래처로 필터 (取引先一覧でチェック→確認)
+  const { data: filterPagesData } = useQuery({
+    queryKey: ['search', 'pages-by-customers', selectedCustomerNamesForFilter, formTypeFilter],
+    queryFn: () => searchApi.postPagesByCustomers(selectedCustomerNamesForFilter, formTypeFilter ?? undefined),
+    enabled: selectedCustomerNamesForFilter.length > 0,
+  })
+  const filterPages: Page[] = useMemo(() => {
+    if (!filterPagesData?.pages) return []
+    return filterPagesData.pages.map((page: any) => ({
+      pdfFilename: page.pdf_filename,
+      pageNumber: page.page_number,
+      formType: page.form_type,
+      totalPages: 1,
+    }))
+  }, [filterPagesData])
+
+  // 우선순위: 선택 거래처 필터 > 검색어 > 전체 페이지. 그 다음 참조 양식지 + 검토 필터 적용
   const displayPages: Page[] = useMemo(() => {
-    let pages = searchQuery.trim() ? searchPages : allPages
+    let pages: Page[]
+    if (selectedCustomerNamesForFilter.length > 0) {
+      pages = filterPages
+    } else if (searchQuery.trim()) {
+      pages = searchPages
+    } else {
+      pages = allPages
+    }
 
     // 참조 양식지(form_type) 필터 적용
     if (formTypeFilter) {
@@ -258,7 +368,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
           return true
       }
     })
-  }, [searchQuery, searchPages, allPages, formTypeFilter, reviewFilter, reviewStats])
+  }, [selectedCustomerNamesForFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewFilter, reviewStats])
 
   // 현재 페이지 정보
   const currentPage = displayPages[currentPageIndex] || null
@@ -424,15 +534,6 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     )
   }
 
-  // 검색 로딩 중
-  if (searchLoading && searchQuery.trim()) {
-    return (
-      <div className="customer-search">
-        <div className="loading">검색 중...</div>
-      </div>
-    )
-  }
-
   // 검색 에러
   if (searchError && searchQuery.trim()) {
     return (
@@ -444,8 +545,8 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     )
   }
 
-  // 검색어가 있고 검색 결과가 없을 때
-  if (searchQuery.trim() && displayPages.length === 0) {
+  // 검색어가 있고 검색 결과가 없을 때 (로딩 중이면 아래 메인 레이아웃에서 検索中... 표시)
+  if (searchQuery.trim() && displayPages.length === 0 && !searchLoading) {
     return (
       <div className="customer-search">
         {/* 페이지 내비게이션 섹션 (검색창 포함) */}
@@ -488,11 +589,14 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   // 연월/검색 결과에 데이터가 없을 때는 아래 메인 레이아웃에서 처리 (드롭다운·그리드 영역 유지)
 
   const hasNoData = displayPages.length === 0
-  const noDataMessage = searchQuery.trim()
-    ? '検索結果がありません。'
-    : documentsData?.documents?.length
-      ? '選択した期間にデータがありません。対象期間を変更してください。'
-      : 'アップロードされたファイルがありません。'
+  const noDataMessage =
+    searchLoading && searchQuery.trim()
+      ? '検索中...'
+      : searchQuery.trim()
+        ? '検索結果がありません。'
+        : documentsData?.documents?.length
+          ? '選択した期間にデータがありません。対象期間を変更してください。'
+          : 'アップロードされたファイルがありません。'
 
   return (
     <div className="customer-search">
@@ -603,11 +707,35 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
           <button
             onClick={handleSearch}
             className="search-button"
+            disabled={searchLoading}
+            title={searchLoading ? '検索中...' : undefined}
           >
-            検索
+            {searchLoading && searchQuery.trim() ? '検索中...' : '検索'}
           </button>
-
-          {/* 現在の状態を保存 + 正解帳作成（管理者のみ）：同じトーンで並べる */}
+          <button
+            type="button"
+            className="search-button customer-list-btn"
+            onClick={() => setShowCustomerListModal(true)}
+            title="내 담당 거래처 / 검토 탭 전체 거래처 목록"
+          >
+            取引先一覧
+          </button>
+          {selectedCustomerNamesForFilter.length > 0 && (
+            <span className="customer-filter-active-inline">
+              <span className="customer-filter-active-text">{selectedCustomerNamesForFilter.length}件で絞り込み</span>
+              <button
+                type="button"
+                className="customer-filter-clear"
+                onClick={() => {
+                  setSelectedCustomerNamesForFilter([])
+                  setCurrentPageIndex(0)
+                }}
+              >
+                解除
+              </button>
+            </span>
+          )}
+          {/* 貯蔵 + 正解帳作成（管理者のみ）：同じトーンで並べる */}
           <div className="nav-action-buttons">
             <button
               type="button"
@@ -615,7 +743,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
               onClick={() => gridRef.current?.save?.()}
               title="編集中の行を保存（Ctrl+Sと同じ）"
             >
-              現在の状態を保存
+              貯蔵
             </button>
             {currentPage && (
               <button
@@ -640,6 +768,55 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
               </span>
             )}
             <PageRoleBadge pageRole={currentPageRole} />
+            {/* 1次/2次 一括チェックボックス（チェック=全チェック、解除=全解除） */}
+            {currentPage && (
+              <div className="nav-bulk-check-inline" title="このページの1次・2次検討を一括チェック/解除">
+                <label className="bulk-check-label">
+                  <input
+                    ref={bulkFirstCheckboxRef}
+                    type="checkbox"
+                    className="bulk-check-cb"
+                    checked={bulkCheckState.allFirstChecked}
+                    disabled={bulkCheckType !== null}
+                    title="このページの1次検討を一括チェック/解除"
+                    onChange={async (e) => {
+                      if (!gridRef.current) return
+                      const checked = e.target.checked
+                      setBulkCheckType('first')
+                      try {
+                        if (checked) await gridRef.current.checkAllFirst()
+                        else await gridRef.current.uncheckAllFirst()
+                      } finally {
+                        setBulkCheckType(null)
+                      }
+                    }}
+                  />
+                  <span className="bulk-check-label-text">1次</span>
+                </label>
+                <label className="bulk-check-label">
+                  <input
+                    ref={bulkSecondCheckboxRef}
+                    type="checkbox"
+                    className="bulk-check-cb"
+                    checked={bulkCheckState.allSecondChecked}
+                    disabled={bulkCheckType !== null}
+                    title="このページの2次検討を一括チェック/解除"
+                    onChange={async (e) => {
+                      if (!gridRef.current) return
+                      const checked = e.target.checked
+                      setBulkCheckType('second')
+                      try {
+                        if (checked) await gridRef.current.checkAllSecond()
+                        else await gridRef.current.uncheckAllSecond()
+                      } finally {
+                        setBulkCheckType(null)
+                      }
+                    }}
+                  />
+                  <span className="bulk-check-label-text">2次</span>
+                </label>
+              </div>
+            )}
             <ReviewRateBadges stats={currentPageStats} />
           </div>
 
@@ -655,7 +832,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
         </div>
       </div>
 
-      {/* 그리드 섹션: 데이터 있으면 그리드, 없으면 영역만 유지 */}
+      {/* 그리드 섹션: 아이템 조회 시 商品名 기준 시키리/본부장 자동 매칭되어 仕切・本部長 컬럼에 표시 */}
       {currentPage ? (
         <div className="selected-page-content grid-section">
           <ItemsGridRdg
@@ -663,6 +840,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
             pdfFilename={currentPage.pdfFilename}
             pageNumber={currentPage.pageNumber}
             formType={currentPage.formType}
+            onBulkCheckStateChange={setBulkCheckState}
           />
         </div>
       ) : hasNoData ? (
@@ -822,6 +1000,109 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
           </div>
         </div>
       )}
+
+      {/* 取引先一覧モーダル: 左=実際取引先、右=担当(super_import)、類似度でマッピング */}
+      {showCustomerListModal && (
+        <div className="answer-key-modal-overlay" onClick={() => setShowCustomerListModal(false)}>
+          <div className="answer-key-modal answer-key-modal-wide customer-list-modal" onClick={(e) => e.stopPropagation()}>
+            <h3 className="answer-key-modal-title">取引先一覧（類似度マッピング）</h3>
+            <p className="customer-list-modal-desc">
+              左: 検討タブの実際の取引先（{effectiveYearMonth.year}年{effectiveYearMonth.month}月）、右: 担当（super_import）。左を基準に最も類似度の高い右を1件マッピング。
+            </p>
+            {(reviewTabCustomersLoading || mySupersLoading) && (
+              <p className="customer-list-loading">読込中…</p>
+            )}
+            {mySupersError && (
+              <p className="customer-list-error">担当一覧はログインが必要です。</p>
+            )}
+            {!reviewTabCustomersLoading && !mySupersLoading && !mySupersError && (
+              <div className="customer-list-table-wrap">
+                <table className="customer-list-table">
+                  <thead>
+                    <tr>
+                      <th className="customer-list-th-check">選択</th>
+                      <th>実際の取引先（左）</th>
+                      <th>担当（super_import）（右）</th>
+                      <th>類似度</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customerMappingRows.mapped.map((row, idx) => {
+                      const filterName = row.left
+                      return (
+                        <tr key={`mapped-${idx}-${row.left}`}>
+                          <td className="customer-list-td-check">
+                            <input
+                              type="checkbox"
+                              checked={checkedFilterNames.has(filterName)}
+                              onChange={() => {
+                                setCheckedFilterNames((prev) => {
+                                  const next = new Set(prev)
+                                  if (next.has(filterName)) next.delete(filterName)
+                                  else next.add(filterName)
+                                  return next
+                                })
+                              }}
+                              aria-label={`${filterName}で絞り込み`}
+                            />
+                          </td>
+                          <td>{row.left}</td>
+                          <td>{row.right || '—'}</td>
+                          <td className="customer-list-score">{row.right ? (row.score * 100).toFixed(1) + '%' : '—'}</td>
+                        </tr>
+                      )
+                    })}
+                    {customerMappingRows.unmappedRights.map((right) => (
+                      <tr key={`unmapped-${right}`}>
+                        <td className="customer-list-td-check">
+                          <input
+                            type="checkbox"
+                            checked={checkedFilterNames.has(right)}
+                            onChange={() => {
+                              setCheckedFilterNames((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(right)) next.delete(right)
+                                else next.add(right)
+                                return next
+                              })
+                            }}
+                            aria-label={`${right}で絞り込み`}
+                          />
+                        </td>
+                        <td className="customer-list-blank">—</td>
+                        <td>{right}</td>
+                        <td className="customer-list-score">—</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="answer-key-modal-actions">
+              <button
+                type="button"
+                className="answer-key-modal-btn cancel"
+                onClick={() => setShowCustomerListModal(false)}
+              >
+                閉じる
+              </button>
+              <button
+                type="button"
+                className="answer-key-modal-btn confirm"
+                onClick={() => {
+                  const names = Array.from(checkedFilterNames)
+                  setSelectedCustomerNamesForFilter(names)
+                  setCurrentPageIndex(0)
+                  setShowCustomerListModal(false)
+                }}
+              >
+                確認（選択した取引先で絞り込み）
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       </div>
     </div>
   )

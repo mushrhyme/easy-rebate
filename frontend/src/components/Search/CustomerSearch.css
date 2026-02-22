@@ -174,6 +174,42 @@
   opacity: 0.6;
 }
 
+/* 1次/2次 一括チェックボックス（詳細 왼쪽・1次0%/2次0% 배지 왼쪽） */
+.nav-bulk-check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+  margin-right: 0.25rem;
+}
+.bulk-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #374151;
+  user-select: none;
+}
+.bulk-check-label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.bulk-check-cb {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #667eea;
+}
+.bulk-check-cb:disabled {
+  cursor: not-allowed;
+}
+.bulk-check-label-text {
+  white-space: nowrap;
+}
+
 /* 페이지 번호 배지: 버튼·드롭다운과 높이 완전 동일 (변수 + overflow 강제) */
 .page-navigation-section .page-number-badge {
   display: inline-flex;
@@ -303,7 +339,28 @@
   background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
 }
 
-/* 現在の状態を保存・正解帳作成：検索ボタンと同じトーンで統一 */
+.page-navigation-section .my-supers-only-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  font-size: 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.page-navigation-section .my-supers-only-checkbox input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.page-navigation-section .my-supers-only-checkbox .my-supers-loading {
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+
+/* 貯蔵・正解帳作成：検索ボタンと同じトーンで統一 */
 .page-navigation-section .nav-action-buttons {
   display: flex;
   align-items: center;
@@ -330,7 +387,7 @@
   background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
 }
 
-/* 現在の状態を保存：보라 그라데이션과 톤 맞춘 붉은색 그라데이션 */
+/* 貯蔵：보라 그라데이션과 톤 맞춘 붉은색 그라데이션 */
 .page-navigation-section .nav-action-btn.nav-save-btn {
   background: linear-gradient(135deg, #ef5350 0%, #c62828 100%);
   color: white;
@@ -389,6 +446,98 @@
   font-weight: bold;
   border-radius: 10px;
   white-space: nowrap;
+}
+
+/* 商品名で単価検索 섹션 */
+.unit-price-search-section {
+  flex-shrink: 0;
+  padding: 0.5rem 1rem;
+  margin: 0 0 0.5rem 0;
+  background: #f8f9fc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.unit-price-search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.unit-price-search-label {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: #374151;
+  white-space: nowrap;
+}
+.unit-price-search-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.95em;
+}
+.unit-price-search-btn {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.9em;
+  font-weight: 500;
+  color: #fff;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.unit-price-search-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.unit-price-result-box {
+  margin-top: 0.75rem;
+  overflow-x: auto;
+}
+.unit-price-result-meta {
+  font-size: 0.85em;
+  color: #6b7280;
+  margin-bottom: 0.5rem;
+}
+.unit-price-result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.unit-price-result-table th,
+.unit-price-result-table td {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #e5e7eb;
+  text-align: left;
+}
+.unit-price-result-table th {
+  background: #eef2ff;
+  font-weight: 600;
+  color: #4338ca;
+}
+.unit-price-result-table tbody tr:hover {
+  background: #f5f7ff;
+}
+.unit-price-add-row-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8em;
+  color: #4338ca;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.unit-price-add-row-btn:hover:not(:disabled) {
+  background: #c7d2fe;
+}
+.unit-price-add-row-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.unit-price-add-hint {
+  font-size: 0.8em;
+  color: #9ca3af;
 }
 
 /* 참조 양식지 배지 (표시 전용) */
@@ -1043,4 +1192,87 @@
   font-size: 0.9rem;
   border: 1px solid #d1d5db;
   border-radius: 6px;
+}
+
+/* 取引先一覧モーダル */
+.customer-list-btn {
+  margin-left: 0;
+}
+.customer-list-modal .customer-list-modal-desc {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+.customer-list-modal .customer-list-loading,
+.customer-list-modal .customer-list-error {
+  margin: 0.5rem 0 0 0;
+  font-size: 0.875rem;
+}
+.customer-list-modal .customer-list-error {
+  color: #b91c1c;
+}
+.customer-list-modal .customer-list-table-wrap {
+  overflow: auto;
+  max-height: 55vh;
+  margin-bottom: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.customer-list-modal .customer-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.customer-list-modal .customer-list-table th,
+.customer-list-modal .customer-list-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+.customer-list-modal .customer-list-table th {
+  background: #f3f4f6;
+  font-weight: 600;
+  color: #374151;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.customer-list-modal .customer-list-table td.customer-list-score {
+  white-space: nowrap;
+  color: #4b5563;
+}
+.customer-list-modal .customer-list-table td.customer-list-blank {
+  color: #9ca3af;
+  font-style: italic;
+}
+.customer-list-modal .customer-list-th-check,
+.customer-list-modal .customer-list-td-check {
+  width: 2.5rem;
+  text-align: center;
+  vertical-align: middle;
+}
+.customer-list-modal .customer-list-td-check input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+/* 絞り込み中表示（ナビ内） */
+.customer-filter-active-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #4b5563;
+}
+.customer-filter-active-inline .customer-filter-clear {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #374151;
+}
+.customer-filter-active-inline .customer-filter-clear:hover {
+  background: #e5e7eb;
 }

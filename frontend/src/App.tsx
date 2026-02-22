@@ -48,7 +48,12 @@ interface YearMonthGroup {
 function AppContent() {
   const { user, logout } = useAuth()
   const [activeTab, setActiveTab] = useState<Tab>('upload')
-  const [initialPdfFilenameForAnswerKey, setInitialPdfFilenameForAnswerKey] = useState<string | null>(null)
+  /** 정답지 탭으로 이동 시 선택할 문서. RAG에서 오면 relative_path 있음 → img 기반 뷰 */
+  const [initialDocumentForAnswerKey, setInitialDocumentForAnswerKey] = useState<{
+    pdf_filename: string
+    total_pages: number
+    relative_path: string | null
+  } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false) // 사이드바는 기본적으로 닫혀있음
   const [selectedUploadChannel, setSelectedUploadChannel] = useState<UploadChannel | null>(UPLOAD_CHANNELS[0] ?? null)
   const [selectedDocumentForPreview, setSelectedDocumentForPreview] = useState<{ pdfFilename: string; totalPages: number } | null>(null)
@@ -216,7 +221,12 @@ function AppContent() {
       <main className="app-main">
         {activeTab === 'dashboard' && (
           <div className="dashboard-tab-wrapper">
-            <Dashboard />
+            <Dashboard
+              onOpenAnswerKeyWithDocument={(payload) => {
+                setInitialDocumentForAnswerKey(payload)
+                setActiveTab('ocr_test')
+              }}
+            />
           </div>
         )}
         {activeTab === 'upload' && (
@@ -322,7 +332,11 @@ function AppContent() {
           <div className="search-tab">
             <CustomerSearch
               onNavigateToAnswerKey={(pdfFilename) => {
-                setInitialPdfFilenameForAnswerKey(pdfFilename)
+                setInitialDocumentForAnswerKey({
+                  pdf_filename: pdfFilename,
+                  total_pages: 0,
+                  relative_path: null,
+                })
                 setActiveTab('ocr_test')
               }}
             />
@@ -338,8 +352,9 @@ function AppContent() {
         {activeTab === 'ocr_test' && (
           <div className="answer-key-tab-wrapper">
             <AnswerKeyTab
-              initialPdfFilename={initialPdfFilenameForAnswerKey}
-              onConsumeInitialPdfFilename={() => setInitialPdfFilenameForAnswerKey(null)}
+              initialDocument={initialDocumentForAnswerKey}
+              onConsumeInitialDocument={() => setInitialDocumentForAnswerKey(null)}
+              onRevokeSuccess={() => setActiveTab('search')}
             />
           </div>
         )}

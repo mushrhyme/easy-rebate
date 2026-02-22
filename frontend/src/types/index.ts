@@ -27,8 +27,8 @@ export interface Item {
   item_order: number
   item_data: Record<string, any>  // 공식 키는 일본어(예: 請求番号, 得意先, 備考, 税額, 商品名 등)
   review_status: {
-    first_review: { checked: boolean }
-    second_review: { checked: boolean }
+    first_review: { checked: boolean; reviewed_at?: string | null; reviewed_by?: string | null }
+    second_review: { checked: boolean; reviewed_at?: string | null; reviewed_by?: string | null }
   }
   version: number
 }
@@ -104,10 +104,10 @@ export interface UploadChannelConfig {
   imagePath: string
 }
 
-// ReviewStatus 타입 정의 (WebSocket 메시지용)
+// ReviewStatus 타입 정의 (WebSocket 메시지용, 증빙용 reviewed_at/reviewed_by)
 export interface ReviewStatus {
-  first_review?: { checked: boolean }
-  second_review?: { checked: boolean }
+  first_review?: { checked: boolean; reviewed_at?: string | null; reviewed_by?: string | null }
+  second_review?: { checked: boolean; reviewed_at?: string | null; reviewed_by?: string | null }
 }
 
 /** SAP 산식 설정: 양식지별 데이터 입력 (DB에서 동적, 01, 02, 07 등) */

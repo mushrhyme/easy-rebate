@@ -14,15 +14,49 @@ import { useAuth } from '@/contexts/AuthContext'
 import type { ReviewStatus } from '@/types'
 import './ItemsGridRdg.css'
 
+/** 증빙 툴팁용: ISO 일시 → 짧은 표시 (예: 2025-02-22 14:30) */
+function formatReviewDate(iso: string | null | undefined): string {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const h = String(d.getHours()).padStart(2, '0')
+    const min = String(d.getMinutes()).padStart(2, '0')
+    return `${y}-${m}-${day} ${h}:${min}`
+  } catch {
+    return iso
+  }
+}
+
 interface ItemsGridRdgProps {
   pdfFilename: string
   pageNumber: number
   formType: string | null
+  /** 현재 페이지 1次/2次 전부 체크·일부 체크 상태 변경 시 호출 (체크박스 표시용) */
+  onBulkCheckStateChange?: (state: BulkCheckState) => void
 }
 
 export interface ItemsGridRdgHandle {
   /** Ctrl+S와 동일: 편집 중인 첫 행 저장 후 락 해제 */
   save: () => void
+  /** 현재 페이지 그리드의 1次 검토를 모두 체크 */
+  checkAllFirst: () => Promise<void>
+  /** 현재 페이지 그리드의 2次 검토를 모두 체크 */
+  checkAllSecond: () => Promise<void>
+  /** 현재 페이지 그리드의 1次 검토를 모두 해제 */
+  uncheckAllFirst: () => Promise<void>
+  /** 현재 페이지 그리드의 2次 검토를 모두 해제 */
+  uncheckAllSecond: () => Promise<void>
+}
+
+export interface BulkCheckState {
+  allFirstChecked: boolean
+  allSecondChecked: boolean
+  someFirstChecked: boolean
+  someSecondChecked: boolean
 }
 
 interface GridRow {
@@ -30,6 +64,10 @@ interface GridRow {
   item_order: number
   first_review_checked: boolean
   second_review_checked: boolean
+  first_review_reviewed_at?: string | null
+  first_review_reviewed_by?: string | null
+  second_review_reviewed_at?: string | null
+  second_review_reviewed_by?: string | null
   [key: string]: string | number | boolean | null | undefined // item_data 필드들 (예: 商品名)
 }
 
@@ -37,6 +75,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   pdfFilename,
   pageNumber,
   formType,
+  onBulkCheckStateChange,
 }, ref) {
   const { data, isLoading, error } = useItems(pdfFilename, pageNumber)
   const { data: pageMetaData, isLoading: pageMetaLoading, error: pageMetaError } = usePageMeta(pdfFilename, pageNumber) // page_meta 조회
@@ -64,6 +103,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const containerRef = useRef<HTMLDivElement>(null)
   const [selectedComplexField, setSelectedComplexField] = useState<{ key: string; value: unknown; itemId: number } | null>(null) // 모달에 표시할 복잡한 필드
   const [hoveredRowId, setHoveredRowId] = useState<number | null>(null) // 호버된 행 ID
+  const [reviewTooltip, setReviewTooltip] = useState<{ text: string; x: number; y: number } | null>(null) // 1次/2次 증빙 툴팁
   
   // 컨테이너 너비 측정
   useEffect(() => {
@@ -146,7 +186,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const items = data?.items || []
   const hasItems = items.length > 0 // items 존재 여부
 
-  // 행 데이터 변환 (초기 데이터)
+  // 행 데이터 변환 (초기 데이터, 증빙용 reviewed_at/reviewed_by 포함)
   const initialRows = useMemo<GridRow[]>(() => {
     const gridRows = items.map((item) => {
       const row: GridRow = {
@@ -154,6 +194,10 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         item_order: item.item_order,
         first_review_checked: item.review_status?.first_review?.checked || false,
         second_review_checked: item.review_status?.second_review?.checked || false,
+        first_review_reviewed_at: item.review_status?.first_review?.reviewed_at ?? null,
+        first_review_reviewed_by: item.review_status?.first_review?.reviewed_by ?? null,
+        second_review_reviewed_at: item.review_status?.second_review?.reviewed_at ?? null,
+        second_review_reviewed_by: item.review_status?.second_review?.reviewed_by ?? null,
       }
 
       if (item.item_data) {
@@ -169,6 +213,39 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
   // rows 상태 관리 (편집 중 변경사항 추적)
   const [rows, setRows] = useState<GridRow[]>(initialRows)
+  const rowsRef = useRef<GridRow[]>(rows) // 일괄 체크 시 최신 rows 참조용
+  useEffect(() => {
+    rowsRef.current = rows
+  }, [rows])
+
+  // 부모 체크박스용: 현재 페이지 전체/일부 체크 상태 알림 (값이 바뀐 경우에만 호출해 불필요한 부모 리렌더 감소)
+  const lastBulkStateRef = useRef<BulkCheckState | null>(null)
+  useEffect(() => {
+    if (!onBulkCheckStateChange || rows.length === 0) return
+    const allFirstChecked = rows.every((r) => r.first_review_checked)
+    const allSecondChecked = rows.every((r) => r.second_review_checked)
+    const someFirstChecked = rows.some((r) => r.first_review_checked)
+    const someSecondChecked = rows.some((r) => r.second_review_checked)
+    const next: BulkCheckState = {
+      allFirstChecked,
+      allSecondChecked,
+      someFirstChecked,
+      someSecondChecked,
+    }
+    const prev = lastBulkStateRef.current
+    if (
+      prev &&
+      prev.allFirstChecked === next.allFirstChecked &&
+      prev.allSecondChecked === next.allSecondChecked &&
+      prev.someFirstChecked === next.someFirstChecked &&
+      prev.someSecondChecked === next.someSecondChecked
+    ) {
+      return
+    }
+    lastBulkStateRef.current = next
+    onBulkCheckStateChange(next)
+  }, [rows, onBulkCheckStateChange])
+
   const remoteUpdatedItemsRef = useRef<Set<number>>(new Set()) // WebSocket으로 업데이트된 아이템 ID 추적
   const remoteUpdatedValuesRef = useRef<Map<number, { first: boolean; second: boolean }>>(new Map()) // WebSocket으로 받은 체크박스 값 저장
   const prevItemsLengthRef = useRef(items.length) // 이전 items 길이 저장
@@ -194,6 +271,10 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         item_order: item.item_order,
         first_review_checked: item.review_status?.first_review?.checked || false,
         second_review_checked: item.review_status?.second_review?.checked || false,
+        first_review_reviewed_at: item.review_status?.first_review?.reviewed_at ?? null,
+        first_review_reviewed_by: item.review_status?.first_review?.reviewed_by ?? null,
+        second_review_reviewed_at: item.review_status?.second_review?.reviewed_at ?? null,
+        second_review_reviewed_by: item.review_status?.second_review?.reviewed_by ?? null,
       }
 
       if (item.item_data) {
@@ -605,29 +686,36 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         editable: false, // 그리드 편집 기능 비활성화
         renderCell: ({ row }) => {
           const isChecked = row.first_review_checked || false
+          const tooltipText =
+            isChecked && (row.first_review_reviewed_by || row.first_review_reviewed_at)
+              ? `1次: ${row.first_review_reviewed_by ?? ''}${row.first_review_reviewed_at ? ` (${formatReviewDate(row.first_review_reviewed_at)})` : ''}`.trim()
+              : isChecked
+                ? '1次レビュー完了'
+                : '1次レビュー未完了'
           return (
-            <div 
-              style={{ 
-                display: 'flex', 
-                justifyContent: 'center', 
-                alignItems: 'center', 
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
                 height: '100%',
-                width: '100%'
+                width: '100%',
               }}
             >
               <button
                 type="button"
                 onClick={(e) => {
-                  console.log('🔵 [체크박스] 1次 버튼 클릭:', { item_id: row.item_id, 현재상태: isChecked, 변경될상태: !isChecked })
-                  e.stopPropagation() // 그리드 셀 클릭 이벤트 방지
-                  e.preventDefault() // 기본 동작 방지
-                  // 버튼 클릭 시 바로 저장 (편집 모드와 무관)
+                  e.stopPropagation()
+                  e.preventDefault()
                   handleCheckboxUpdate(row.item_id, 'first_review_checked', !isChecked)
                 }}
-                onMouseDown={(e) => {
-                  e.stopPropagation() // 그리드 셀 선택 방지
+                onMouseDown={(e) => e.stopPropagation()}
+                onMouseEnter={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setReviewTooltip({ text: tooltipText, x: rect.left + rect.width / 2, y: rect.top })
                 }}
-                style={{ 
+                onMouseLeave={() => setReviewTooltip(null)}
+                style={{
                   cursor: 'pointer',
                   width: '20px',
                   height: '20px',
@@ -644,9 +732,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
                   padding: 0,
                   margin: 0,
                   lineHeight: 1,
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.2s ease',
                 }}
-                title={isChecked ? '1次レビュー完了' : '1次レビュー未完了'}
+                title={tooltipText}
               >
                 {isChecked ? '✓' : ''}
               </button>
@@ -665,29 +753,36 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         editable: false, // 그리드 편집 기능 비활성화
         renderCell: ({ row }) => {
           const isChecked = row.second_review_checked || false
+          const tooltipText =
+            isChecked && (row.second_review_reviewed_by || row.second_review_reviewed_at)
+              ? `2次: ${row.second_review_reviewed_by ?? ''}${row.second_review_reviewed_at ? ` (${formatReviewDate(row.second_review_reviewed_at)})` : ''}`.trim()
+              : isChecked
+                ? '2次レビュー完了'
+                : '2次レビュー未完了'
           return (
-            <div 
-              style={{ 
-                display: 'flex', 
-                justifyContent: 'center', 
-                alignItems: 'center', 
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
                 height: '100%',
-                width: '100%'
+                width: '100%',
               }}
             >
               <button
                 type="button"
                 onClick={(e) => {
-                  console.log('🔵 [체크박스] 2次 버튼 클릭:', { item_id: row.item_id, 현재상태: isChecked, 변경될상태: !isChecked })
-                  e.stopPropagation() // 그리드 셀 클릭 이벤트 방지
-                  e.preventDefault() // 기본 동작 방지
-                  // 버튼 클릭 시 바로 저장 (편집 모드와 무관)
+                  e.stopPropagation()
+                  e.preventDefault()
                   handleCheckboxUpdate(row.item_id, 'second_review_checked', !isChecked)
                 }}
-                onMouseDown={(e) => {
-                  e.stopPropagation() // 그리드 셀 선택 방지
+                onMouseDown={(e) => e.stopPropagation()}
+                onMouseEnter={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setReviewTooltip({ text: tooltipText, x: rect.left + rect.width / 2, y: rect.top })
                 }}
-                style={{ 
+                onMouseLeave={() => setReviewTooltip(null)}
+                style={{
                   cursor: 'pointer',
                   width: '20px',
                   height: '20px',
@@ -704,9 +799,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
                   padding: 0,
                   margin: 0,
                   lineHeight: 1,
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.2s ease',
                 }}
-                title={isChecked ? '2次レビュー完了' : '2次レビュー未完了'}
+                title={tooltipText}
               >
                 {isChecked ? '✓' : ''}
               </button>
@@ -871,27 +966,34 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
     const finalCols = scaledCols ?? adjustedCols
 
-    // 행 높이 자동 계산: 줄바꿈 가능 컬럼(商品名, 条件備考 등) 너비로 필요한 줄 수 추정 → 잘림 방지
-    const WIDE_KEYS = new Set(['得意先', '得意先名', '商品名', '備考', '条件備考'])
+    // 행 높이 자동 계산: 줄바꿈되는 모든 데이터 컬럼 너비로 필요한 줄 수 추정 → 글자 줄넘김 시 높이 맞춤
+    const FIXED_ROW_HEIGHT_KEYS = new Set(['item_order', 'actions', 'first_review_checked', 'second_review_checked', 'タイプ'])
     const wrapColumnWidths: Record<string, number> = {}
     finalCols.forEach((col) => {
-      if (WIDE_KEYS.has(col.key)) wrapColumnWidths[col.key] = getColWidth(col)
+      if (!FIXED_ROW_HEIGHT_KEYS.has(col.key)) wrapColumnWidths[col.key] = getColWidth(col)
     })
-    // 일본어·한글은 글자당 폭이 커서 PX_PER_CHAR를 크게 잡아 한 줄당 글자 수를 적게 → 줄 수를 넉넉히 추정
-    const PX_PER_CHAR = 16
+    // 일본어·한글은 글자당 폭이 커서 한 줄당 글자 수를 적게 잡아 줄 수를 넉넉히 추정 (줄넘김 시 행 높이 부족 방지)
+    const PX_PER_CHAR = 10
     const LINE_HEIGHT_PX = 22 // line-height + 여유 (폰트에 따라 잘림 방지)
     const CELL_PADDING_V = 12
     const ROW_HEIGHT_BUFFER = 8 // 세로 잘림 방지
     const MIN_ROW_HEIGHT = 36
+    const MAX_CHARS_PER_LINE = 8 // CJK는 한 줄에 많이 안 들어가므로 상한
 
     const getRowHeight = (row: GridRow): number => {
       let maxLines = 1
       for (const [key, width] of Object.entries(wrapColumnWidths)) {
-        const val = row[key]
+        // 컬럼 key는 得意先으로 통일될 수 있지만 row에는 得意先名으로 올 수 있음
+        const val = row[key] ?? (key === '得意先' ? row['得意先名'] : key === '得意先名' ? row['得意先'] : undefined)
         if (val == null) continue
-        const str = String(val)
-        const charsPerLine = Math.max(1, Math.floor(width / PX_PER_CHAR))
-        const lines = Math.ceil(str.length / charsPerLine)
+        const str = String(val).trim()
+        if (!str) continue
+        const effectiveWidth = Math.max(40, width - 20) // 패딩·보더 여유 차감
+        let charsPerLine = Math.max(1, Math.floor(effectiveWidth / PX_PER_CHAR))
+        charsPerLine = Math.min(charsPerLine, MAX_CHARS_PER_LINE) // CJK 두 줄 인식 보장
+        let lines = Math.ceil(str.length / charsPerLine)
+        // 짧은 문자열(4~12자)은 좁은 컬럼에서 두 줄로 보일 수 있으므로 최소 2줄로 간주 (예: サカガミ G)
+        if (str.length >= 4 && str.length <= 12) lines = Math.max(lines, 2)
         if (lines > maxLines) maxLines = lines
       }
       const contentHeight = CELL_PADDING_V + maxLines * LINE_HEIGHT_PX + ROW_HEIGHT_BUFFER
@@ -1276,21 +1378,25 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     return result
   }, [])
 
-  // items가 비어있으면 그리드 숨김 (cover 페이지 등)
+  // items가 비어있으면 그리드 숨김 (cover/summary 페이지 등)
   const isEmpty = !hasItems
   const isCoverPage = pageMetaData?.page_role === 'cover'
-  
-  // 디버깅: cover 페이지 및 page_meta 확인 - hooks는 조건부 return 이전에 호출되어야 함
+  // summary 페이지도 page_meta(totals, recipient 등) 배지를 표시
+  const isSummaryPage = pageMetaData?.page_role === 'summary'
+  const showPageMetaBadges = isCoverPage || isSummaryPage
+
+  // 디버깅: cover/summary 페이지 및 page_meta 확인 - hooks는 조건부 return 이전에 호출되어야 함
   useEffect(() => {
-    if (isCoverPage) {
-      console.log('🔵 [ItemsGridRdg] Cover 페이지 감지:', {
+    if (showPageMetaBadges) {
+      console.log('🔵 [ItemsGridRdg] Cover/Summary 페이지 감지:', {
         isCoverPage,
+        isSummaryPage,
         pageMetaData,
         pageMetaFields: pageMetaFields.length,
         isEmpty,
       })
     }
-  }, [isCoverPage, pageMetaData, pageMetaFields.length, isEmpty])
+  }, [showPageMetaBadges, isCoverPage, isSummaryPage, pageMetaData, pageMetaFields.length, isEmpty])
 
   // 페이지 전환 또는 PDF 변경 시, 선택된 복잡 필드 상세 화면 초기화
   useEffect(() => {
@@ -1326,7 +1432,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     }
   }, [handleSaveAndUnlock])
 
-  // 부모에서 저장 버튼 등으로 호출할 수 있도록 노출 (Ctrl+S와 동일 동작)
+  // 부모에서 저장·일괄 체크 호출용 노출
   useImperativeHandle(ref, () => ({
     save() {
       const editingIds = Array.from(editingItemIdsRef.current.values())
@@ -1336,7 +1442,35 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         void handleSaveAndUnlock(firstEditingId)
       }
     },
-  }), [handleSaveAndUnlock])
+    async checkAllFirst() {
+      const currentRows = rowsRef.current
+      const toCheck = currentRows.filter((r) => !r.first_review_checked)
+      for (const row of toCheck) {
+        await handleCheckboxUpdate(row.item_id, 'first_review_checked', true)
+      }
+    },
+    async checkAllSecond() {
+      const currentRows = rowsRef.current
+      const toCheck = currentRows.filter((r) => !r.second_review_checked)
+      for (const row of toCheck) {
+        await handleCheckboxUpdate(row.item_id, 'second_review_checked', true)
+      }
+    },
+    async uncheckAllFirst() {
+      const currentRows = rowsRef.current
+      const toUncheck = currentRows.filter((r) => r.first_review_checked)
+      for (const row of toUncheck) {
+        await handleCheckboxUpdate(row.item_id, 'first_review_checked', false)
+      }
+    },
+    async uncheckAllSecond() {
+      const currentRows = rowsRef.current
+      const toUncheck = currentRows.filter((r) => r.second_review_checked)
+      for (const row of toUncheck) {
+        await handleCheckboxUpdate(row.item_id, 'second_review_checked', false)
+      }
+    },
+  }), [handleSaveAndUnlock, handleCheckboxUpdate])
 
   if (isLoading || pageMetaLoading) {
     return <div className="grid-loading">読み込み中...</div>
@@ -1354,8 +1488,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   return (
     <div className="items-grid-rdg">
       {/* 복잡한 구조 필드 배지 영역 (좌측) */}
-      {/* cover 페이지인 경우 page_meta의 최상위 키들을 배지로 표시 */}
-      {isCoverPage && pageMetaFields.length > 0 && (
+      {/* cover/summary 페이지인 경우 page_meta의 최상위 키들을 배지로 표시 (totals, recipient 등) */}
+      {showPageMetaBadges && pageMetaFields.length > 0 && (
         <div className="complex-fields-badges">
           {pageMetaFields.map((field) => (
             <button
@@ -1425,8 +1559,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         </div>
       )}
       
-      {/* items가 비어있고 cover 페이지도 아닐 때 메시지 표시 */}
-      {isEmpty && !isCoverPage && (
+      {/* items가 비어있고 page_meta 배지도 없을 때만 메시지 표시 */}
+      {isEmpty && !showPageMetaBadges && (
         <div className="grid-empty-message">
           <p>このページにはアイテムがありません。</p>
         </div>
@@ -1463,6 +1597,24 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
             </table>
           </div>
         </div>
+      )}
+
+      {/* 1次/2次 체크 증빙 툴팁 (마우스 오버 시 바로 표시) */}
+      {typeof document !== 'undefined' && reviewTooltip && createPortal(
+        <div
+          className="items-grid-review-tooltip"
+          style={{
+            position: 'fixed',
+            left: reviewTooltip.x,
+            top: reviewTooltip.y - 4,
+            transform: 'translate(-50%, -100%)',
+            zIndex: 99999,
+            pointerEvents: 'none',
+          }}
+        >
+          {reviewTooltip.text}
+        </div>,
+        document.body
       )}
     </div>
   )
