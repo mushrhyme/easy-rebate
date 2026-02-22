@@ -180,6 +180,226 @@
   border-top: 1px solid #f1f5f9;
 }
 
+/* 様式名の管理（RAG セクション内） */
+.dashboard-form-type-labels-section .dashboard-section-note {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted, #666);
+}
+
+.dashboard-form-type-labels-wrap {
+  margin-top: 0.5rem;
+  width: 100%;
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.dashboard-form-type-labels-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  min-width: 400px;
+}
+
+.dashboard-form-type-labels-table th:first-child,
+.dashboard-form-type-labels-table td:first-child {
+  width: 5rem;
+}
+
+.dashboard-form-type-labels-table th:last-child,
+.dashboard-form-type-labels-table td:last-child {
+  width: 12.5rem;
+  box-sizing: border-box;
+}
+
+.dashboard-form-type-labels-table th,
+.dashboard-form-type-labels-table td {
+  padding: 0.75rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
+.dashboard-form-type-labels-table td.dashboard-col-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.dashboard-form-type-labels-table th {
+  text-align: left;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+}
+
+.dashboard-form-type-code {
+  font-family: ui-monospace, monospace;
+  font-weight: 500;
+  color: #334155;
+  min-width: 4rem;
+}
+
+.dashboard-form-type-labels-table th:nth-child(2),
+.dashboard-form-type-labels-table td:nth-child(2) {
+  min-width: 0;
+}
+
+.dashboard-form-type-label-input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.875rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.dashboard-form-type-label-input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.dashboard-button {
+  padding: 0.5rem 0.9rem;
+  border-radius: 0.5rem;
+  border: none;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, background-color 0.2s ease;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.dashboard-button:hover:not(:disabled) {
+  background: #cbd5e1;
+}
+
+.dashboard-button-small {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.dashboard-button-danger {
+  background: #c53030;
+  color: #fff;
+}
+
+.dashboard-button-danger:hover:not(:disabled) {
+  background: #9b2c2c;
+}
+
+.dashboard-button:disabled {
+  background: #a0aec0;
+  cursor: not-allowed;
+}
+
+.dashboard-button-list {
+  background: #64748b;
+  color: #fff;
+}
+
+.dashboard-button-list:hover:not(:disabled) {
+  background: #475569;
+}
+
+/* 様式別文書一覧 모달 */
+.dashboard-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dashboard-modal {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  max-width: 520px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-modal-title {
+  margin: 0;
+  padding: 1rem 1.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1e293b;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.dashboard-modal-note {
+  margin: 0;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.8125rem;
+  color: #64748b;
+}
+
+.dashboard-modal-list-wrap {
+  padding: 0.75rem 1.25rem;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 120px;
+}
+
+.dashboard-modal-doc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dashboard-modal-doc-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.25rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.dashboard-modal-doc-item:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.dashboard-modal-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  margin-right: 0.5rem;
+}
+
+.dashboard-modal-doc-pages {
+  flex-shrink: 0;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-modal-actions {
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid #e2e8f0;
+}
+
 .dashboard-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -401,6 +621,35 @@
 
 .dashboard-table-wide {
   max-height: 400px;
+}
+
+/* 文書一覧: colgroup으로 열 너비 고정 → 맨 오른쪽 여백 제거 */
+.dashboard-table.dashboard-table-docs {
+  table-layout: fixed;
+}
+
+.dashboard-table.dashboard-table-docs th,
+.dashboard-table.dashboard-table-docs td {
+  box-sizing: border-box;
+}
+
+/* 様式別ページ数 */
+.dashboard-pages-by-form-wrap {
+  max-width: 320px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.dashboard-table.dashboard-table-pages-by-form {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.dashboard-table.dashboard-table-pages-by-form th:nth-child(2),
+.dashboard-table.dashboard-table-pages-by-form td:nth-child(2) {
+  width: 6rem;
+  text-align: right;
 }
 
 .dashboard-empty {
