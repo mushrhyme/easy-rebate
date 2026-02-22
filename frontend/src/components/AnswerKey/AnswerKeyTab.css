@@ -176,15 +176,17 @@
 
 .answer-key-image-zoom-wrapper {
   position: relative;
-  min-width: 0;
-  min-height: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
 }
 
 .answer-key-page-img {
   display: block;
-  max-width: 100%;
-  height: auto;
-  border: 1px solid #e5e7eb;
+  width: 100%;
+  height: 100%;
+  vertical-align: top;
   border-radius: 4px;
 }
 
@@ -200,10 +202,58 @@
   gap: 0.375rem;
 }
 
+.answer-key-ocr-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
 .answer-key-ocr-label {
   font-size: 0.75rem;
   font-weight: 600;
   color: #6b7280;
+}
+
+.answer-key-ocr-rerun-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.answer-key-ocr-azure-model-select {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  background: #fff;
+  color: #374151;
+}
+
+.answer-key-ocr-rerun-btns {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.answer-key-ocr-rerun-btn {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+}
+
+.answer-key-ocr-rerun-btn:hover:not(:disabled) {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
+.answer-key-ocr-rerun-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .answer-key-ocr-text {
@@ -428,6 +478,64 @@
   margin-bottom: 0.25rem;
 }
 
+.answer-key-meta-group {
+  margin-bottom: 0.75rem;
+}
+.answer-key-meta-group:last-child {
+  margin-bottom: 0;
+}
+/* page_role 선택 (키・값 탭 상단) */
+.answer-key-page-role-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.answer-key-page-role-row .answer-key-ocr-label {
+  margin-bottom: 0;
+}
+
+.answer-key-page-role-select {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8125rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #374151;
+  min-width: 10rem;
+}
+
+.answer-key-meta-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.answer-key-meta-group-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.answer-key-meta-group-delete-btn {
+  flex-shrink: 0;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.answer-key-meta-group-delete-btn:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
 .answer-key-kv-block {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -458,8 +566,9 @@
 }
 
 .answer-key-kv-key-input {
-  flex: 0 0 120px;
-  min-width: 0;
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 220px;
   padding: 0.25rem 0.5rem;
   font-size: 0.8125rem;
   border: 1px solid #d1d5db;
@@ -542,6 +651,11 @@
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+.answer-key-kv-select {
+  cursor: pointer;
+  height: 2rem;
 }
 
 /* 키(컬럼) 관리 */
@@ -802,4 +916,88 @@
 
 .answer-key-btn-revoke:hover:not(:disabled) {
   background: #b91c1c;
+}
+
+/* 既存正解表参照ボタン（正解表作成タブ） */
+.answer-key-existing-btn {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.answer-key-existing-btn:hover {
+  background: #dbeafe;
+  border-color: #60a5fa;
+  color: #1e40af;
+}
+
+/* 既存正解表参照モーダル */
+.answer-key-tab .answer-key-existing-modal {
+  max-width: 720px;
+  width: 90%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+.answer-key-existing-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.answer-key-existing-row .answer-key-label {
+  flex-shrink: 0;
+  min-width: 6rem;
+}
+.answer-key-existing-json-wrap {
+  flex: 1;
+  min-height: 200px;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+}
+.answer-key-existing-json-wrap .answer-key-ocr-label {
+  margin-bottom: 0.25rem;
+}
+.answer-key-existing-json {
+  flex: 1;
+  min-height: 240px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+/* 参照 뷰（img 정답지 = 정답지 생성 탭과 동일 레이아웃） */
+.answer-key-ref-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.answer-key-ref-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  border-radius: 6px;
+}
+.answer-key-ref-label {
+  font-size: 0.875rem;
+  color: #1e40af;
+  font-weight: 500;
+}
+.answer-key-ref-kv-header {
+  flex-shrink: 0;
+  padding: 0.5rem 0;
+  font-weight: 600;
+  color: #374151;
+}
+.answer-key-ref-ocr-placeholder {
+  min-height: 4rem;
+  padding: 0.5rem;
+  font-size: 0.875rem;
+  color: #9ca3af;
 }

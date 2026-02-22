@@ -40,6 +40,12 @@ export const formTypesApi = {
     return response.data
   },
 
+  /** 양식지 종류 삭제. 사용 중인 문서가 있으면 409 */
+  delete: async (formCode: string): Promise<{ form_code: string; message: string }> => {
+    const response = await client.delete(`/api/form-types/${encodeURIComponent(formCode)}`)
+    return response.data
+  },
+
   /** 양식지 미리보기 이미지 저장 (문서 1페이지 이미지를 form_XX.png로 저장) */
   savePreviewImage: async (formCode: string, pdfFilename: string): Promise<{ form_code: string; preview_path: string }> => {
     const response = await client.post(`/api/form-types/${encodeURIComponent(formCode)}/preview-image`, {
@@ -114,15 +120,16 @@ export const documentsApi = {
   /**
    * 文書一覧取得
    * @param uploadChannel チャネルで絞り込み（省略可）
-   * @param isAnswerKeyDocument true のとき正解表対象文書のみ返す
+   * @param options is_answer_key_document: 正解表対象のみ / form_type: 様式で絞り込み（既存正解表参照モーダル用）
    */
   getList: async (
     uploadChannel?: string,
-    options?: { is_answer_key_document?: boolean }
+    options?: { is_answer_key_document?: boolean; form_type?: string }
   ): Promise<DocumentListResponse> => {
     const params: Record<string, string | boolean> = {}
     if (uploadChannel) params.upload_channel = uploadChannel
     if (options?.is_answer_key_document === true) params.is_answer_key_document = true
+    if (options?.form_type) params.form_type = options.form_type
     const response = await client.get<DocumentListResponse>('/api/documents', { params })
     return response.data
   },
@@ -133,6 +140,59 @@ export const documentsApi = {
   getListForAnswerKeyTab: async (): Promise<DocumentListResponse> => {
     const response = await client.get<DocumentListResponse>('/api/documents/for-answer-key-tab')
     return response.data
+  },
+
+  /**
+   * 文書の正解表 answer.json 一式取得（様式別「既存正解表」参照用・DB由来）
+   */
+  getDocumentAnswerJson: async (
+    pdfFilename: string
+  ): Promise<{
+    pdf_filename: string
+    form_type: string | null
+    total_pages: number
+    pages: Array<Record<string, any>>
+  }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.get(
+      `/api/documents/${encoded}/answer-json`
+    )
+    return response.data
+  },
+
+  /**
+   * RAG DB ソース: img フォルダ内の正解表一覧（form_type 別）
+   * 戻り: { by_form_type: { "01": [ { pdf_name, relative_path, total_pages }, ... ], ... } }
+   */
+  getAnswerKeysFromImg: async (): Promise<{
+    by_form_type: Record<string, Array<{ pdf_name: string; relative_path: string | null; total_pages: number }>>
+  }> => {
+    const response = await client.get('/api/documents/answer-keys-from-img')
+    return response.data
+  },
+
+  /**
+   * img フォルダ内の正解表フォルダ（relative_path）の answer.json 一式取得
+   */
+  getAnswerJsonFromImg: async (
+    relativePath: string
+  ): Promise<{
+    pdf_filename: string
+    form_type: string | null
+    total_pages: number
+    pages: Array<Record<string, any>>
+  }> => {
+    const response = await client.get('/api/documents/answer-json-from-img', {
+      params: { relative_path: relativePath },
+    })
+    return response.data
+  },
+
+  /** img 폴더 정답지 페이지 이미지 URL (RAG 문서 뷰용). GET으로 이미지 반환 */
+  getImgPageImageUrl: (relativePath: string, pageNumber: number): string => {
+    const base = client.defaults.baseURL ?? ''
+    const sep = base.includes('?') ? '&' : '?'
+    return `${base}/api/documents/img-page-image${sep}relative_path=${encodeURIComponent(relativePath)}&page_number=${pageNumber}`
   },
 
   /**
@@ -234,6 +294,20 @@ export const documentsApi = {
   },
 
   /**
+   * Azure OCR(표 복원) + RAG+LLM으로 페이지 정답지 생성. 표 구조 보존.
+   */
+  generateAnswerWithRag: async (
+    pdfFilename: string,
+    pageNumber: number
+  ): Promise<{ success: boolean; page_number: number; page_role: string; page_meta?: Record<string, any> | null; items: Array<Record<string, any>>; provider?: string }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post(
+      `/api/documents/${encoded}/pages/${pageNumber}/generate-answer-rag`
+    )
+    return response.data
+  },
+
+  /**
    * 동일 프롬프트(prompt_v3.txt)로 GPT Vision으로 페이지 정답지 생성 (테스트용)
    */
   generateAnswerWithGpt: async (
@@ -251,17 +325,18 @@ export const documentsApi = {
   },
 
   /**
-   * 첫 행(템플릿)으로 나머지 행 LLM 생성 후 페이지 items 전체 교체
+   * 첫 행(템플릿)으로 나머지 행 LLM 생성 후 페이지 items 전체 교체. provider는 상단 드롭다운 선택과 동일.
    */
   generateItemsFromTemplate: async (
     pdfFilename: string,
     pageNumber: number,
-    templateItem: Record<string, any>
+    templateItem: Record<string, any>,
+    provider: 'gemini' | 'gpt-5.2' = 'gpt-5.2'
   ): Promise<{ success: boolean; page_number: number; items_count: number; items: Array<Record<string, any>> }> => {
     const encoded = encodeURIComponent(pdfFilename)
     const response = await client.post(
       `/api/documents/${encoded}/pages/${pageNumber}/generate-items-from-template`,
-      { template_item: templateItem }
+      { template_item: templateItem, provider }
     )
     return response.data
   },
@@ -311,17 +386,20 @@ export const documentsApi = {
   },
 
   /**
-   * page_meta 업데이트 (정답지 생성 탭에서 편집 저장용)
+   * page_meta 업데이트 (정답지 생성 탭에서 편집 저장용). page_role 지정 시 함께 저장.
    */
   updatePageMeta: async (
     pdfFilename: string,
     pageNumber: number,
-    pageMeta: Record<string, any>
+    pageMeta: Record<string, any>,
+    pageRole?: string
   ): Promise<{ success: boolean; message: string }> => {
     const encodedFilename = encodeURIComponent(pdfFilename)
+    const body: { page_meta: Record<string, any>; page_role?: string } = { page_meta: pageMeta }
+    if (pageRole != null && pageRole !== '') body.page_role = pageRole
     const response = await client.patch<{ success: boolean; message: string }>(
       `/api/documents/${encodedFilename}/pages/${pageNumber}/meta`,
-      { page_meta: pageMeta }
+      body
     )
     return response.data
   },
@@ -474,6 +552,21 @@ export const itemsApi = {
   },
 
   /**
+   * 検討チェックを誰が何件したか（증빙용 현황판）
+   */
+  getReviewStatsByUser: async (): Promise<{
+    by_user: Array<{
+      user_id: number
+      display_name: string
+      first_checked_count: number
+      second_checked_count: number
+    }>
+  }> => {
+    const response = await client.get('/api/items/stats/review-by-user')
+    return response.data
+  },
+
+  /**
    * detail ページ・得意先ありのみのアイテム数集計（文書セクション用）
    */
   getDetailSummary: async (): Promise<{
@@ -522,15 +615,18 @@ export const itemsApi = {
 export const searchApi = {
   /**
    * 거래처명으로 검색
+   * mySupersOnly: true면 로그인 사용자 담당 슈퍼만 (유사도 90% 이상)
    */
   byCustomer: async (
     customerName: string,
     exactMatch: boolean = false,
-    formType?: string
+    formType?: string,
+    mySupersOnly: boolean = false
   ): Promise<SearchResult> => {
     const params: Record<string, any> = {
       customer_name: customerName,
       exact_match: exactMatch,
+      my_supers_only: mySupersOnly,
     }
     if (formType) {
       params.form_type = formType
@@ -538,6 +634,82 @@ export const searchApi = {
     const response = await client.get<SearchResult>('/api/search/customer', {
       params,
     })
+    return response.data
+  },
+
+  /**
+   * 로그인 사용자 담당 거래처(슈퍼) 목록 (super_import.csv 기준)
+   */
+  getMySupers: async (): Promise<{ super_names: string[] }> => {
+    const response = await client.get<{ super_names: string[] }>('/api/search/my-supers')
+    return response.data
+  },
+
+  /**
+   * 검토 탭 전체 거래처 목록 (정답지·벡터 제외, items의 得意先/customer 중복 제거)
+   */
+  getReviewTabCustomers: async (year?: number, month?: number): Promise<{ customer_names: string[] }> => {
+    const params: Record<string, number> = {}
+    if (year != null) params.year = year
+    if (month != null) params.month = month
+    const response = await client.get<{ customer_names: string[] }>('/api/search/review-tab-customers', { params })
+    return response.data
+  },
+
+  /**
+   * 로그인 사용자 담당 슈퍼에 해당하는 페이지 목록 (검토 탭 "내 담당만" 필터용, 유사도 90% 이상)
+   */
+  getMySuperPages: async (formType?: string): Promise<{ pages: Array<{ pdf_filename: string; page_number: number; form_type?: string | null }> }> => {
+    const params: Record<string, any> = {}
+    if (formType) params.form_type = formType
+    const response = await client.get<{ pages: Array<{ pdf_filename: string; page_number: number; form_type?: string | null }> }>(
+      '/api/search/my-super-pages',
+      { params }
+    )
+    return response.data
+  },
+
+  /**
+   * 선택한 customer명 목록으로 해당 페이지 목록 조회 (확인 후 필터 적용용)
+   */
+  postPagesByCustomers: async (
+    customerNames: string[],
+    formType?: string
+  ): Promise<{ pages: Array<{ pdf_filename: string; page_number: number; form_type?: string | null }> }> => {
+    const response = await client.post('/api/search/pages-by-customers', {
+      customer_names: customerNames,
+      form_type: formType ?? null,
+    })
+    return response.data
+  },
+
+  /**
+   * 商品名으로 단가 매칭 (제품명·용량 분리 후 unit_price 유사도 조회 → 시키리/본부장 반환)
+   */
+  getUnitPriceByProduct: async (
+    productName: string,
+    options?: { topK?: number; minSimilarity?: number; subMinSimilarity?: number }
+  ): Promise<{
+    base_name: string
+    capacity: string | null
+    product_name_input: string
+    matches: Array<{
+      제품코드?: string | number
+      제품명?: string
+      제품용량?: number | string
+      시키리?: number
+      본부장?: number
+      JANCD?: string | number
+      제품명_similarity?: number
+      제품용량_similarity?: number
+      similarity?: number
+    }>
+  }> => {
+    const params: Record<string, any> = { product_name: productName }
+    if (options?.topK != null) params.top_k = options.topK
+    if (options?.minSimilarity != null) params.min_similarity = options.minSimilarity
+    if (options?.subMinSimilarity != null) params.sub_min_similarity = options.subMinSimilarity
+    const response = await client.get('/api/search/unit-price-by-product', { params })
     return response.data
   },
 
@@ -567,6 +739,23 @@ export const searchApi = {
     const response = await client.get<{ ocr_text: string }>(url)
     return response.data
   },
+
+  /**
+   * 현재 페이지 OCR 다시 인식 (Azure 또는 Upstage) — 결과를 debug2에 저장 후 반환
+   * Azure 시 azure_model: prebuilt-read | prebuilt-layout | prebuilt-document
+   */
+  /** 정답지 탭: OCR 재인식 (Azure 전용). 결과는 debug2에 저장됨 */
+  rerunPageOcr: async (
+    pdfFilename: string,
+    pageNumber: number,
+    azureModel?: string
+  ): Promise<{ ocr_text: string }> => {
+    const encodedFilename = encodeURIComponent(pdfFilename)
+    const url = `/api/search/${encodedFilename}/pages/${pageNumber}/ocr-rerun`
+    const body = { provider: 'azure', azure_model: azureModel ?? 'prebuilt-layout' }
+    const response = await client.post<{ ocr_text: string }>(url, body)
+    return response.data
+  },
 }
 
 /**
@@ -581,6 +770,28 @@ export interface LoginResponse {
   display_name_ja?: string
   session_id?: string
   must_change_password?: boolean
+}
+
+/** 사용자 생성 (관리자용). users 테이블 키값 전체 입력 가능 */
+export type CreateUserPayload = {
+  username: string
+  display_name: string
+  display_name_ja?: string
+  department_ko?: string
+  department_ja?: string
+  role?: string
+  category?: string
+}
+
+/** 사용자 정보 업데이트 (관리자용) */
+export type UpdateUserPayload = {
+  display_name?: string
+  display_name_ja?: string
+  department_ko?: string
+  department_ja?: string
+  role?: string
+  category?: string
+  is_active?: boolean
 }
 
 export const authApi = {
@@ -648,9 +859,9 @@ export const authApi = {
   },
 
   /**
-   * 사용자 생성 (관리자용)
+   * 사용자 생성 (관리자용). users 테이블 키값 전체 입력 가능
    */
-  createUser: async (data: { username: string; display_name: string; display_name_ja?: string }) => {
+  createUser: async (data: CreateUserPayload) => {
     const response = await client.post('/api/auth/users', data)
     return response.data
   },
@@ -658,7 +869,7 @@ export const authApi = {
   /**
    * 사용자 정보 업데이트 (관리자용)
    */
-  updateUser: async (userId: number, data: { display_name?: string; display_name_ja?: string; is_active?: boolean }) => {
+  updateUser: async (userId: number, data: UpdateUserPayload) => {
     const response = await client.put(`/api/auth/users/${userId}`, data)
     return response.data
   },
@@ -787,26 +998,33 @@ export const ragAdminApi = {
   },
 
   /**
-   * 基準管理 master_code.xlsx 一覧取得
+   * super_import.csv をそのまま取得（管理マスタタブで CSV 内容を表示）
    */
-  getMasterCode: async (): Promise<{
-    headers: string[]
-    rows: Array<{ a: string; b: string; c: string; d: string; e: string; f: string }>
+  getSuperImportCsv: async (): Promise<{
+    rows: Array<{
+      super_code: string
+      super_name: string
+      person_id: string
+      person_name: string
+      username: string
+    }>
   }> => {
-    const response = await client.get('/api/rag-admin/master-code')
+    const response = await client.get('/api/rag-admin/super-import-csv')
     return response.data
   },
 
-  /**
-   * 基準管理 master_code.xlsx 保存
-   */
-  saveMasterCode: async (params: {
-    headers?: string[]
-    rows: Array<{ a: string; b: string; c: string; d: string; e: string; f: string }>
-  }): Promise<{ success: boolean; message: string }> => {
-    const response = await client.put('/api/rag-admin/master-code', params)
+  /** super_import.csv を全体上書き保存 */
+  putSuperImportCsv: async (rows: Array<{
+    super_code: string
+    super_name: string
+    person_id: string
+    person_name: string
+    username: string
+  }>): Promise<{ message: string; rows_count: number }> => {
+    const response = await client.put('/api/rag-admin/super-import-csv', { rows })
     return response.data
   },
+
 }
 /** 分析(기본 RAG) LLM: gemini | gpt5.2 */
 export type RagProvider = 'gemini' | 'gpt5.2'

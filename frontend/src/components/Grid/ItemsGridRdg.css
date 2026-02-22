@@ -631,3 +631,18 @@
   background-color: #fee2e2;
   color: #ef4444;
 }
+
+/* 1次/2次 체크 증빙 툴팁 (마우스 오버 시 바로 표시) */
+.items-grid-review-tooltip {
+  padding: 6px 10px;
+  background: #1f2937;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  max-width: 320px;
+  white-space: normal;
+  word-break: break-word;
+}

@@ -7,6 +7,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, itemsApi, searchApi, ragAdminApi } from '@/api/client'
+import { useFormTypes } from '@/hooks/useFormTypes'
 import { useAuth } from '@/contexts/AuthContext'
 import { getApiBaseUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
@@ -32,11 +33,31 @@ const KEY_LABELS: Record<string, string> = {
   version: 'version',
 }
 
+/** タイプ 필드 기본 드롭다운 옵션 (벡터 DB 생성 시 타입도 반영) */
+const TYPE_OPTIONS_BASE = [
+  { value: '', label: '—' },
+  { value: '条件', label: '条件' },
+  { value: '販促費8%', label: '販促費8%' },
+  { value: '販促費10%', label: '販促費10%' },
+  { value: 'CF8%', label: 'CF8%' },
+  { value: 'CF10%', label: 'CF10%' },
+  { value: '非課税', label: '非課税' },
+]
+
+/** RAG 현황판에서 문서 클릭 시 넘어오는 초기 문서 (relative_path 있으면 img 기반 뷰) */
+export interface InitialDocumentForAnswerKey {
+  pdf_filename: string
+  total_pages: number
+  relative_path: string | null
+}
+
 interface AnswerKeyTabProps {
-  /** 검토 탭에서 정답지 지정 후 이동 시 자동 선택할 문서 */
-  initialPdfFilename?: string | null
-  /** initialPdfFilename 적용 후 호출 (한 번만 선택되도록) */
-  onConsumeInitialPdfFilename?: () => void
+  /** 검토 탭 또는 RAG 현황판에서 정답지 탭으로 이동 시 자동 선택할 문서 */
+  initialDocument?: InitialDocumentForAnswerKey | null
+  /** initialDocument 적용 후 호출 (한 번만 선택되도록) */
+  onConsumeInitialDocument?: () => void
+  /** 정답지 지정 해제(원복) 성공 시 호출 — 검토 탭으로 이동 등 */
+  onRevokeSuccess?: () => void
 }
 
 /** API 정답 생성 결과의 일본어 키 → UI 표시 필드 매핑 (프롬프트가 일본어 키로 반환할 때) */
@@ -52,18 +73,74 @@ function pickFromGen(gen: Record<string, unknown>, keys: string[]): string | nul
   return null
 }
 
-export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }: AnswerKeyTabProps) {
+/** 중첩 객체를 키 경로(예: recipient.name) + 값 배열로 평탄화 (참조 뷰 표시용) */
+function flattenKv(obj: Record<string, any>, prefix = ''): Array<{ key: string; value: string }> {
+  const result: Array<{ key: string; value: string }> = []
+  for (const [k, v] of Object.entries(obj)) {
+    const keyPath = prefix ? `${prefix}.${k}` : k
+    if (v != null && typeof v === 'object' && !Array.isArray(v)) {
+      result.push(...flattenKv(v, keyPath))
+    } else if (Array.isArray(v)) {
+      result.push({ key: keyPath, value: JSON.stringify(v) })
+    } else {
+      result.push({ key: keyPath, value: String(v ?? '—') })
+    }
+  }
+  return result
+}
+
+/** 평탄화된 키·값을 생성 탭과 동일하게 group / sub 기준으로 그룹화 */
+function groupMetaFieldsByPath(fields: Array<{ key: string; value: string }>): Array<{ group: string; sub: string | null; fields: Array<{ key: string; value: string }> }> {
+  const byGroup: Record<string, Record<string, Array<{ key: string; value: string }>>> = {}
+  fields.forEach((f) => {
+    const tokens = f.key.split('.')
+    const hasHierarchy = tokens.length > 1
+    const group = hasHierarchy ? tokens[0] || 'root' : 'root'
+    const sub = tokens.length > 2 ? tokens[1] : ''
+    const subKey = sub || '__no_sub__'
+    if (!byGroup[group]) byGroup[group] = {}
+    if (!byGroup[group][subKey]) byGroup[group][subKey] = []
+    byGroup[group][subKey].push(f)
+  })
+  const preferredOrder = ['document_meta', 'party', 'payment', 'totals', 'root']
+  const result: Array<{ group: string; sub: string | null; fields: Array<{ key: string; value: string }> }> = []
+  const pushGroup = (group: string) => {
+    const subs = byGroup[group]
+    if (!subs) return
+    Object.keys(subs)
+      .sort()
+      .forEach((subKey) => {
+        result.push({
+          group,
+          sub: subKey === '__no_sub__' ? null : subKey,
+          fields: subs[subKey],
+        })
+      })
+  }
+  preferredOrder.forEach((g) => pushGroup(g))
+  Object.keys(byGroup)
+    .filter((g) => !preferredOrder.includes(g))
+    .sort()
+    .forEach((g) => pushGroup(g))
+  return result
+}
+
+export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevokeSuccess }: AnswerKeyTabProps) {
   const { sessionId } = useAuth()
   const queryClient = useQueryClient()
   /** 정답 생성 직후 한 번은 서버 동기화 effect가 rows를 덮어쓰지 않도록 */
   const skipNextSyncFromServerRef = useRef(false)
   const [selectedDoc, setSelectedDoc] = useState<{ pdf_filename: string; total_pages: number } | null>(null)
+  /** RAG(img) 문서일 때 relative_path — 이게 있으면 img 기반 answer.json/이미지 사용 */
+  const [selectedDocRelativePath, setSelectedDocRelativePath] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [rows, setRows] = useState<GridRow[]>([])
   const [itemDataKeys, setItemDataKeys] = useState<string[]>([])
   const [dirtyIds, setDirtyIds] = useState<Set<number>>(new Set())
   const [pageMetaFlatEdits, setPageMetaFlatEdits] = useState<Record<number, Record<string, string>>>({})
   const [pageMetaDirtyPages, setPageMetaDirtyPages] = useState<Set<number>>(new Set())
+  /** キー・値 탭: page_role 선택 (cover/detail/summary/reply) — 저장 시 DB 반영 */
+  const [pageRoleEdits, setPageRoleEdits] = useState<Record<number, string>>({})
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'building' | 'done' | 'error'>( 'idle')
   const [saveMessage, setSaveMessage] = useState<string>('')
   const [showRevokeModal, setShowRevokeModal] = useState(false)
@@ -74,18 +151,22 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
   /** キー・値 탭: items에서 키 이름 인라인 편집용 */
   const [editingKeyName, setEditingKeyName] = useState<string | null>(null)
   const [editingKeyValue, setEditingKeyValue] = useState('')
+  /** キー・値 탭: page_meta 키 경로 인라인 편집 중인 키 (편집값은 editingPageMetaKeyValue) */
+  const [editingPageMetaKey, setEditingPageMetaKey] = useState<string | null>(null)
+  const [editingPageMetaKeyValue, setEditingPageMetaKeyValue] = useState('')
   /** キー・値 탭: page_meta 새 키/값 추가용 */
   const [newPageMetaKey, setNewPageMetaKey] = useState('')
   const [newPageMetaValue, setNewPageMetaValue] = useState('')
   /** キー・値タブ: items用の新規キー追加 */
   const [newKeyInput, setNewKeyInput] = useState('')
-  /** 정답 생성 시 사용할 모델: Gemini 2.5 Flash Lite | GPT 5.2 만 허용 */
-  const [answerProvider, setAnswerProvider] = useState<'gemini' | 'gpt-5.2'>('gemini')
+  /** 정답 생성: Gemini / GPT 5.2 (Vision) | Azure+RAG(표 구조 보존) */
+  const [answerProvider, setAnswerProvider] = useState<'gemini' | 'gpt-5.2'>('gpt-5.2')
+  /** OCR 다시 인식: Azure 모델 (prebuilt-read / prebuilt-layout / prebuilt-document) */
+  const [ocrRerunAzureModel, setOcrRerunAzureModel] = useState<string>('prebuilt-layout')
   /** 画像 Ctrl+ホイール 拡大縮小 */
   const [imageScale, setImageScale] = useState(1)
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null)
   const imageScrollRef = useRef<HTMLDivElement>(null)
-
   useEffect(() => {
     setImageScale(1)
     setImageSize(null)
@@ -101,9 +182,17 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
     setImageScale((s) => (s === 1 ? scaleToWidth : s))
   }, [imageSize])
 
+  useFormTypes()
   const { data: documentsData } = useQuery({
     queryKey: ['documents', 'for-answer-key-tab'],
     queryFn: () => documentsApi.getListForAnswerKeyTab(),
+  })
+
+  /** RAG(img) 문서일 때 해당 폴더의 answer.json 전체 (ocr_text는 별도 API) */
+  const { data: answerJsonFromImg } = useQuery({
+    queryKey: ['answer-json-from-img', selectedDocRelativePath ?? ''],
+    queryFn: () => documentsApi.getAnswerJsonFromImg(selectedDocRelativePath!),
+    enabled: !!selectedDocRelativePath,
   })
 
   const revokeAnswerKeyMutation = useMutation({
@@ -114,9 +203,28 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       setSelectedDoc(null)
       setRows([])
       setSaveMessage('正解表の指定を解除しました。検索タブで再度確認できます。')
+      onRevokeSuccess?.()
     },
     onError: (e: any) => {
       setSaveMessage(e?.response?.data?.detail || e?.message || '解除に失敗しました。')
+      setSaveStatus('error')
+    },
+  })
+
+  /** OCR 다시 인식 (Azure 전용) — 결과를 debug2에 저장 후 화면 갱신 */
+  const rerunOcrMutation = useMutation({
+    mutationFn: ({ azureModel }: { azureModel?: string }) =>
+      searchApi.rerunPageOcr(selectedDoc!.pdf_filename, currentPage, azureModel),
+    onSuccess: (data) => {
+      queryClient.setQueryData(
+        ['page-ocr-text', selectedDoc?.pdf_filename, currentPage],
+        data
+      )
+      setSaveMessage('OCRを再認識しました。')
+      setSaveStatus('done')
+    },
+    onError: (e: any) => {
+      setSaveMessage(e?.response?.data?.detail || e?.message || 'OCR再認識に失敗しました。')
       setSaveStatus('error')
     },
   })
@@ -183,7 +291,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
         if (data.itemDataKeys.length > 0) {
           setItemDataKeys(data.itemDataKeys)
         }
-        setSaveMessage(`Geminiで${data.createdCount}件を新規生成しました。`)
+        setSaveMessage(`${data.createdCount}件を新規生成しました。`)
         setSaveStatus('done')
         return
       }
@@ -206,7 +314,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
         .map((r, i) => (r.page_number === pageNum ? i : -1))
         .filter((i) => i >= 0)
       if (pageIndices.length === 0 && (!generatedItems || generatedItems.length === 0)) {
-        setSaveMessage('このページには既存項目がなく、Geminiが生成した項目もありません。')
+        setSaveMessage('このページには既存項目がなく、生成した項目もありません。')
         setSaveStatus('done')
         return
       }
@@ -261,13 +369,13 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       }
       const msg =
         applyCount < generatedItems.length
-          ? `Geminiで${applyCount}件を適用（生成${generatedItems.length}件、既存項目数を超えた分は未適用）`
-          : `Geminiで正解${applyCount}件を生成・適用しました。`
+          ? `${applyCount}件を適用（生成${generatedItems.length}件、既存項目数を超えた分は未適用）`
+          : `正解${applyCount}件を生成・適用しました。`
       setSaveMessage(msg)
       setSaveStatus('done')
     },
     onError: (e: any) => {
-      setSaveMessage(e?.response?.data?.detail || e?.message || 'Geminiでの正解生成に失敗しました。')
+      setSaveMessage(e?.response?.data?.detail || e?.message || '正解の一括生成に失敗しました。')
       setSaveStatus('error')
     },
   })
@@ -276,48 +384,61 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
     return Array.isArray(raw) ? raw : []
   }, [documentsData])
 
-  // 검토 탭에서 정답지 지정 후 넘어온 경우 해당 문서 자동 선택
+  // 검토 탭 또는 RAG 현황판에서 넘어온 경우 해당 문서 자동 선택
   useEffect(() => {
-    if (!initialPdfFilename || !onConsumeInitialPdfFilename || documents.length === 0) return
-    const doc = documents.find((d) => d.pdf_filename === initialPdfFilename)
+    if (!initialDocument || !onConsumeInitialDocument) return
+    const doc = documents.find((d) => d.pdf_filename === initialDocument.pdf_filename)
     if (doc) {
       setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
+      setSelectedDocRelativePath(null)
       setCurrentPage(1)
-      onConsumeInitialPdfFilename()
+      onConsumeInitialDocument()
+    } else if (initialDocument.relative_path && initialDocument.total_pages > 0) {
+      // RAG 목록에만 있고 정답지 탭 목록에 없는 문서 → img 기반 뷰
+      setSelectedDoc({
+        pdf_filename: initialDocument.pdf_filename,
+        total_pages: initialDocument.total_pages,
+      })
+      setSelectedDocRelativePath(initialDocument.relative_path)
+      setCurrentPage(1)
+      onConsumeInitialDocument()
     }
-  }, [initialPdfFilename, onConsumeInitialPdfFilename, documents])
+  }, [initialDocument, onConsumeInitialDocument, documents])
 
-  // 문서 변경 시 1페이지로 초기화
+  // 문서 변경 시 1페이지로 초기화, page_role 로컬 편집 초기화
   useEffect(() => {
     if (selectedDoc) setCurrentPage(1)
+    setPageRoleEdits({})
   }, [selectedDoc?.pdf_filename])
 
+  const isRagMode = !!selectedDocRelativePath
+
   const pageImageQueries = useQueries({
-    queries: selectedDoc
+    queries: selectedDoc && !isRagMode
       ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
           queryKey: ['answer-key-page-image', selectedDoc.pdf_filename, i + 1],
           queryFn: () => searchApi.getPageImage(selectedDoc.pdf_filename, i + 1),
-          enabled: !!selectedDoc,
+          enabled: true,
         }))
       : [],
   })
 
   const pageItemsQueries = useQueries({
-    queries: selectedDoc
+    queries: selectedDoc && !isRagMode
       ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
           queryKey: ['items', selectedDoc.pdf_filename, i + 1],
           queryFn: () => itemsApi.getByPage(selectedDoc.pdf_filename, i + 1),
-          enabled: !!selectedDoc,
+          enabled: true,
         }))
       : [],
   })
 
   const pageMetaQueries = useQueries({
-    queries: selectedDoc
+    queries: selectedDoc && !isRagMode
       ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
           queryKey: ['page-meta', selectedDoc.pdf_filename, i + 1],
           queryFn: () => documentsApi.getPageMeta(selectedDoc.pdf_filename, i + 1),
-          enabled: !!selectedDoc,
+          enabled: true,
           retry: false,
         }))
       : [],
@@ -333,10 +454,10 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       : [],
   })
 
-  const allItemsLoaded = pageItemsQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
-  const allPageMetaLoaded = pageMetaQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
+  const allItemsLoaded = isRagMode ? !!answerJsonFromImg : pageItemsQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
+  const allPageMetaLoaded = isRagMode ? !!answerJsonFromImg : pageMetaQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
   const allDataLoaded = allItemsLoaded && allPageMetaLoaded
-  const allImagesLoaded = pageImageQueries.every((q) => !q.isLoading && q.data != null)
+  const allImagesLoaded = isRagMode ? true : pageImageQueries.every((q) => !q.isLoading && q.data != null)
 
   /** page_meta 조회 실패(404 등) 페이지 번호 목록 — 일부 페이지만 page_data가 있을 때 안내용 */
   const pageMetaErrorPageNumbers = useMemo(() => {
@@ -346,16 +467,44 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       .filter((p) => p > 0)
   }, [selectedDoc, pageMetaQueries])
 
-  // 서버 items/page_meta가 갱신될 때만 로컬 rows 동기화 (dataUpdatedAt 사용으로 refetch 완료 시 확실히 반영)
+  // RAG(img) 문서: answerJsonFromImg.pages → rows 동기화 (참조 전용, 편집/저장 없음)
+  useEffect(() => {
+    if (!isRagMode || !answerJsonFromImg?.pages?.length) return
+    const combined: GridRow[] = []
+    const keysSet = new Set<string>()
+    answerJsonFromImg.pages.forEach((page: Record<string, any>) => {
+      const pageNum = Number(page.page_number) || 0
+      const items = Array.isArray(page.items) ? page.items : []
+      items.forEach((item: any, idx: number) => {
+        const itemData = item?.item_data ?? item
+        const row: GridRow = {
+          item_id: pageNum * 1000 + idx,
+          page_number: pageNum,
+          item_order: idx + 1,
+          version: 1,
+        }
+        if (itemData && typeof itemData === 'object') {
+          Object.keys(itemData).forEach((k) => {
+            if (SYSTEM_ROW_KEYS.includes(k)) return
+            row[k] = itemData[k]
+            keysSet.add(k)
+          })
+        }
+        combined.push(row)
+      })
+    })
+    setRows(combined)
+    setItemDataKeys(Array.from(keysSet))
+  }, [isRagMode, answerJsonFromImg])
+
+  // 서버 items/page_meta가 갱신될 때만 로컬 rows 동기화 (DB 문서 전용)
   const pageItemsDataUpdatedAt = pageItemsQueries.map((q) => q.dataUpdatedAt ?? 0).join(',')
   useEffect(() => {
-    if (!selectedDoc || !allDataLoaded) return
-    // 정답 생성 직후 한 번은 서버 데이터로 덮어쓰지 않음 (생성 결과가 UI에 유지되도록)
+    if (!selectedDoc || !allDataLoaded || isRagMode) return
     if (skipNextSyncFromServerRef.current) {
       skipNextSyncFromServerRef.current = false
       return
     }
-    // 사용자가 편집 중이면 서버 데이터로 덮어쓰지 않음 (편집/생성 결과 손실 방지)
     if (dirtyIds.size > 0 || pageMetaDirtyPages.size > 0) return
     const combined: GridRow[] = []
     let keys: string[] = []
@@ -385,7 +534,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
     setDirtyIds(new Set())
     setPageMetaFlatEdits({})
     setPageMetaDirtyPages(new Set())
-  }, [selectedDoc, allDataLoaded, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size])
+  }, [selectedDoc, allDataLoaded, isRagMode, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size])
 
   const currentPageRows = useMemo(
     () => rows.filter((r) => r.page_number === currentPage),
@@ -418,6 +567,21 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
   const editableKeys = useMemo(() => {
     return new Set(['得意先', '商品名', ...dataKeysForDisplay])
   }, [dataKeysForDisplay])
+
+  /** タイプ 드롭다운: 기본 옵션 + 현재 문서 items에 이미 있는 タイプ 값 (기존 목록) */
+  const typeOptions = useMemo(() => {
+    const fromRows = new Set<string>()
+    rows.forEach((r) => {
+      const v = r['タイプ']
+      if (v != null && String(v).trim() !== '') fromRows.add(String(v).trim())
+    })
+    const baseValues = new Set(TYPE_OPTIONS_BASE.map((o) => o.value).filter(Boolean))
+    const extra = [...fromRows].filter((v) => !baseValues.has(v)).sort()
+    return [
+      ...TYPE_OPTIONS_BASE,
+      ...extra.map((value) => ({ value, label: value })),
+    ]
+  }, [rows])
 
   const onValueChange = useCallback((itemId: number, key: string, value: string | number | boolean | null) => {
     setRows((prev) =>
@@ -558,10 +722,18 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
 
   const currentPageMetaData = useMemo(() => {
     if (!selectedDoc) return null
+    if (isRagMode && answerJsonFromImg?.pages) {
+      const page = answerJsonFromImg.pages.find((p: any) => Number(p.page_number) === currentPage)
+      if (!page) return null
+      return {
+        page_role: page.page_role ?? null,
+        page_meta: (page.page_meta ?? page) as Record<string, any>,
+      }
+    }
     const q = pageMetaQueries[currentPage - 1]
     if (!q?.data) return null
     return q.data as { page_role: string | null; page_meta: Record<string, any> }
-  }, [selectedDoc, currentPage, pageMetaQueries])
+  }, [selectedDoc, currentPage, isRagMode, answerJsonFromImg, pageMetaQueries])
 
   const currentPageMetaFields = useMemo(() => {
     const base = currentPageMetaData?.page_meta ?? {}
@@ -655,6 +827,19 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
     setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
   }, [currentPage])
 
+  /** page_meta 키 전체 경로 변경 (편집된 값이 없어도 현재 표시값으로 새 키 설정) */
+  const onPageMetaKeyRenameFull = useCallback((oldKey: string, newKey: string, currentValue: string) => {
+    const n = (newKey ?? '').trim()
+    if (!n || n === oldKey) return
+    setPageMetaFlatEdits((prev) => {
+      const page = { ...(prev[currentPage] ?? {}) }
+      page[oldKey] = PAGE_META_DELETE_SENTINEL
+      page[n] = currentValue
+      return { ...prev, [currentPage]: page }
+    })
+    setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
+  }, [currentPage])
+
   const onPageMetaKeyRemove = useCallback((flatKey: string) => {
     setPageMetaFlatEdits((prev) => {
       const page = { ...(prev[currentPage] ?? {}) }
@@ -663,6 +848,21 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
     })
     setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
   }, [currentPage])
+
+  /** page_meta 그룹(예: totals/役務提供) 전체 삭제 — 해당 group.sub 내 모든 키 제거 */
+  const onPageMetaGroupRemove = useCallback(
+    (group: string, sub: string | null, fields: Array<{ key: string; value: string }>) => {
+      setPageMetaFlatEdits((prev) => {
+        const page = { ...(prev[currentPage] ?? {}) }
+        fields.forEach((f) => {
+          page[f.key] = PAGE_META_DELETE_SENTINEL
+        })
+        return { ...prev, [currentPage]: page }
+      })
+      setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
+    },
+    [currentPage]
+  )
 
   const onPageMetaKeyAdd = useCallback((newKey: string, newValue: string) => {
     const raw = (newKey ?? '').trim()
@@ -780,7 +980,8 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       return documentsApi.generateItemsFromTemplate(
         selectedDoc.pdf_filename,
         currentPage,
-        templateItem
+        templateItem,
+        answerProvider
       )
     },
     onSuccess: (data) => {
@@ -797,10 +998,11 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
 
   const answerJson = useMemo(() => {
     const pageMeta = buildPageMetaFromEdits(currentPage)
-    const pageRole = currentPageMetaData?.page_role ?? 'detail'
+    const pageRole =
+      pageRoleEdits[currentPage] ?? currentPageMetaData?.page_role ?? 'detail'
     const items = currentPageRows.map(({ item_id, page_number, item_order, version, ...rest }) => rest)
     return { page_role: pageRole, ...pageMeta, items }
-  }, [currentPage, currentPageMetaData?.page_role, currentPageRows, buildPageMetaFromEdits])
+  }, [currentPage, pageRoleEdits, currentPageMetaData?.page_role, currentPageRows, buildPageMetaFromEdits])
 
   const syncJsonEditFromAnswer = useCallback(() => {
     try {
@@ -1029,11 +1231,20 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       }
       for (const pageNum of pageMetaDirtyPages) {
         const pageMeta = buildPageMetaFromEdits(pageNum)
-        await documentsApi.updatePageMeta(selectedDoc.pdf_filename, pageNum, pageMeta)
+        const pageRole =
+          pageRoleEdits[pageNum] ??
+          (pageMetaQueries[pageNum - 1]?.data as { page_role?: string } | undefined)?.page_role ??
+          'detail'
+        await documentsApi.updatePageMeta(selectedDoc.pdf_filename, pageNum, pageMeta, pageRole)
       }
       setDirtyIds(new Set())
       setPageMetaFlatEdits({})
       setPageMetaDirtyPages(new Set())
+      setPageRoleEdits((prev) => {
+        const next = { ...prev }
+        pageMetaDirtyPages.forEach((p) => delete next[p])
+        return next
+      })
       queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
       queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
       setSaveMessage('グリッドの変更を保存しました。')
@@ -1042,7 +1253,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       setSaveMessage(e?.response?.data?.detail || e?.message || '保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, dirtyIds, rows, pageMetaDirtyPages, updateItemMutation, buildPageMetaFromEdits, queryClient])
+  }, [selectedDoc, dirtyIds, rows, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, updateItemMutation, buildPageMetaFromEdits, queryClient])
 
   const handleSaveAsAnswerKey = useCallback(async () => {
     if (!selectedDoc) return
@@ -1060,10 +1271,19 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       if (pageMetaDirtyPages.size > 0) {
         for (const pageNum of pageMetaDirtyPages) {
           const pageMeta = buildPageMetaFromEdits(pageNum)
-          await documentsApi.updatePageMeta(selectedDoc.pdf_filename, pageNum, pageMeta)
+          const pageRole =
+            pageRoleEdits[pageNum] ??
+            (pageMetaQueries[pageNum - 1]?.data as { page_role?: string } | undefined)?.page_role ??
+            'detail'
+          await documentsApi.updatePageMeta(selectedDoc.pdf_filename, pageNum, pageMeta, pageRole)
         }
         setPageMetaFlatEdits({})
         setPageMetaDirtyPages(new Set())
+        setPageRoleEdits((prev) => {
+          const next = { ...prev }
+          pageMetaDirtyPages.forEach((p) => delete next[p])
+          return next
+        })
       }
       queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
       queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
@@ -1085,16 +1305,21 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
       setSaveMessage(e?.response?.data?.detail || e?.message || '正解表の保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, dirtyIds, rows, pageMetaDirtyPages, buildPageMetaFromEdits, updateItemMutation, queryClient])
+  }, [selectedDoc, dirtyIds, rows, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, buildPageMetaFromEdits, updateItemMutation, queryClient])
 
   const imageUrls = useMemo(() => {
+    if (isRagMode && selectedDocRelativePath && selectedDoc?.total_pages) {
+      return Array.from({ length: selectedDoc.total_pages }, (_, i) =>
+        documentsApi.getImgPageImageUrl(selectedDocRelativePath, i + 1)
+      )
+    }
     return pageImageQueries.map((q) => {
       const data = q.data as { image_url?: string } | undefined
       if (!data?.image_url) return null
       const url = data.image_url.startsWith('http') ? data.image_url : `${getApiBaseUrl()}${data.image_url}`
       return url
     })
-  }, [pageImageQueries])
+  }, [isRagMode, selectedDocRelativePath, selectedDoc?.total_pages, pageImageQueries])
 
   return (
     <div className="answer-key-tab">
@@ -1114,11 +1339,15 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
             const v = e.target.value
             if (!v) {
               setSelectedDoc(null)
+              setSelectedDocRelativePath(null)
               setRows([])
               return
             }
             const doc = documents.find((d) => d.pdf_filename === v)
-            if (doc) setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
+            if (doc) {
+              setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
+              setSelectedDocRelativePath(null)
+            }
           }}
         >
           <option value="">— 選択 —</option>
@@ -1127,6 +1356,12 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
               {d.pdf_filename} ({d.total_pages}ページ)
             </option>
           ))}
+          {/* RAG 현황판에서 넘어온 문서는 목록에 없으므로 option 추가 */}
+          {selectedDoc && !documents.some((d) => d.pdf_filename === selectedDoc.pdf_filename) && (
+            <option value={selectedDoc.pdf_filename}>
+              {selectedDoc.pdf_filename} ({selectedDoc.total_pages}ページ) — RAG参照
+            </option>
+          )}
         </select>
         {selectedDoc && (
           <button
@@ -1178,7 +1413,8 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
         </div>
       )}
 
-      {documents.length === 0 && (
+      {/* RAG에서 문서 클릭해 넘어온 경우 selectedDoc 있으므로 이 안내 숨김 */}
+      {documents.length === 0 && !selectedDoc && (
         <div className="answer-key-placeholder">
           <p>正解表作成対象に指定した文書がありません。検索タブで文書を開き、「正解表作成」ボタンで指定してから、このタブで確認してください。</p>
         </div>
@@ -1231,6 +1467,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                 {!allImagesLoaded && <p className="answer-key-loading">画像読み込み中…</p>}
                 {allImagesLoaded && imageUrls[currentPage - 1] && (
                   <div
+                    key={`img-wrap-${currentPage}`}
                     className="answer-key-image-zoom-wrapper"
                     style={
                       imageSize
@@ -1239,6 +1476,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                     }
                   >
                     <img
+                      key={currentPage}
                       src={imageUrls[currentPage - 1]!}
                       alt={`Page ${currentPage}`}
                       className="answer-key-page-img"
@@ -1249,10 +1487,9 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                       style={
                         imageSize
                           ? {
-                              width: imageSize.w,
-                              height: imageSize.h,
-                              transform: `scale(${imageScale})`,
-                              transformOrigin: '0 0',
+                              width: imageSize.w * imageScale,
+                              height: imageSize.h * imageScale,
+                              objectFit: 'fill',
                             }
                           : undefined
                       }
@@ -1261,7 +1498,30 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                 )}
               </div>
               <div className="answer-key-ocr-section">
-                <label className="answer-key-ocr-label">OCRテキスト</label>
+                <div className="answer-key-ocr-header">
+                  <label className="answer-key-ocr-label">OCRテキスト</label>
+                  <div className="answer-key-ocr-rerun-wrap">
+                    <select
+                      className="answer-key-ocr-azure-model-select"
+                      value={ocrRerunAzureModel}
+                      onChange={(e) => setOcrRerunAzureModel(e.target.value)}
+                      title="Azure 모델 선택"
+                    >
+                      <option value="prebuilt-layout">prebuilt-layout（表・レイアウト）</option>
+                      <option value="prebuilt-read">prebuilt-read（OCRのみ）</option>
+                      <option value="prebuilt-document">prebuilt-document（一般文書）</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="answer-key-btn answer-key-ocr-rerun-btn"
+                      onClick={() => rerunOcrMutation.mutate({ azureModel: ocrRerunAzureModel })}
+                      disabled={!selectedDoc || rerunOcrMutation.isPending}
+                      title="Azure Document Intelligenceで現在ページを再認識"
+                    >
+                      {rerunOcrMutation.isPending ? '認識中…' : 'Azureで再認識'}
+                    </button>
+                  </div>
+                </div>
                 <textarea
                   className="answer-key-ocr-text"
                   readOnly
@@ -1307,42 +1567,38 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
               </button>
             </div>
             <div className="answer-key-grid-header">
-              <span className="answer-key-grid-title">正解（キー・値編集後に保存）</span>
               {(dirtyIds.size > 0 || pageMetaDirtyPages.size > 0) && (
                 <span className="answer-key-dirty-badge">未保存: {dirtyIds.size + pageMetaDirtyPages.size}件</span>
               )}
-              <button
-                type="button"
-                className="answer-key-gemini-btn"
-                onClick={() =>
-                  selectedDoc &&
-                  generateAnswerMutation.mutate({
-                    pdfFilename: selectedDoc.pdf_filename,
-                    pageNumber: currentPage,
-                    currentRows: rows,
-                    currentItemDataKeys: itemDataKeys,
-                    provider: answerProvider,
-                  })
-                }
-                disabled={!selectedDoc || generateAnswerMutation.isPending}
-                title="同一プロンプト(prompt_v3.txt)で選択したモデルで正解を生成"
-              >
-                {generateAnswerMutation.isPending
-                  ? '生成中…'
-                  : 'gpt geminiで正解を生成'}
-              </button>
-            </div>
-            <div className="answer-key-provider-row">
-              <label className="answer-key-provider-label">正解生成モデル（gpt gemini）:</label>
-              <select
-                className="answer-key-provider-select"
-                value={answerProvider}
-                onChange={(e) => setAnswerProvider(e.target.value as 'gemini' | 'gpt-5.2')}
-                title="gpt gemini (Gemini / GPT 5.2). バージョンはサーバー側設定に従います。"
-              >
-                <option value="gemini">gpt gemini (Gemini)</option>
-                <option value="gpt-5.2">gpt gemini (GPT 5.2)</option>
-              </select>
+              <div className="answer-key-provider-row">
+                <select
+                  className="answer-key-provider-select"
+                  value={answerProvider}
+                  onChange={(e) => setAnswerProvider(e.target.value as 'gemini' | 'gpt-5.2')}
+                  title="画像からページ全体の正解を一度に生成（Vision）"
+                >
+                  <option value="gpt-5.2">GPT</option>
+                  <option value="gemini">Gemini</option>
+                </select>
+                <button
+                  type="button"
+                  className="answer-key-gemini-btn"
+                  onClick={() =>
+                    selectedDoc &&
+                    generateAnswerMutation.mutate({
+                      pdfFilename: selectedDoc.pdf_filename,
+                      pageNumber: currentPage,
+                      currentRows: rows,
+                      currentItemDataKeys: itemDataKeys,
+                      provider: answerProvider,
+                    })
+                  }
+                  disabled={!selectedDoc || generateAnswerMutation.isPending}
+                  title="選択したモデルでこのページの正解を一括生成"
+                >
+                  {generateAnswerMutation.isPending ? '生成中…' : '正解生成'}
+                </button>
+              </div>
             </div>
             {rightView === 'json' && (
               <div className="answer-key-json-view">
@@ -1366,14 +1622,14 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
             {rightView === 'template' && (
               <div className="answer-key-template-view">
                 <p className="answer-key-template-desc">
-                  先頭行のみ表示します。キー・値を直接編集し、キー追加/削除後に「残り行を生成」で同じキー構造の全行をLLMが生成します。
+                先頭行のみ表示します。キー・値を編集し、「残り行を生成」で選択中のモデル（GPT/Gemini）が同じキー構造の全行を生成します。  
                 </p>
                 {!allDataLoaded && (
                   <p className="answer-key-template-loading">データ読み込み中…</p>
                 )}
                 {allDataLoaded && currentPageRows.length === 0 && templateEntries.length === 0 && (
                   <p className="answer-key-template-empty-hint">
-                    このページに行がありません。「キー追加」でキーを入力した後「残り行を生成」を押すと、LLMが全行を生成します。
+                    このページに行がありません。「キー追加」でキーを入力した後「残り行を生成」を押すと、全行を生成します。
                   </p>
                 )}
                 <div className="answer-key-template-entries">
@@ -1412,7 +1668,7 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                   className="answer-key-btn answer-key-gemini-btn"
                   onClick={() => generateFromTemplateMutation.mutate()}
                   disabled={!selectedDoc || generateFromTemplateMutation.isPending || templateEntries.every((e) => !(e.key ?? '').trim())}
-                  title="この行をテンプレートにし、残りの行をLLMが生成します"
+                  title="この行をテンプレートにし、選択中のモデルで残りの行を生成します"
                 >
                   {generateFromTemplateMutation.isPending ? '生成中…' : '残り行を生成'}
                 </button>
@@ -1425,62 +1681,121 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
             {rightView === 'kv' && allDataLoaded && (rows.length > 0 || currentPageMetaFields.length > 0 || itemDataKeys.length > 0) && (
               <div className="answer-key-kv-scroll">
                 <div className="answer-key-page-label">p.{currentPage}</div>
+                <div className="answer-key-page-role-row">
+                  <label className="answer-key-ocr-label">page_role</label>
+                  <select
+                    className="answer-key-page-role-select"
+                    value={pageRoleEdits[currentPage] ?? currentPageMetaData?.page_role ?? 'detail'}
+                    onChange={(e) => {
+                      setPageRoleEdits((prev) => ({ ...prev, [currentPage]: e.target.value }))
+                      setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
+                    }}
+                    title="표지(cover) / 상세(detail) / 요약(summary) / 회신(reply)"
+                  >
+                    <option value="detail">detail（明細）</option>
+                    <option value="cover">cover（表紙）</option>
+                    <option value="summary">summary（合計）</option>
+                    <option value="reply">reply（返信）</option>
+                  </select>
+                </div>
                 <div className={`answer-key-meta-block ${pageMetaDirtyPages.has(currentPage) ? 'answer-key-kv-dirty' : ''}`}>
                   <div className="answer-key-meta-section-label">page_meta（キー・値の直接編集）</div>
                   {groupedPageMetaFields.map(({ group, sub, fields }, groupIdx) => (
                     <div key={`page-meta-group-${currentPage}-${groupIdx}-${group}-${sub ?? 'root'}`} className="answer-key-meta-group">
-                      <div className="answer-key-meta-group-label">
-                        {group === 'root' ? 'その他' : group}
-                        {sub ? ` / ${sub}` : ''}
-                      </div>
-                      {fields.map(({ key: metaKey, value }, metaIdx) => {
-                    const lastDot = metaKey.lastIndexOf('.')
-                    const basePrefix = lastDot >= 0 ? metaKey.slice(0, lastDot + 1) : ''
-                    const leafKey = lastDot >= 0 ? metaKey.slice(lastDot + 1) : metaKey
-                    return (
-                      <div
-                            key={`page-meta-${currentPage}-${metaIdx}-${metaKey}`}
-                        className="answer-key-kv-row answer-key-kv-row-with-delete"
-                      >
-                        <input
-                          type="text"
-                          className="answer-key-kv-key-input"
-                          value={leafKey}
-                          onChange={(e) => {
-                            const leafNext = e.target.value
-                            const nextFull = (leafNext ?? '').trim()
-                              ? `${basePrefix}${leafNext.trim()}`
-                              : ''
-                            setPageMetaFlatEdits((prev) => {
-                              const page = prev[currentPage] ?? {}
-                              if (nextFull === metaKey) return prev
-                              const p = { ...page }
-                              delete p[metaKey]
-                              if (nextFull) p[nextFull] = value
-                              return { ...prev, [currentPage]: p }
-                            })
-                            setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
-                          }}
-                          placeholder="キー"
-                        />
-                        <input
-                          type="text"
-                          className="answer-key-kv-input"
-                          value={value}
-                          onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
-                          placeholder="値"
-                        />
+                      <div className="answer-key-meta-group-header">
+                        <span className="answer-key-meta-group-label">
+                          {group === 'root' ? 'その他' : group}
+                          {sub ? ` / ${sub}` : ''}
+                        </span>
                         <button
                           type="button"
-                          className="answer-key-kv-delete-btn"
-                          onClick={() => onPageMetaKeyRemove(metaKey)}
-                          title="このキーを削除"
+                          className="answer-key-meta-group-delete-btn"
+                          onClick={() => onPageMetaGroupRemove(group, sub, fields)}
+                          title="このグループ全体を削除"
+                        >
+                          グループ削除
+                        </button>
+                      </div>
+                      {fields.map(({ key: metaKey, value }, metaIdx) => (
+                        <div
+                          key={`page-meta-${currentPage}-${metaIdx}-${metaKey}`}
+                          className="answer-key-kv-row answer-key-kv-row-with-delete"
+                        >
+                          <input
+                            type="text"
+                            className="answer-key-kv-key-input"
+                            value={editingPageMetaKey === metaKey ? editingPageMetaKeyValue : metaKey}
+                            title="キー（フルパス編集可）"
+                            onChange={(e) => {
+                              if (editingPageMetaKey !== metaKey) {
+                                setEditingPageMetaKey(metaKey)
+                                setEditingPageMetaKeyValue(e.target.value)
+                              } else {
+                                setEditingPageMetaKeyValue(e.target.value)
+                              }
+                            }}
+                            onFocus={() => {
+                              setEditingPageMetaKey(metaKey)
+                              setEditingPageMetaKeyValue(metaKey)
+                            }}
+                            onBlur={() => {
+                              if (editingPageMetaKey === metaKey) {
+                                const n = editingPageMetaKeyValue.trim()
+                                if (n && n !== metaKey) onPageMetaKeyRenameFull(metaKey, n, value)
+                                setEditingPageMetaKey(null)
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (editingPageMetaKey === metaKey && e.key === 'Enter') {
+                                const n = editingPageMetaKeyValue.trim()
+                                if (n && n !== metaKey) onPageMetaKeyRenameFull(metaKey, n, value)
+                                setEditingPageMetaKey(null)
+                                e.currentTarget.blur()
+                              }
+                              if (e.key === 'Escape') {
+                                setEditingPageMetaKey(null)
+                                e.currentTarget.blur()
+                              }
+                            }}
+                            placeholder="例: totals.役務提供.入金額"
+                          />
+                          {metaKey === 'タイプ' || metaKey.endsWith('.タイプ') ? (
+                            <select
+                              className="answer-key-kv-input answer-key-kv-select"
+                              value={value}
+                              onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
                             >
-                              ×
-                            </button>
-                          </div>
-                        )
-                      })}
+                              {(() => {
+                                const opts = [...typeOptions]
+                                if (value != null && String(value).trim() !== '' && !opts.some((o) => o.value === value)) {
+                                  opts.unshift({ value: String(value).trim(), label: String(value).trim() })
+                                }
+                                return opts.map((opt) => (
+                                  <option key={opt.value || '_'} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))
+                              })()}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              className="answer-key-kv-input"
+                              value={value}
+                              onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
+                              placeholder="値"
+                            />
+                          )}
+                          <button
+                            type="button"
+                            className="answer-key-kv-delete-btn"
+                            onClick={() => onPageMetaKeyRemove(metaKey)}
+                            title="このキーを削除"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   ))}
                   <div className="answer-key-kv-row answer-key-kv-row-with-delete answer-key-add-row">
@@ -1489,7 +1804,8 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                       className="answer-key-kv-key-input"
                       value={newPageMetaKey}
                       onChange={(e) => setNewPageMetaKey(e.target.value)}
-                      placeholder="新規キー"
+                      placeholder="例: totals.役務提供.新規キー"
+                      title="フルパスで入力（例: totals.役務提供.入金額）"
                     />
                     <input
                       type="text"
@@ -1576,19 +1892,39 @@ export function AnswerKeyTab({ initialPdfFilename, onConsumeInitialPdfFilename }
                                   <span className="answer-key-kv-key">{label}</span>
                                 )}
                                 {isEditable ? (
-                                  <input
-                                    type="text"
-                                    className="answer-key-kv-input"
-                                    value={isComplex ? '' : strVal}
-                                    onChange={(e) =>
-                                      onValueChange(
-                                        row.item_id,
-                                        key,
-                                        e.target.value === '' ? null : e.target.value
-                                      )
-                                    }
-                                    placeholder={isComplex ? strVal : undefined}
-                                  />
+                                  key === 'タイプ' ? (
+                                    <select
+                                      className="answer-key-kv-input answer-key-kv-select"
+                                      value={isComplex ? '' : strVal}
+                                      onChange={(e) =>
+                                        onValueChange(
+                                          row.item_id,
+                                          key,
+                                          e.target.value === '' ? null : e.target.value
+                                        )
+                                      }
+                                    >
+                                      {typeOptions.map((opt) => (
+                                        <option key={opt.value || '_'} value={opt.value}>
+                                          {opt.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      className="answer-key-kv-input"
+                                      value={isComplex ? '' : strVal}
+                                      onChange={(e) =>
+                                        onValueChange(
+                                          row.item_id,
+                                          key,
+                                          e.target.value === '' ? null : e.target.value
+                                        )
+                                      }
+                                      placeholder={isComplex ? strVal : undefined}
+                                    />
+                                  )
                                 ) : (
                                   <span className="answer-key-kv-val">{strVal || '—'}</span>
                                 )}
