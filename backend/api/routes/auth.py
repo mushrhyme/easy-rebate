@@ -275,16 +275,24 @@ async def validate_session(
 # ============================================
 
 class CreateUserRequest(BaseModel):
-    """사용자 생성 요청 모델"""
+    """사용자 생성 요청 모델 (users 테이블 키값 전체 입력 가능)"""
     username: str
     display_name: str
     display_name_ja: Optional[str] = None
+    department_ko: Optional[str] = None
+    department_ja: Optional[str] = None
+    role: Optional[str] = None
+    category: Optional[str] = None
 
 
 class UpdateUserRequest(BaseModel):
     """사용자 업데이트 요청 모델"""
     display_name: Optional[str] = None
     display_name_ja: Optional[str] = None
+    department_ko: Optional[str] = None
+    department_ja: Optional[str] = None
+    role: Optional[str] = None
+    category: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -333,12 +341,15 @@ async def create_user(
         if existing_user:
             raise HTTPException(status_code=400, detail="이미 존재하는 사용자명입니다")
 
-        # 사용자 생성 (초기 비밀번호 = ID와 동일)
         initial_password_hash = hash_password(request.username)
         user_id = db.create_user(
             username=request.username,
             display_name=request.display_name,
             display_name_ja=request.display_name_ja,
+            department_ko=request.department_ko,
+            department_ja=request.department_ja,
+            role=request.role,
+            category=request.category,
             created_by_user_id=current_user_id,
             password_hash=initial_password_hash,
         )
@@ -383,11 +394,14 @@ async def update_user(
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
-        # 업데이트 수행
         success = db.update_user(
             user_id=user_id,
             display_name=request.display_name,
             display_name_ja=request.display_name_ja,
+            department_ko=request.department_ko,
+            department_ja=request.department_ja,
+            role=request.role,
+            category=request.category,
             is_active=request.is_active,
         )
 
