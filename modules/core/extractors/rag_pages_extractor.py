@@ -31,7 +31,7 @@ def extract_pages_with_rag(
     similarity_threshold: Optional[float] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     form_type: Optional[str] = None,
-    upload_channel: Optional[str] = None,  # finet | mail. mail일 때만 Upstage OCR 사용(bbox 등)
+    upload_channel: Optional[str] = None,  # finet | mail. mail일 때 Azure OCR(표 복원) 사용
     debug_dir_name: str = "debug",  # 디버깅 폴더명
     include_bbox: bool = False,  # True일 때만 03/04에서 단어 좌표 추출·LLM _word_indices·_bbox 부여 (새 탭 전용)
 ) -> tuple[List[Dict[str, Any]], List[str], Optional[List[Image.Image]]]:
@@ -49,7 +49,7 @@ def extract_pages_with_rag(
         top_k: 검색할 예제 수 (None이면 config에서 가져옴)
         similarity_threshold: 최소 유사도 임계값 (None이면 config에서 가져옴)
         form_type: 양식지 번호 (01–06)
-        upload_channel: 업로드 채널 (finet | mail). finet→엑셀 추출, mail→Upstage OCR(bbox 시 단어 좌표)
+        upload_channel: 업로드 채널 (finet | mail). finet→엑셀 추출, mail→Azure OCR(표 복원, bbox 시 단어 좌표)
         
     Returns:
         (페이지별 JSON 결과 리스트, 이미지 파일 경로 리스트, PIL Image 객체 리스트) 튜플
@@ -168,18 +168,17 @@ def extract_pages_with_rag(
         "page_details": []
     }
     
-    # 1단계: PDF에서 텍스트 추출. upload_channel 기준만 사용 (업로드 시점에는 form_type을 모름)
-    # finet → excel 추출, mail → Upstage(bbox 요청 시 단어 좌표 포함)
+    # 1단계: PDF에서 텍스트 추출. mail → Azure(표 복원), finet → PdfTextExtractor(excel)
     print(f"📝 1단계: PDF 텍스트 추출 시작 ({len(images)}개 페이지)")
     pdf_path_obj = Path(pdf_path)
     ocr_texts = []
     ocr_words_list = [None] * len(images)
 
-    use_upstage_raw = upload_channel == "mail" and include_bbox
-
-    if use_upstage_raw:
-        from modules.core.extractors.upstage_extractor import get_upstage_extractor
-        upstage_extractor = get_upstage_extractor(enable_cache=False)
+    use_azure_for_mail = upload_channel == "mail"
+    if use_azure_for_mail:
+        from modules.core.extractors.azure_extractor import get_azure_extractor
+        from modules.utils.table_ocr_utils import raw_to_table_restored_text
+        azure_extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
     else:
         text_extractor = PdfTextExtractor(upload_channel=upload_channel, form_number=form_type)
 
@@ -201,19 +200,17 @@ def extract_pages_with_rag(
                 except Exception as debug_error:
                     print(f"  ⚠️ 원본 이미지 저장 실패: {debug_error}")
 
-                if use_upstage_raw:
-                    raw = upstage_extractor.extract_from_pdf_page_raw(pdf_path_obj, page_num)
-                    if not raw or not raw.get("pages"):
-                        print(f"  ⚠️ Upstage raw 결과 없음")
+                if use_azure_for_mail:
+                    raw = azure_extractor.extract_from_pdf_page_raw(pdf_path_obj, page_num)
+                    if not raw:
+                        print(f"  ⚠️ Azure raw 결과 없음")
                         ocr_texts.append(None)
                     else:
-                        page_data = raw["pages"][0]
-                        ocr_text = page_data.get("text") or raw.get("text") or ""
+                        ocr_text = raw_to_table_restored_text(raw)
                         ocr_text = normalize_ocr_text(ocr_text or "", use_fullwidth=True)
                         ocr_texts.append(ocr_text if ocr_text.strip() else None)
-                        words = page_data.get("words") or []
-                        w, h = page_data.get("width", 1), page_data.get("height", 1)
-                        ocr_words_list[idx] = {"words": words, "width": w, "height": h} if words else None
+                        words = (raw.get("pages") or [{}])[0].get("words") or []
+                        ocr_words_list[idx] = {"words": words, "width": 1, "height": 1} if words else None
                         print(f" 완료 (길이: {len(ocr_text or '')} 문자, 단어 {len(words)}개)")
                 else:
                     ocr_text = text_extractor.extract_text(pdf_path_obj, page_num)
@@ -229,7 +226,7 @@ def extract_pages_with_rag(
                 print(f" 실패 - {error_msg}")
                 ocr_texts.append(None)
     finally:
-        if not use_upstage_raw:
+        if not use_azure_for_mail:
             text_extractor.close_all()
 
     print(f"✅ 텍스트 추출 완료: {len([t for t in ocr_texts if t is not None])}/{len(images)}개 페이지 성공\n")

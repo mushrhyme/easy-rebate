@@ -63,20 +63,22 @@ class PdfTextExtractor:
             if upload_channel:
                 method = get_extraction_method_for_upload_channel(upload_channel)
             else:
-                method = "upstage"  # 기본값
+                method = "azure"  # 기본값 (표 복원용)
         
-        # Upstage OCR 방법 사용
-        if method == "upstage":
+        # Azure OCR + 표 복원 (mail 채널 등)
+        if method == "azure":
             try:
-                from modules.core.extractors.upstage_extractor import get_upstage_extractor
-                extractor = get_upstage_extractor()
-                text = extractor.extract_from_pdf_page(pdf_path, page_num)
-                if text:
-                    return text
-                # Upstage OCR 실패 시 PyMuPDF로 폴백
-                print(f"⚠️ Upstage OCR 실패, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num})")
+                from modules.core.extractors.azure_extractor import get_azure_extractor
+                from modules.utils.table_ocr_utils import raw_to_table_restored_text
+                extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=True)
+                raw = extractor.extract_from_pdf_page_raw(pdf_path, page_num)
+                if raw:
+                    text = raw_to_table_restored_text(raw)
+                    if text and text.strip():
+                        return text
+                print(f"⚠️ Azure OCR(표 복원) 실패, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num})")
             except Exception as e:
-                print(f"⚠️ Upstage OCR 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
+                print(f"⚠️ Azure OCR 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
         
         # "excel" / "pymupdf": PyMuPDF로 전체 텍스트 추출 (표·줄글 혼합 시 순서 보장)
         # 기본 PyMuPDF 방법 사용
@@ -215,23 +217,21 @@ def extract_text_from_pdf_page(
         if upload_channel:
             method = get_extraction_method_for_upload_channel(upload_channel)
         else:
-            method = "upstage"  # 기본값
-        
-        print(f"📝 [PDF 추출] upload_channel: {upload_channel}, 방법: {method}")
-    # Upstage OCR 방법 사용
-    if method == "upstage":
+            method = "azure"  # 기본값
+    # Azure OCR + 표 복원
+    if method == "azure":
         try:
-            from modules.core.extractors.upstage_extractor import get_upstage_extractor
-            extractor = get_upstage_extractor()
-            text = extractor.extract_from_pdf_page(pdf_path, page_num)
-            if text:
-                return text
-            # Upstage OCR 실패 시 PyMuPDF로 폴백
-            print(f"⚠️ Upstage OCR 실패, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num})")
+            from modules.core.extractors.azure_extractor import get_azure_extractor
+            from modules.utils.table_ocr_utils import raw_to_table_restored_text
+            extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=True)
+            raw = extractor.extract_from_pdf_page_raw(pdf_path, page_num)
+            if raw:
+                text = raw_to_table_restored_text(raw)
+                if text and text.strip():
+                    return text
+            print(f"⚠️ Azure OCR(표 복원) 실패, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num})")
         except Exception as e:
-            print(f"⚠️ Upstage OCR 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"⚠️ Azure OCR 오류, PyMuPDF로 폴백 ({pdf_path}, 페이지 {page_num}): {e}")
     
     # "excel" / "pymupdf": PyMuPDF로 전체 텍스트 추출 (표·줄글 혼합 시 순서 보장)
     # 기본 PyMuPDF 방법 사용
