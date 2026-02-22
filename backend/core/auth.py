@@ -56,6 +56,20 @@ def get_current_user_id(session_id: Optional[str] = Header(None, alias="X-Sessio
     return user_info['user_id']
 
 
+def get_current_user_optional(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
+    """
+    현재 로그인한 사용자를 가져오는 의존성 함수 (선택적).
+    세션이 없거나 유효하지 않으면 None 반환.
+
+    Returns:
+        사용자 정보 딕셔너리 또는 None
+    """
+    if not session_id:
+        return None
+    db = get_db()
+    return db.get_session_user(session_id)
+
+
 def require_auth(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
     """
     인증이 필요한 엔드포인트에서 사용할 의존성 함수
