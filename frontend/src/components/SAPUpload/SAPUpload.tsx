@@ -41,8 +41,9 @@ function getColumnDisplayName(letter: string, columnNames: string[] | undefined)
 
 export const SAPUpload = () => {
   const queryClient = useQueryClient()
-  const { options: formTypeOptions } = useFormTypes()
+  const { options: formTypeOptions, formTypeLabel } = useFormTypes()
   const formKeys = formTypeOptions.map((o) => o.value)
+  const formKeyToLabel = Object.fromEntries(formTypeOptions.map((o) => [o.value, o.label]))
   const [isGenerating, setIsGenerating] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
   const [selectedFormType, setSelectedFormType] = useState<string>('all')
@@ -274,7 +275,7 @@ export const SAPUpload = () => {
         {/* 컬럼별 산식 시각화 (양식지별 편집 가능) */}
         <div className="sap-upload-formulas-section">
           <div className="formulas-section-header">
-            <h2 className="formulas-section-title">列ごとの計算式（산식）</h2>
+            <h2 className="formulas-section-title">列ごとの計算式</h2>
             <p className="formulas-section-note">
               ※ 空欄＝未入力（아직 입력이 안 된 값）。양식지(01~05)에 따라 입력·계산이 달라집니다。
             </p>
@@ -315,7 +316,7 @@ export const SAPUpload = () => {
                       <tr>
                         <th>列</th>
                         {formKeys.map((k) => (
-                          <th key={k}>フォーム {k}</th>
+                          <th key={k}>{formTypeLabel(k) || `フォーム ${k}`}</th>
                         ))}
                       </tr>
                     </thead>
@@ -376,7 +377,7 @@ export const SAPUpload = () => {
               <div className="formulas-block">
                 <div className="formulas-cards">
                   {formulas.dataInputColumns.map((item) => {
-                    const lines = dataInputToDescriptionLines(item.byForm, formKeys)
+                    const lines = dataInputToDescriptionLines(item.byForm, formKeys, formKeyToLabel)
                     return (
                       <div key={item.column} className="formula-card">
                         <div className="formula-card-header">
@@ -494,7 +495,7 @@ export const SAPUpload = () => {
                       >
                         <option value="all">すべて</option>
                         {formTypeOptions.map((opt) => (
-                          <option key={opt.value} value={opt.value}>フォーム {opt.value}</option>
+                          <option key={opt.value} value={opt.value}>{opt.label}</option>
                         ))}
                       </select>
                       {selectedFormType !== 'all' && (
@@ -530,7 +531,7 @@ export const SAPUpload = () => {
                             <tr key={index}>
                               <td className="filename-cell">{row.pdf_filename}</td>
                               <td>{row.page_number}</td>
-                              <td>{row.form_type}</td>
+                              <td>{formTypeLabel(row.form_type)}</td>
                               {filteredPreviewData.column_names && filteredPreviewData.column_names.length > 0 ? (
                                 filteredPreviewData.column_names.map((_, idx) => {
                                   const colLetter = getColumnLetter(idx + 1)

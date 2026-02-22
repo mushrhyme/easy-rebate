@@ -124,15 +124,17 @@ export function byFormValueToDisplay(v: ByFormValue): string {
   return ruleToShortText(v as DataInputRule)
 }
 
-/** byForm → 표시용 description 목록 (formKeys 순서, 공란 제외) */
+/** byForm → 표시용 description 목록 (formKeys 순서, 공란 제외). keyToLabel 있으면 번호 대신 디스플레이명 표시 */
 export function dataInputToDescriptionLines(
   byForm: Record<string, ByFormValue>,
-  formKeys: string[] = Object.keys(byForm).sort()
+  formKeys: string[] = Object.keys(byForm).sort(),
+  keyToLabel?: Record<string, string>
 ): string[] {
   return formKeys
     .map((k) => {
       const disp = byFormValueToDisplay(byForm[k])
-      return disp.trim() ? `${k}: ${disp}` : ''
+      const prefix = keyToLabel?.[k] ?? k
+      return disp.trim() ? `${prefix}: ${disp}` : ''
     })
     .filter(Boolean)
 }

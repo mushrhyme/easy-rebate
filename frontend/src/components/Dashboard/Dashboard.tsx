@@ -2,8 +2,8 @@
  * 現況（ダッシュボード）タブ
  * 文書・検討・RAG の統計を一覧表示
  */
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState, useEffect } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   BarChart,
   Bar,
@@ -14,21 +14,69 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
-import { documentsApi, itemsApi, ragAdminApi } from '@/api/client'
+import { documentsApi, itemsApi, ragAdminApi, formTypesApi } from '@/api/client'
 import { useAuth } from '@/contexts/AuthContext'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import './Dashboard.css'
 
 const CHART_HUE_COLORS = ['#667eea', '#764ba2', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
 
-export function Dashboard() {
+export interface DashboardProps {
+  /** 해당 문서로 정답지 탭을 열 때 호출 (문서 선택 시 정답지 탭으로 전환) */
+  /** RAG 문서 클릭 시 정답지 탭으로 이동. relative_path 있으면 img 기반 뷰 사용 */
+  onOpenAnswerKeyWithDocument?: (payload: {
+    pdf_filename: string
+    total_pages: number
+    relative_path: string | null
+  }) => void
+}
+
+export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) {
   const { user, logout } = useAuth()
+  const queryClient = useQueryClient()
+  const isAdmin = user?.username === 'admin'
   const [chartByFormType, setChartByFormType] = useState(false)
+  const [formTypeListModalFormType, setFormTypeListModalFormType] = useState<string | null>(null)
   const { formTypeLabel } = useFormTypes()
+
+  const { data: formTypesData, isLoading: formTypesLoading } = useQuery({
+    queryKey: ['form-types'],
+    queryFn: () => formTypesApi.getList(),
+    enabled: isAdmin,
+  })
+
+  const updateFormTypeLabelMutation = useMutation({
+    mutationFn: ({ formCode, displayName }: { formCode: string; displayName: string }) =>
+      formTypesApi.updateLabel(formCode, displayName),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['form-types'] }),
+  })
+
+  const deleteFormTypeMutation = useMutation({
+    mutationFn: (formCode: string) => formTypesApi.delete(formCode),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['form-types'] }),
+  })
+
+  const [formTypeLabelDrafts, setFormTypeLabelDrafts] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (formTypesData?.form_types) {
+      setFormTypeLabelDrafts(
+        formTypesData.form_types.reduce<Record<string, string>>((acc, t) => {
+          acc[t.value] = t.label
+          return acc
+        }, {})
+      )
+    }
+  }, [formTypesData?.form_types])
 
   const { data: reviewByItemsData, isLoading: reviewByItemsLoading, error: reviewByItemsError } = useQuery({
     queryKey: ['items', 'stats', 'review-by-items'],
     queryFn: () => itemsApi.getReviewStatsByItems(),
+    refetchInterval: 60000,
+  })
+
+  const { data: reviewByUserData, isLoading: reviewByUserLoading, error: reviewByUserError } = useQuery({
+    queryKey: ['items', 'stats', 'review-by-user'],
+    queryFn: () => itemsApi.getReviewStatsByUser(),
     refetchInterval: 60000,
   })
 
@@ -54,6 +102,13 @@ export function Dashboard() {
     queryKey: ['documents', 'overview'],
     queryFn: () => documentsApi.getOverview(),
     refetchInterval: 60000,
+  })
+
+  /** RAG DB 소스: img 폴더(벡터 임베딩된 문서) form_type별 목록 — 그리드 嵌入文書数/ページ数·一覧 모달용 */
+  const { data: answerKeysFromImgData } = useQuery({
+    queryKey: ['documents', 'answer-keys-from-img'],
+    queryFn: () => documentsApi.getAnswerKeysFromImg(),
+    enabled: isAdmin,
   })
 
   const chartSeries = useMemo(() => {
@@ -211,6 +266,43 @@ export function Dashboard() {
                 </div>
               )}
             </>
+          )}
+        </section>
+
+        {/* 検討チェック担当者別（증빙용 현황판） */}
+        <section className="dashboard-section">
+          <h2 className="dashboard-section-title">検討チェック担当者別（증빙）</h2>
+          <p className="dashboard-section-note">
+            ※ 誰が1次・2次チェックを何件したか。上記「検討状況」と同じ対象（detail・得意先あり）のみ集計。
+          </p>
+          {reviewByUserLoading && <div className="dashboard-loading">読み込み中...</div>}
+          {reviewByUserError && <div className="dashboard-error">担当者別統計の取得に失敗しました</div>}
+          {!reviewByUserLoading && !reviewByUserError && reviewByUserData?.by_user?.length > 0 && (
+            <div className="dashboard-table-wrap">
+              <table className="dashboard-table">
+                <thead>
+                  <tr>
+                    <th>担当者</th>
+                    <th>1次チェック件数</th>
+                    <th>2次チェック件数</th>
+                    <th>合計</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reviewByUserData.by_user.map((row) => (
+                    <tr key={row.user_id}>
+                      <td>{row.display_name}</td>
+                      <td>{row.first_checked_count.toLocaleString()}</td>
+                      <td>{row.second_checked_count.toLocaleString()}</td>
+                      <td>{(row.first_checked_count + row.second_checked_count).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!reviewByUserLoading && !reviewByUserError && reviewByUserData?.by_user?.length === 0 && (
+            <p className="dashboard-section-note">まだチェック記録がありません。</p>
           )}
         </section>
 
@@ -377,103 +469,189 @@ export function Dashboard() {
             </div>
           )}
 
-          {documentsOverviewData && (
-            <>
-              <div className="dashboard-subsection">
-                <h3 className="dashboard-subtitle">ページ役割別（全体）</h3>
-                <div className="dashboard-role-totals">
-                  <div className="dashboard-role-totals-item">
-                    <span className="dashboard-role-totals-label">Cover</span>
-                    <span className="dashboard-role-totals-value">
-                      {(documentsOverviewData.page_role_totals?.cover ?? 0).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="dashboard-role-totals-item dashboard-role-detail">
-                    <span className="dashboard-role-totals-label">Detail</span>
-                    <span className="dashboard-role-totals-value">
-                      {(documentsOverviewData.page_role_totals?.detail ?? 0).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="dashboard-role-totals-item">
-                    <span className="dashboard-role-totals-label">Summary</span>
-                    <span className="dashboard-role-totals-value">
-                      {(documentsOverviewData.page_role_totals?.summary ?? 0).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="dashboard-role-totals-item">
-                    <span className="dashboard-role-totals-label">Reply</span>
-                    <span className="dashboard-role-totals-value">
-                      {(documentsOverviewData.page_role_totals?.reply ?? 0).toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="dashboard-subsection dashboard-rag-answer-key-docs">
-                <p className="dashboard-rag-hint">
-                  <strong>一覧の出所：</strong> (1) アップロードで処理した文書 (2) 「管理者画面」で「img フォルダ全体から再構築」を実行したときに img 内の PDF から同期した文書。両方がここに表示されます。<br />
-                  <strong>ベクターDB（RAG）に入るのは：</strong> (A) 再構築で img 内の PDF＋answer JSON から取り込んだ分 (B) 正解表タブで「正解表として保存（ベクターDBに登録）」を実行した分だけです。分析のみのファイルは一覧には出ますがベクターDBには入りません。
-                </p>
-                <p className="dashboard-rag-hint dashboard-rag-hint-action">
-                  img フォルダの文書を反映するには「<strong>管理者画面</strong>」タブで「img フォルダ全体から再構築」を実行してください。
-                </p>
-                <div className="dashboard-chart-header">
-                  <h3 className="dashboard-subtitle">文書別様式・ページ役割（ファイル別）</h3>
-                </div>
-                {documentsOverviewData.documents.length === 0 ? (
-                  <p className="dashboard-empty">文書がありません。</p>
-                ) : (
-                  <div className="dashboard-table-wrap dashboard-table-wrap-scroll dashboard-table-wide">
-                    <table className="dashboard-table">
-                      <thead>
-                        <tr>
-                          <th>様式</th>
-                          <th>ファイル名</th>
-                          <th className="dashboard-th-num">Cover</th>
-                          <th className="dashboard-th-num">Detail</th>
-                          <th className="dashboard-th-num">Summary</th>
-                          <th className="dashboard-th-num">Reply</th>
-                          <th className="dashboard-th-num">総ページ</th>
+          {isAdmin && (
+            <div className="dashboard-subsection dashboard-form-type-labels-section">
+              <h3 className="dashboard-subtitle">様式名の管理</h3>
+              <p className="dashboard-section-note">
+                様式コード（01, 02…）の表示名を変更できます。一覧・フィルタ・検索などで使われる名前です。
+              </p>
+              {formTypesLoading ? (
+                <p className="dashboard-loading">読み込み中...</p>
+              ) : (
+                <div className="dashboard-form-type-labels-wrap">
+                  <table className="dashboard-form-type-labels-table">
+                    <colgroup>
+                      <col style={{ width: '5rem' }} />
+                      <col />
+                      <col style={{ width: '5rem' }} />
+                      <col style={{ width: '5rem' }} />
+                      <col style={{ width: '12.5rem' }} />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>様式コード</th>
+                        <th>表示名</th>
+                        <th className="dashboard-th-num">嵌入文書数</th>
+                        <th className="dashboard-th-num">ページ数</th>
+                        <th className="dashboard-col-action">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(formTypesData?.form_types ?? []).map((opt) => {
+                        const ragDocs = answerKeysFromImgData?.by_form_type?.[opt.value] ?? []
+                        const docCount = ragDocs.length
+                        const pageCount = ragDocs.reduce((sum, d) => sum + (d.total_pages ?? 0), 0)
+                        return (
+                        <tr key={opt.value}>
+                          <td className="dashboard-form-type-code">{opt.value}</td>
+                          <td>
+                            <input
+                              type="text"
+                              className="dashboard-form-type-label-input"
+                              value={formTypeLabelDrafts[opt.value] ?? opt.label}
+                              onChange={(e) =>
+                                setFormTypeLabelDrafts((prev) => ({ ...prev, [opt.value]: e.target.value }))
+                              }
+                              placeholder="表示名を入力"
+                            />
+                          </td>
+                          <td className="dashboard-td-num">{docCount.toLocaleString()}</td>
+                          <td className="dashboard-td-num">{pageCount.toLocaleString()}</td>
+                          <td className="dashboard-col-action">
+                            {onOpenAnswerKeyWithDocument && (
+                              <button
+                                type="button"
+                                className="dashboard-button dashboard-button-small dashboard-button-list"
+                                onClick={() => setFormTypeListModalFormType(opt.value)}
+                                title="該当様式の文書一覧を開き、クリックで正解表タブへ"
+                              >
+                                一覧
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="dashboard-button dashboard-button-small"
+                              disabled={updateFormTypeLabelMutation.isPending}
+                              onClick={() => {
+                                const name = (formTypeLabelDrafts[opt.value] ?? opt.label).trim()
+                                if (!name) return
+                                updateFormTypeLabelMutation.mutate(
+                                  { formCode: opt.value, displayName: name },
+                                  {
+                                    onSuccess: () => alert('保存しました。'),
+                                    onError: (err: unknown) => {
+                                      const msg =
+                                        err && typeof err === 'object' && 'response' in err
+                                          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                          : null
+                                      alert(msg ? `保存に失敗しました: ${msg}` : '保存に失敗しました。')
+                                    },
+                                  }
+                                )
+                              }}
+                            >
+                              {updateFormTypeLabelMutation.isPending ? '保存中...' : '保存'}
+                            </button>
+                            <button
+                              type="button"
+                              className="dashboard-button dashboard-button-small dashboard-button-danger"
+                              disabled={deleteFormTypeMutation.isPending}
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    `様式「${opt.value}」を削除しますか？\n使用中の文書がある場合は削除できません。`
+                                  )
+                                )
+                                  return
+                                deleteFormTypeMutation.mutate(opt.value, {
+                                  onSuccess: () => alert('削除しました。'),
+                                  onError: (err: unknown) => {
+                                    const msg =
+                                      err && typeof err === 'object' && 'response' in err
+                                        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                        : null
+                                    alert(msg ? `削除に失敗しました: ${msg}` : '削除に失敗しました。')
+                                  },
+                                })
+                              }}
+                            >
+                              {deleteFormTypeMutation.isPending ? '削除中...' : '削除'}
+                            </button>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {[...documentsOverviewData.documents]
-                          .sort((a, b) => {
-                            const fa = (a.form_type ?? '').toString()
-                            const fb = (b.form_type ?? '').toString()
-                            if (fa !== fb) return fa.localeCompare(fb)
-                            return (a.pdf_filename ?? '').localeCompare(b.pdf_filename ?? '')
-                          })
-                          .map(
-                          (doc: {
-                            pdf_filename: string
-                            form_type: string | null
-                            total_pages: number
-                            cover: number
-                            detail: number
-                            summary: number
-                            reply: number
-                          }) => (
-                            <tr key={doc.pdf_filename}>
-                              <td>{formTypeLabel(doc.form_type)}</td>
-                              <td className="dashboard-td-filename" title={doc.pdf_filename}>
-                                {doc.pdf_filename}
-                              </td>
-                              <td className="dashboard-td-num">{doc.cover}</td>
-                              <td className="dashboard-td-num">{doc.detail}</td>
-                              <td className="dashboard-td-num">{doc.summary}</td>
-                              <td className="dashboard-td-num">{doc.reply}</td>
-                              <td className="dashboard-td-num">{doc.total_pages}</td>
-                            </tr>
-                          )
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </>
+                      )})}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           )}
+
+          {/* 様式別 嵌入文書一覧 모달: 문서 클릭 시 정답지 탭으로 이동 */}
+          {formTypeListModalFormType != null && onOpenAnswerKeyWithDocument && (
+            <div
+              className="dashboard-modal-overlay"
+              onClick={() => setFormTypeListModalFormType(null)}
+              role="dialog"
+              aria-modal="true"
+              aria-label="該当様式の文書一覧"
+            >
+              <div className="dashboard-modal" onClick={(e) => e.stopPropagation()}>
+                <h3 className="dashboard-modal-title">
+                  様式 {formTypeLabel(formTypeListModalFormType)} の文書一覧
+                </h3>
+                <p className="dashboard-modal-note">
+                  ベクターDB（RAG）に嵌入された文書一覧です。クリックで正解表タブでその文書の正解を表示します。
+                </p>
+                <div className="dashboard-modal-list-wrap">
+                  {(() => {
+                    const docs = answerKeysFromImgData?.by_form_type?.[formTypeListModalFormType] ?? []
+                    if (docs.length === 0) {
+                      return <p className="dashboard-empty">該当様式でベクターDBに嵌入された文書がありません。</p>
+                    }
+                    return (
+                      <ul className="dashboard-modal-doc-list">
+                        {docs.map((d) => {
+                          const pdfFilename = d.pdf_name?.endsWith('.pdf') ? d.pdf_name : `${d.pdf_name ?? ''}.pdf`
+                          return (
+                            <li key={d.relative_path ?? pdfFilename}>
+                              <button
+                                type="button"
+                                className="dashboard-modal-doc-item"
+                                onClick={() => {
+                                  onOpenAnswerKeyWithDocument({
+                                    pdf_filename: pdfFilename,
+                                    total_pages: d.total_pages ?? 0,
+                                    relative_path: d.relative_path ?? null,
+                                  })
+                                  setFormTypeListModalFormType(null)
+                                }}
+                              >
+                                <span className="dashboard-modal-doc-name" title={pdfFilename}>
+                                  {d.pdf_name ?? pdfFilename}
+                                </span>
+                                <span className="dashboard-modal-doc-pages">{d.total_pages ?? 0}ページ</span>
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )
+                  })()}
+                </div>
+                <div className="dashboard-modal-actions">
+                  <button
+                    type="button"
+                    className="dashboard-button dashboard-button-small"
+                    onClick={() => setFormTypeListModalFormType(null)}
+                  >
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
         </section>
       </div>
     </div>

@@ -203,6 +203,16 @@
   box-shadow: 0 4px 10px rgba(107, 70, 193, 0.35);
 }
 
+.rag-admin-button.rag-admin-button-danger {
+  background-color: #c53030;
+  color: #fff;
+}
+
+.rag-admin-button.rag-admin-button-danger:hover {
+  background-color: #9b2c2c;
+  box-shadow: 0 4px 10px rgba(155, 44, 44, 0.35);
+}
+
 .rag-admin-button:disabled {
   background-color: #a0aec0;
   cursor: not-allowed;
@@ -230,20 +240,47 @@
 /* 様式名の管理 */
 .rag-admin-form-type-labels-wrap {
   margin-top: 0.5rem;
+  width: 100%;
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
 }
 
 .rag-admin-form-type-labels-table {
   width: 100%;
-  min-width: 0;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.875rem;
+  min-width: 400px;
+}
+
+/* 열 너비는 colgroup으로 통일 (헤더/본문 정렬) */
+.rag-admin-form-type-labels-table th:first-child,
+.rag-admin-form-type-labels-table td:first-child {
+  width: 5rem;
+}
+
+.rag-admin-form-type-labels-table th:last-child,
+.rag-admin-form-type-labels-table td:last-child {
+  width: 12.5rem;
+  box-sizing: border-box;
 }
 
 .rag-admin-form-type-labels-table th,
 .rag-admin-form-type-labels-table td {
-  padding: 0.5rem 0.6rem;
-  border-bottom: 1px solid #e2e8f0;
+  padding: 0.75rem 0.75rem;
+  border: 1px solid #e2e8f0;
   vertical-align: middle;
+  box-sizing: border-box;
+}
+
+/* 操作 열: 헤더는 다른 th와 동일(왼쪽 정렬), 본문 셀만 버튼 오른쪽 정렬 */
+.rag-admin-form-type-labels-table td.rag-admin-col-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .rag-admin-form-type-labels-table th {
@@ -257,11 +294,19 @@
   font-family: ui-monospace, monospace;
   font-weight: 500;
   color: #334155;
+  min-width: 4rem;
+}
+
+/* 表示名 열: 나머지 폭 전부 사용 (colgroup + table-layout:fixed로 너비 통일) */
+.rag-admin-form-type-labels-table th:nth-child(2),
+.rag-admin-form-type-labels-table td:nth-child(2) {
+  min-width: 0;
 }
 
 .rag-admin-form-type-label-input {
   width: 100%;
-  max-width: 280px;
+  min-width: 0;
+  max-width: none;
   padding: 0.4rem 0.5rem;
   font-size: 0.875rem;
   border: 1px solid #e2e8f0;
@@ -302,63 +347,94 @@
   color: #ffffff;
 }
 
-.rag-admin-users-wrap {
-  margin-top: 0.75rem;
-  overflow-x: auto;
-}
-
+/* ユーザー表: master と同じグリッド・罫線スタイル */
 .rag-admin-users-table {
   width: 100%;
   min-width: 720px;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-right: 1px solid #cbd5e1;
+  overflow: hidden;
 }
 
 .rag-admin-users-table th,
 .rag-admin-users-table td {
   padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid #e2e8f0;
+  border: 1px solid #e2e8f0;
+  vertical-align: top;
 }
 
-.rag-admin-users-table th {
+.rag-admin-users-table th.rag-admin-master-col-action,
+.rag-admin-users-table td.rag-admin-master-col-action {
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
+  box-sizing: border-box;
+  overflow: visible;
+  padding: 0.3rem 0.4rem !important;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.rag-admin-users-table th:last-child,
+.rag-admin-users-table td:last-child {
+  border-right: 1px solid #cbd5e1;
+}
+
+.rag-admin-users-table thead tr:first-child th {
   background: #f1f5f9;
   font-weight: 600;
   color: #374151;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
-.rag-admin-users-input {
-  width: 100%;
-  min-width: 6rem;
-  padding: 0.3rem 0.4rem;
-  font-size: 0.8rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.25rem;
-  box-sizing: border-box;
-}
-
-.rag-admin-users-input:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
-.rag-admin-users-new-row {
+/* 新規行: td にのみ背景（はみ出し防止） */
+.rag-admin-users-table .rag-admin-master-new-row td {
+  vertical-align: middle;
   background: #eff6ff;
+  border-bottom: 2px solid #93c5fd;
+}
+
+.rag-admin-users-table .rag-admin-master-new-row .rag-admin-master-col-action {
+  background: #dbeafe;
+}
+
+.rag-admin-users-table .rag-admin-master-new-row .rag-admin-master-cell-input {
+  background: #fff;
+}
+
+/* データ行のみ: 読み取り専用列（ID, ログインID, 状態, 最終ログイン）を薄い背景で区別 */
+.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(1),
+.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(2),
+.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(9),
+.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(10) {
+  background: #f8fafc;
 }
 
 /* 基準管理 master_code グリッド */
 .rag-admin-master-grid-wrap {
-  overflow-x: auto;
   margin-top: 0.75rem;
   margin-bottom: 0.5rem;
   max-height: 60vh;
-  overflow-y: auto;
+  overflow: auto;
+  width: 100%;
 }
 
 .rag-admin-master-table {
   width: 100%;
   min-width: 720px;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-right: 1px solid #cbd5e1;
+  overflow: hidden;
 }
 
 .rag-admin-master-table th,
@@ -366,6 +442,22 @@
   padding: 0.35rem 0.5rem;
   border: 1px solid #e2e8f0;
   vertical-align: top;
+}
+
+/* 操作列: ボタンが切れない幅を確保 */
+.rag-admin-master-table th.rag-admin-master-col-action,
+.rag-admin-master-table td.rag-admin-master-col-action {
+  width: 160px;
+  min-width: 160px;
+  max-width: 160px;
+  box-sizing: border-box;
+  overflow: visible;
+  padding: 0.3rem 0.4rem !important;
+}
+
+.rag-admin-master-table th:last-child,
+.rag-admin-master-table td:last-child {
+  border-right: 1px solid #cbd5e1;
 }
 
 .rag-admin-master-table thead tr:first-child th {
@@ -412,14 +504,11 @@
   box-shadow: 0 0 0 1px rgba(102, 126, 234, 0.25);
 }
 
-/* 新規行入力（グリッド最上段） */
-.rag-admin-master-new-row {
-  background: #eff6ff;
-  border-bottom: 2px solid #93c5fd;
-}
-
+/* 新規行入力（グリッド最上段）。tr ではなく td に背景を指定してはみ出し防止 */
 .rag-admin-master-new-row td {
   vertical-align: middle;
+  background: #eff6ff;
+  border-bottom: 2px solid #93c5fd;
 }
 
 .rag-admin-master-new-row .rag-admin-master-cell-input {
@@ -427,10 +516,12 @@
 }
 
 .rag-admin-master-col-action {
-  width: 1%;
   white-space: nowrap;
-  padding: 0.35rem 0.5rem !important;
   background: #f8fafc;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .rag-admin-master-new-row .rag-admin-master-col-action {
