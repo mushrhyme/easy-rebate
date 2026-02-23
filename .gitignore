@@ -43,7 +43,3 @@ test/
 # DB (로컬 SQLite 등)
 *.db
 *.sqlite3
-
-# 민감 파일 / 테스트 전용
-로그인ID.xlsx
-test.ipynb
