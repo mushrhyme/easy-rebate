@@ -1,8 +1,8 @@
 /**
  * 메인 App 컴포넌트
  */
-import { useState, useMemo, useRef, useCallback } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { FormUploadSection } from './components/Upload/FormUploadSection'
 import { UploadedFilesList } from './components/Upload/UploadedFilesList'
 import { UploadPagePreview } from './components/Upload/UploadPagePreview'
@@ -13,7 +13,7 @@ import { SAPUpload } from './components/SAPUpload/SAPUpload'
 import { RagAdminPanel } from './components/Admin/RagAdminPanel'
 import { AnswerKeyTab } from './components/AnswerKey/AnswerKeyTab'
 import { Dashboard } from './components/Dashboard/Dashboard'
-import { documentsApi, settingsApi, type RagProvider } from './api/client'
+import { documentsApi } from './api/client'
 import { UPLOAD_CHANNELS } from './config/formConfig'
 import type { UploadChannel } from './types'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -47,7 +47,16 @@ interface YearMonthGroup {
 
 function AppContent() {
   const { user, logout } = useAuth()
+  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const [activeTab, setActiveTab] = useState<Tab>('upload')
+
+  // 비관리자가 관리자(기준정보) 탭이 선택된 상태면 업로드 탭으로 전환. 현황 탭은 모든 사용자 허용
+  useEffect(() => {
+    if (!isAdmin && activeTab === 'rag_admin') {
+      setActiveTab('upload')
+    }
+  }, [isAdmin, activeTab])
+
   /** 정답지 탭으로 이동 시 선택할 문서. RAG에서 오면 relative_path 있음 → img 기반 뷰 */
   const [initialDocumentForAnswerKey, setInitialDocumentForAnswerKey] = useState<{
     pdf_filename: string
@@ -104,22 +113,6 @@ function AppContent() {
       return b.month - a.month
     })
   }, [documentsData])
-
-  const isAdmin = user?.username === 'admin'
-
-  /** 分析(기본 RAG) LLM: UI에서 변경 가능 */
-  const queryClient = useQueryClient()
-  const { data: ragProviderData } = useQuery({
-    queryKey: ['settings', 'rag-provider'],
-    queryFn: () => settingsApi.getRagProvider(),
-  })
-  const ragProvider = (ragProviderData?.provider ?? 'gemini') as RagProvider
-  const setRagProviderMutation = useMutation({
-    mutationFn: (provider: RagProvider) => settingsApi.setRagProvider(provider),
-    onSuccess: (_, provider) => {
-      queryClient.setQueryData(['settings', 'rag-provider'], { provider })
-    },
-  })
 
   return (
     <div className="app">
@@ -259,18 +252,6 @@ function AppContent() {
             </div>
             <div className="upload-body">
               <div className="upload-body-left">
-                <div className="upload-analysis-llm-row">
-                  <label className="upload-analysis-llm-label">分析LLM:</label>
-                  <select
-                    className="upload-analysis-llm-select"
-                    value={ragProvider}
-                    onChange={(e) => setRagProviderMutation.mutate(e.target.value as RagProvider)}
-                    title="アップロード後の解析に使用するLLM（Gemini / GPT 5.2）"
-                  >
-                    <option value="gemini">Gemini</option>
-                    <option value="gpt5.2">GPT 5.2</option>
-                  </select>
-                </div>
                 <div className="upload-body-cards">
                   {UPLOAD_CHANNELS.map((channel) => (
                     <FormUploadSection
@@ -359,7 +340,7 @@ function AppContent() {
           </div>
         )}
 
-        {activeTab === 'rag_admin' && (
+        {activeTab === 'rag_admin' && isAdmin && (
           <div className="sap-upload-tab-wrapper">
             <RagAdminPanel />
           </div>
