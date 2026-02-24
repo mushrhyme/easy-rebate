@@ -81,6 +81,19 @@
   gap: 20px;
 }
 
+.login-id-password-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-group-label {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4a5568;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
@@ -183,6 +196,18 @@
 .error-message::before {
   content: '⚠️';
   font-size: 16px;
+}
+
+.login-error-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.login-error-hint {
+  margin: 0;
+  font-size: 13px;
+  color: #718096;
 }
 
 .login-button {

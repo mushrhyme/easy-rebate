@@ -69,8 +69,11 @@ const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ standalone = 
       } else {
         setError(result.message)
       }
-    } catch (err) {
-      setError('パスワード変更中にエラーが発生しました')
+    } catch (err: unknown) {
+      const msg = err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : null
+      setError(msg && typeof msg === 'string' ? msg : 'パスワード変更中にエラーが発生しました')
     } finally {
       setIsLoading(false)
     }
@@ -113,6 +116,7 @@ const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ standalone = 
               {showNew ? <EyeOffIcon /> : <EyeIcon />}
             </button>
           </div>
+          <p className="change-password-hint">※ ログインIDと同一のパスワードは使用できません。</p>
         </div>
         <div className="form-group">
           <label htmlFor="new-password-confirm" className="form-label">新しいパスワード（確認）</label>

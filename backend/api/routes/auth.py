@@ -39,9 +39,22 @@ class UserInfo(BaseModel):
     display_name: str
     display_name_ja: Optional[str] = None
     is_active: bool
+    is_admin: bool = False
     last_login_at: Optional[str] = None
     login_count: int
     must_change_password: bool = False
+
+
+def _is_admin(user_info: dict) -> bool:
+    """username='admin' 또는 is_admin=True 이면 관리자."""
+    return user_info.get("username") == "admin" or bool(user_info.get("is_admin"))
+
+
+def require_admin(user_info: dict = Depends(get_current_user_dep)):
+    """관리자만 허용. 아니면 403."""
+    if not _is_admin(user_info):
+        raise HTTPException(status_code=403, detail="관리자만 접근할 수 있습니다")
+    return user_info
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -219,6 +232,7 @@ async def get_current_user(
             display_name=user_info['display_name'],
             display_name_ja=user_info.get('display_name_ja'),
             is_active=user_info['is_active'],
+            is_admin=_is_admin(user_info),
             last_login_at=user_info.get('last_login_at'),
             login_count=user_info.get('login_count', 0),
             must_change_password=user_info.get('force_password_change', False),
@@ -260,6 +274,7 @@ async def validate_session(
                     "username": user_info['username'],
                     "display_name": user_info['display_name'],
                     "display_name_ja": user_info.get('display_name_ja'),
+                    "is_admin": _is_admin(user_info),
                 },
                 "must_change_password": user_info.get('force_password_change', False),
             }
@@ -294,22 +309,17 @@ class UpdateUserRequest(BaseModel):
     role: Optional[str] = None
     category: Optional[str] = None
     is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
+    password: Optional[str] = None  # 관리자 설정용: 전달 시 해당 비밀번호로 설정, 빈 문자열이면 로그인ID로 초기화
 
 
 @router.get("/users")
 async def get_users(
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: dict = Depends(require_admin),
     db=Depends(get_db)
 ):
     """
-    모든 사용자 목록 조회 (관리자용)
-
-    Args:
-        current_user_id: 현재 사용자 ID (인증용)
-        db: データベースインスタンス
-
-    Returns:
-        사용자 목록 (users 테이블 행 그대로 반환)
+    모든 사용자 목록 조회 (관리자 전용)
     """
     try:
         users = db.get_all_users()
@@ -321,22 +331,13 @@ async def get_users(
 @router.post("/users", response_model=dict)
 async def create_user(
     request: CreateUserRequest,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: dict = Depends(require_admin),
     db=Depends(get_db)
 ):
     """
-    새 사용자 생성 (관리자용)
-
-    Args:
-        request: 사용자 생성 요청
-        current_user_id: 현재 사용자 ID (생성자 기록용)
-        db: データベースインスタンス
-
-    Returns:
-        생성 결과
+    새 사용자 생성 (관리자 전용)
     """
     try:
-        # 사용자명 중복 체크
         existing_user = db.get_user_by_username(request.username)
         if existing_user:
             raise HTTPException(status_code=400, detail="이미 존재하는 사용자명입니다")
@@ -350,7 +351,7 @@ async def create_user(
             department_ja=request.department_ja,
             role=request.role,
             category=request.category,
-            created_by_user_id=current_user_id,
+            created_by_user_id=current_user["user_id"],
             password_hash=initial_password_hash,
         )
 
@@ -373,23 +374,13 @@ async def create_user(
 async def update_user(
     user_id: int,
     request: UpdateUserRequest,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: dict = Depends(require_admin),
     db=Depends(get_db)
 ):
     """
-    사용자 정보 업데이트 (관리자용)
-
-    Args:
-        user_id: 업데이트할 사용자 ID
-        request: 업데이트 요청
-        current_user_id: 현재 사용자 ID (권한 확인용)
-        db: データベースインスタンス
-
-    Returns:
-        업데이트 결과
+    사용자 정보 업데이트 (관리자 전용)
     """
     try:
-        # 사용자 존재 확인
         user = db.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
@@ -403,7 +394,13 @@ async def update_user(
             role=request.role,
             category=request.category,
             is_active=request.is_active,
+            is_admin=request.is_admin,
         )
+
+        # 관리자 비밀번호 설정: 해시 저장 후 force_password_change=TRUE로 두어 다음 로그인 시 변경 유도
+        if request.password is not None:
+            raw = (request.password or "").strip() or (user.get("username") or "")
+            db.update_password(user_id, hash_password(raw), force_password_change=True)
 
         if success:
             return {"success": True, "message": "사용자 정보가 업데이트되었습니다"}
@@ -455,10 +452,15 @@ async def change_password(
 
         # bcrypt 72바이트 제한: 넘기기 전에 여기서 자름
         new_raw = (request.new_password or "").strip()
+        if new_raw == username:
+            raise HTTPException(
+                status_code=400,
+                detail="ログインIDと同一のパスワードは使用できません",
+            )
         if isinstance(new_raw, str) and len(new_raw.encode("utf-8")) > 72:
             new_raw = new_raw.encode("utf-8")[:72].decode("utf-8", errors="ignore")
         new_hash = hash_password(new_raw)
-        success = db.update_password(user_id, new_hash)
+        success = db.update_password(user_id, new_hash, force_password_change=False)
         if not success:
             raise HTTPException(status_code=500, detail="비밀번호 변경에 실패했습니다")
         return {"success": True, "message": "비밀번호가 변경되었습니다"}
@@ -469,41 +471,30 @@ async def change_password(
 
 
 @router.delete("/users/{user_id}", response_model=dict)
-async def deactivate_user(
+async def delete_user(
     user_id: int,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: dict = Depends(require_admin),
     db=Depends(get_db)
 ):
     """
-    사용자 비활성화 (관리자용)
-
-    Args:
-        user_id: 비활성화할 사용자 ID
-        current_user_id: 현재 사용자 ID (권한 확인용)
-        db: データベースインスタンス
-
-    Returns:
-        비활성화 결과
+    사용자 DB 행 삭제 (관리자 전용)
     """
     try:
-        # 자기 자신은 비활성화할 수 없음
-        if user_id == current_user_id:
-            raise HTTPException(status_code=400, detail="자기 자신을 비활성화할 수 없습니다")
+        if user_id == current_user["user_id"]:
+            raise HTTPException(status_code=400, detail="자기 자신을 삭제할 수 없습니다")
 
-        # 사용자 존재 확인
         user = db.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
-        # 비활성화 수행
-        success = db.update_user(user_id=user_id, is_active=False)
+        success = db.delete_user(user_id)
 
         if success:
-            return {"success": True, "message": "사용자가 비활성화되었습니다"}
+            return {"success": True, "message": "사용자가 삭제되었습니다"}
         else:
-            raise HTTPException(status_code=500, detail="사용자 비활성화에 실패했습니다")
+            raise HTTPException(status_code=500, detail="사용자 삭제에 실패했습니다")
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"사용자 비활성화 중 오류가 발생했습니다: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"사용자 삭제 중 오류가 발생했습니다: {str(e)}")
