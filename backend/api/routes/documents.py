@@ -893,8 +893,7 @@ async def get_documents_for_answer_key_tab(
     """
     _ensure_answer_key_designated_by_column(db)
     user_id: int = current_user.get("user_id")
-    username: Optional[str] = current_user.get("username")
-    is_admin = username == "admin"
+    is_admin = current_user.get("username") == "admin" or bool(current_user.get("is_admin"))
     rows = query_documents_table(
         db,
         is_answer_key_document=True,
@@ -1139,7 +1138,9 @@ def _load_answer_json_from_img_folder(relative_path: str):
         return None
     if not folder.is_dir():
         return None
-    files = sorted(folder.glob("Page*_answer*.json"))
+    # 페이지 번호 숫자 순 (1, 2, ... 10) — 문자열 정렬 시 Page10이 Page2보다 앞섬
+    all_files = list(folder.glob("Page*_answer*.json"))
+    files = sorted(all_files, key=lambda f: int(m.group(1)) if (m := re.search(r"Page(\d+)", f.name, re.IGNORECASE)) else 0)
     pages = []
     for f in files:
         m = re.search(r"Page(\d+)", f.name, re.IGNORECASE)
@@ -1147,6 +1148,15 @@ def _load_answer_json_from_img_folder(relative_path: str):
         data = load_answer_json(f)
         if data:
             data = {k: v for k, v in data.items() if v is not None}
+        raw_items = data.get("items")
+        if isinstance(raw_items, dict):
+            # 숫자 키 순(0,1,2,...,10,11) — 문자열 정렬 시 0,1,10,11,2 가 되므로 반드시 int 정렬
+            data["items"] = [raw_items[k] for k in sorted(raw_items.keys(), key=lambda k: (int(k) if str(k).isdigit() else 0))]
+        elif isinstance(raw_items, list):
+            # 인덱스 순서 그대로 새 리스트로 반환 (배열 순서 보장)
+            data["items"] = [raw_items[i] for i in range(len(raw_items))]
+        else:
+            data["items"] = []
         data["page_number"] = page_num
         pages.append(data)
     pages.sort(key=lambda p: p.get("page_number") or 0)
@@ -1171,6 +1181,46 @@ async def get_answer_json_from_img(relative_path: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Folder not found or no answer files")
     return result
+
+
+class SaveAnswerJsonFromImgRequest(BaseModel):
+    """img 폴더의 Page*_answer.json에 편집 내용을 그대로 쓸 때 (DB 미사용)."""
+    relative_path: str
+    pages: List[dict]  # [ { page_number, page_role?, page_meta?, items }, ... ]
+
+
+@router.put("/answer-json-from-img")
+async def save_answer_json_from_img(body: SaveAnswerJsonFromImgRequest):
+    """
+    정답지 탭에서 편집한 내용을 img 폴더의 JSON 파일에만 반영 (DB는 건드리지 않음).
+    RAG 문서는 여기서 읽어오므로, 여기 저장해야 null로 덮어쓰이지 않음.
+    """
+    if not body.relative_path or ".." in body.relative_path:
+        raise HTTPException(status_code=400, detail="Invalid relative_path")
+    root = get_project_root()
+    img_dir = root / "img"
+    safe = body.relative_path.replace("..", "").strip("/\\").replace("\\", "/")
+    folder = (img_dir / safe).resolve()
+    try:
+        folder.relative_to(img_dir.resolve())
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid relative_path")
+    if not folder.is_dir():
+        raise HTTPException(status_code=404, detail="Folder not found")
+    pages = body.pages if isinstance(body.pages, list) else []
+    for page_obj in pages:
+        page_number = page_obj.get("page_number")
+        if page_number is None:
+            continue
+        page_number = int(page_number)
+        page_role = (page_obj.get("page_role") or "detail").strip() or "detail"
+        page_meta = page_obj.get("page_meta") if isinstance(page_obj.get("page_meta"), dict) else {}
+        items = page_obj.get("items") if isinstance(page_obj.get("items"), list) else []
+        out = {"page_role": page_role, **page_meta, "items": items}
+        path = folder / f"Page{page_number}_answer.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+    return {"success": True, "message": "JSON files updated", "pages_count": len(pages)}
 
 
 @router.get("/img-page-image")
@@ -1216,7 +1266,12 @@ async def get_document_answer_json(
     pages = []
     for pr in page_results:
         items = pr.get("items") or []
-        items_plain = [it.get("item_data") if isinstance(it, dict) else it for it in items]
+        # 1, 2, 3, ... 10, 11 순서 보장 (문자열 정렬 방지)
+        items_sorted = sorted(
+            items,
+            key=lambda it: int(it.get("item_order", 0)) if isinstance(it, dict) else 0,
+        )
+        items_plain = [it.get("item_data") if isinstance(it, dict) else it for it in items_sorted]
         page_obj = {k: v for k, v in pr.items() if k != "items"}
         page_obj["items"] = items_plain
         pages.append(page_obj)
@@ -1228,6 +1283,85 @@ async def get_document_answer_json(
         "total_pages": total_pages,
         "pages": pages,
     }
+
+
+class SaveAnswerJsonRequest(BaseModel):
+    """문서 전체 정답지 한 번에 저장 (DB만, 벡터 DB 없음). pages는 GET answer-json과 동일 형식."""
+    pages: List[dict]  # [ { page_number, page_role?, page_meta?, items: [ item_data, ... ] }, ... ]
+
+
+@router.put("/{pdf_filename}/answer-json")
+async def save_document_answer_json(
+    pdf_filename: str,
+    body: SaveAnswerJsonRequest,
+    db=Depends(get_db)
+):
+    """
+    현재 상태를 문서 전체 answer-json으로 DB에 한 번에 반영.
+    행마다 PUT 하지 않으므로 빠르고, refetch 시 null 덮어쓰기 없음.
+    """
+    doc = db.get_document(pdf_filename)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    form_type = doc.get("form_type")
+    pages = body.pages if isinstance(body.pages, list) else []
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            first_item_keys = None
+            for page_obj in pages:
+                page_number = page_obj.get("page_number")
+                if page_number is None:
+                    continue
+                page_number = int(page_number)
+                page_role = (page_obj.get("page_role") or "detail").strip() or "detail"
+                if page_role not in ("cover", "detail", "summary", "reply"):
+                    page_role = "detail"
+                page_meta = page_obj.get("page_meta")
+                page_meta_json = json.dumps(page_meta, ensure_ascii=False) if isinstance(page_meta, dict) else "{}"
+                items = page_obj.get("items") if isinstance(page_obj.get("items"), list) else []
+
+                cursor.execute("""
+                    INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
+                    VALUES (%s, %s, %s, %s::jsonb)
+                    ON CONFLICT (pdf_filename, page_number)
+                    DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta
+                """, (pdf_filename, page_number, page_role, page_meta_json))
+
+                cursor.execute(
+                    "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
+                    (pdf_filename, page_number),
+                )
+                for item_order, item_dict in enumerate(items, 1):
+                    if not isinstance(item_dict, dict):
+                        continue
+                    separated = db._separate_item_fields(item_dict, form_type=form_type)
+                    item_data = separated.get("item_data") or {}
+                    if first_item_keys is None and item_data:
+                        first_item_keys = list(item_data.keys())
+                    cursor.execute("""
+                        INSERT INTO items_current (
+                            pdf_filename, page_number, item_order,
+                            first_review_checked, second_review_checked,
+                            item_data
+                        )
+                        VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+                    """, (
+                        pdf_filename, page_number, item_order,
+                        json.dumps(item_data, ensure_ascii=False),
+                    ))
+            if first_item_keys:
+                cursor.execute("""
+                    UPDATE documents_current
+                    SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE pdf_filename = %s
+                """, (json.dumps({"item_data_keys": first_item_keys}, ensure_ascii=False), pdf_filename))
+            conn.commit()
+        return {"success": True, "message": "Answer JSON saved (DB only)", "pages_count": len(pages)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{pdf_filename}")

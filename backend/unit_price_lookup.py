@@ -1,6 +1,7 @@
 """
 제품명(商品名)으로 unit_price.csv에서 유사도 매칭하여 시키리/본부장 단가 조회.
-notepad.ipynb의 split_name_and_capacity, find_similar_supers 로직과 동일.
+- 제품명/용량 유사도: 여기서는 difflib 사용 (notepad.ipynb의 split_name_and_capacity, 유사도 로직과 동일).
+- 슈퍼명 유사도(담당 필터 등): DB에서 pg_trgm similarity() 사용 (db_manager).
 """
 import re
 from pathlib import Path

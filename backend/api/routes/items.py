@@ -4,7 +4,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from pydantic import BaseModel
 
 from database.registry import get_db
@@ -15,7 +15,7 @@ router = APIRouter()
 
 # 프로젝트 루트 (items.py: backend/api/routes/items.py -> parent*4 = project_root)
 _ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "unit_price.csv"
+_UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
 
 
 # 통계 API는 반드시 동적 경로보다 먼저 정의해야 함
@@ -110,12 +110,58 @@ async def get_review_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/stats/available-year-months")
+async def get_available_year_months(db=Depends(get_db)):
+    """
+    現況フィルタ用。請求年月が設定されている文書の distinct (data_year, data_month) 一覧。
+    返却: [{ "year": int, "month": int }, ...] 降順。
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT data_year AS y, data_month AS m
+                FROM (
+                    SELECT data_year, data_month FROM documents_current
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    UNION
+                    SELECT data_year, data_month FROM documents_archive
+                    WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                ) t
+                ORDER BY y DESC, m DESC
+            """)
+            rows = cursor.fetchall()
+            return {"year_months": [{"year": r[0], "month": r[1]} for r in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _ym_filter_clause(year: Optional[int], month: Optional[int]) -> tuple[str, tuple]:
+    """연월 필터 절과 파라미터 반환. (clause, params) — 둘 다 지정 시에만 필터 적용."""
+    if year is not None and month is not None:
+        return " AND data_year = %s AND data_month = %s", (year, month)
+    return "", ()
+
+
+def _ym_params_list(year: Optional[int], month: Optional[int], count: int = 1) -> tuple:
+    """연월 파라미터를 count회 반복 (여러 CTE용)."""
+    if year is not None and month is not None:
+        return (year, month) * count
+    return ()
+
+
 @router.get("/stats/review-by-items")
-async def get_review_stats_by_items(db=Depends(get_db)):
+async def get_review_stats_by_items(
+    year: Optional[int] = Query(None, description="請求年"),
+    month: Optional[int] = Query(None, description="請求月"),
+    db=Depends(get_db),
+):
     """
     検討状況をアイテム数基準で集計。detail ページ・得意先ありのアイテムのみ対象。
-    現況用：base DB（参照用・img同期文書）を除く。data_year/data_month が設定されている文書のみ集計。
+    year/month 指定時はその請求年月で絞り込み。
     """
+    ym_clause, _ = _ym_filter_clause(year, month)
+    ym_params = _ym_params_list(year, month, 2)  # current + archive
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -123,9 +169,11 @@ async def get_review_stats_by_items(db=Depends(get_db)):
                 WITH non_base_docs AS (
                     SELECT pdf_filename FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION
                     SELECT pdf_filename FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.pdf_filename, i.first_review_checked, i.second_review_checked
@@ -156,7 +204,7 @@ async def get_review_stats_by_items(db=Depends(get_db)):
                     COUNT(*) FILTER (WHERE first_review_checked = true) AS first_checked_count,
                     COUNT(*) FILTER (WHERE second_review_checked = true) AS second_checked_count
                 FROM detail_items
-            """)
+            """, ym_params)
             row = cursor.fetchone()
             total = row[0] or 0
             total_docs = row[1] or 0
@@ -175,11 +223,17 @@ async def get_review_stats_by_items(db=Depends(get_db)):
 
 
 @router.get("/stats/review-by-user")
-async def get_review_stats_by_user(db=Depends(get_db)):
+async def get_review_stats_by_user(
+    year: Optional[int] = Query(None, description="請求年"),
+    month: Optional[int] = Query(None, description="請求月"),
+    db=Depends(get_db),
+):
     """
     検討チェックを誰が何件したか（증빙용 현황판）。
-    detail ページ・得意先ありのアイテムのみ対象（review-by-items と同条件）。
+    year/month 指定時はその請求年月で絞り込み。
     """
+    ym_clause, _ = _ym_filter_clause(year, month)
+    ym_params = _ym_params_list(year, month, 2)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -187,9 +241,11 @@ async def get_review_stats_by_user(db=Depends(get_db)):
                 WITH non_base_docs AS (
                     SELECT pdf_filename FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION
                     SELECT pdf_filename FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.first_reviewed_by_user_id, i.second_reviewed_by_user_id
@@ -236,7 +292,7 @@ async def get_review_stats_by_user(db=Depends(get_db)):
                 LEFT JOIN second_agg s ON u.user_id = s.user_id
                 WHERE f.user_id IS NOT NULL OR s.user_id IS NOT NULL
                 ORDER BY (COALESCE(f.first_checked_count, 0) + COALESCE(s.second_checked_count, 0)) DESC
-            """)
+            """, ym_params)
             rows = cursor.fetchall()
             return {
                 "by_user": [
@@ -254,12 +310,16 @@ async def get_review_stats_by_user(db=Depends(get_db)):
 
 
 @router.get("/stats/detail-summary")
-async def get_detail_summary(db=Depends(get_db)):
+async def get_detail_summary(
+    year: Optional[int] = Query(None, description="請求年"),
+    month: Optional[int] = Query(None, description="請求月"),
+    db=Depends(get_db),
+):
     """
-    detail ページのみ・得意先ありのアイテム数で集計。
-    cover/summary/reply は含めず、page_role='detail' かつ customer が空でないものだけ。
-    現況用：base DB（参照用・img同期文書）を除く。data_year/data_month が設定されている文書のみ集計。
+    detail ページのみ・得意先ありのアイテム数で集計。year/month 指定時はその請求年月で絞り込み。
     """
+    ym_clause, _ = _ym_filter_clause(year, month)
+    ym_params = _ym_params_list(year, month, 2)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -268,10 +328,12 @@ async def get_detail_summary(db=Depends(get_db)):
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
@@ -300,7 +362,7 @@ async def get_detail_summary(db=Depends(get_db)):
                     COUNT(*) AS total_item_count,
                     COUNT(DISTINCT pdf_filename) AS total_document_count
                 FROM detail_items
-            """)
+            """, ym_params)
             row = cursor.fetchone()
             total_item_count = row[0] or 0
             total_document_count = row[1] or 0
@@ -310,10 +372,12 @@ async def get_detail_summary(db=Depends(get_db)):
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
@@ -342,7 +406,7 @@ async def get_detail_summary(db=Depends(get_db)):
                 FROM detail_items
                 GROUP BY upload_channel
                 ORDER BY cnt DESC
-            """)
+            """, ym_params)
             by_channel = [{"channel": r[0], "item_count": r[1]} for r in cursor.fetchall()]
 
             cursor.execute("""
@@ -350,10 +414,12 @@ async def get_detail_summary(db=Depends(get_db)):
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
@@ -382,7 +448,7 @@ async def get_detail_summary(db=Depends(get_db)):
                 FROM detail_items
                 GROUP BY form_type
                 ORDER BY ft
-            """)
+            """, ym_params)
             by_form_type = [{"form_type": r[0], "item_count": r[1]} for r in cursor.fetchall()]
 
             cursor.execute("""
@@ -390,10 +456,12 @@ async def get_detail_summary(db=Depends(get_db)):
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
@@ -424,7 +492,7 @@ async def get_detail_summary(db=Depends(get_db)):
                 GROUP BY data_year, data_month
                 ORDER BY data_year DESC, data_month DESC
                 LIMIT 6
-            """)
+            """, ym_params)
             by_year_month = [{"year": r[0], "month": r[1], "item_count": r[2]} for r in cursor.fetchall()]
 
             cursor.execute("""
@@ -432,10 +500,12 @@ async def get_detail_summary(db=Depends(get_db)):
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 detail_items AS (
                     SELECT i.pdf_filename, d.upload_channel, d.form_type, d.data_year, d.data_month
@@ -466,7 +536,7 @@ async def get_detail_summary(db=Depends(get_db)):
                 WHERE (data_year IS NOT NULL AND data_month IS NOT NULL)
                 GROUP BY data_year, data_month, form_type
                 ORDER BY data_year DESC, data_month DESC, form_type
-            """)
+            """, ym_params)
             rows_ym_by_form = cursor.fetchall()
             top_ym = {(d["year"], d["month"]) for d in by_year_month}
             by_year_month_by_form = [
@@ -490,12 +560,15 @@ async def get_detail_summary(db=Depends(get_db)):
 @router.get("/stats/by-customer")
 async def get_customer_stats(
     limit: int = 100,
-    db=Depends(get_db)
+    year: Optional[int] = Query(None, description="請求年"),
+    month: Optional[int] = Query(None, description="請求月"),
+    db=Depends(get_db),
 ):
     """
-    得意先別集計。detail ページのみ・得意先ありのアイテムのみ（cover 等・空・'—' は含めない）。
-    現況用：base DB（参照用・img同期文書）を除く。data_year/data_month が設定されている文書のみ集計。
+    得意先別集計。year/month 指定時はその請求年月で絞り込み。
     """
+    ym_clause, _ = _ym_filter_clause(year, month)
+    ym_params = _ym_params_list(year, month, 2)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -503,9 +576,11 @@ async def get_customer_stats(
                 WITH non_base_docs AS (
                     SELECT pdf_filename FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                     UNION
                     SELECT pdf_filename FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    """ + ym_clause + """
                 ),
                 all_items AS (
                     SELECT i.pdf_filename, i.page_number,
@@ -535,7 +610,7 @@ async def get_customer_stats(
                 GROUP BY customer_name
                 ORDER BY item_count DESC
                 LIMIT %s
-            """, (max(1, min(limit, 500)),))
+            """, ym_params + (max(1, min(limit, 500)),))
             rows = cursor.fetchall()
             return {
                 "customers": [
@@ -706,6 +781,17 @@ async def get_page_items(
                     except Exception:
                         pass
 
+            # キー・値 탭에서 JSON 순서 유지: item_data_keys 순으로 item_data 재정렬
+            if item_data_keys:
+                ordered_item_data: Dict[str, Any] = {}
+                for k in item_data_keys:
+                    if k in item_data:
+                        ordered_item_data[k] = item_data[k]
+                for k in item_data:
+                    if k not in item_data_keys:
+                        ordered_item_data[k] = item_data[k]
+                item_data = ordered_item_data
+
             item_list.append(
                 ItemResponse(
                     item_id=item['item_id'],
@@ -717,9 +803,6 @@ async def get_page_items(
                     version=item.get('version', 1),
                 )
             )
-        # 첫 아이템의 item_data 키 순서 로그 (DB에서 온 순서인지 확인)
-        if item_list and item_list[0].item_data:
-            first_keys = list(item_list[0].item_data.keys())
         return {"items": item_list, "item_data_keys": item_data_keys}
 
     except Exception as e:
@@ -1065,6 +1148,22 @@ async def update_item(
                     status_code=409,
                     detail="Version conflict or item not found"
                 )
+            
+            # document_metadata.item_data_keys 갱신: 편집으로 추가된 키(예: タイプ)가 다음 GET에서 유지되도록
+            try:
+                doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else {}
+                current_keys = list(doc_meta.get("item_data_keys") or [])
+                new_keys = list(separated.get("item_data", {}).keys())
+                merged = list(dict.fromkeys([*current_keys, *new_keys]))
+                if merged:
+                    import json as _json
+                    meta_json = _json.dumps({**doc_meta, "item_data_keys": merged}, ensure_ascii=False)
+                    cursor.execute(
+                        "UPDATE documents_current SET document_metadata = %s::jsonb WHERE pdf_filename = %s",
+                        (meta_json, pdf_filename),
+                    )
+            except Exception:
+                pass
             
             # 락 해제 (체크박스 업데이트는 락이 없을 수 있으므로 실패해도 계속 진행)
             try:

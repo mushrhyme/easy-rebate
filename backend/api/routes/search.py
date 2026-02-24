@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from pydantic import BaseModel
 
 from database.registry import get_db
+from database.db_manager import _similarity_difflib
 from backend.core.auth import get_current_user_optional, get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
 
@@ -19,7 +20,7 @@ router = APIRouter()
 
 # 프로젝트 루트 (search.py: backend/api/routes/search.py -> parent*4 = project_root)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_UNIT_PRICE_CSV = _PROJECT_ROOT / "database" / "unit_price.csv"
+_UNIT_PRICE_CSV = _PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
 
 
 def _get_in_vector_pdf_filenames(db) -> List[str]:
@@ -67,6 +68,12 @@ class PagesByCustomersRequest(BaseModel):
     form_type: Optional[str] = None
 
 
+class CustomerSimilarityMappingRequest(BaseModel):
+    """거래처(왼쪽) vs 담당(오른쪽) 유사도 매핑 요청. notepad find_similar_supers와 동일한 difflib 사용."""
+    customer_names: List[str]
+    super_names: List[str]
+
+
 @router.get("/customer")
 async def search_by_customer(
     customer_name: str = Query(..., description="거래처명"),
@@ -84,7 +91,7 @@ async def search_by_customer(
         raise HTTPException(status_code=401, detail="내 담당만 보려면 로그인이 필요합니다")
     super_names: Optional[List[str]] = None
     if my_supers_only and current_user:
-        from modules.utils.super_import_utils import get_super_names_for_username
+        from modules.utils.retail_user_utils import get_super_names_for_username
         super_names = get_super_names_for_username(current_user["username"] or "")
         if not super_names:
             return {"query": customer_name, "total_items": 0, "total_pages": 0, "pages": []}
@@ -150,12 +157,21 @@ async def search_by_customer(
 @router.get("/my-supers")
 async def get_my_supers(current_user=Depends(get_current_user)):
     """
-    로그인 사용자 담당 거래처(슈퍼) 목록 (super_import.csv 기준).
+    로그인 사용자 담당 거래처(슈퍼) 목록 (retail_user.csv 기준).
     검토 탭에서 거래처 목록 버튼 클릭 시 "내 담당 거래처" 표시용.
     """
-    from modules.utils.super_import_utils import get_super_names_for_username
+    from modules.utils.retail_user_utils import get_super_names_for_username
     super_names = get_super_names_for_username(current_user["username"] or "")
     return {"super_names": super_names}
+
+
+@router.get("/all-super-names")
+async def get_all_super_names_route(current_user=Depends(get_current_user)):
+    """
+    retail_user.csv 대표슈퍼명 전체(중복 제거). 거래처↔담당 유사도 매핑 시 notepad와 동일하게 전체 풀에서 최적 매칭용.
+    """
+    from modules.utils.retail_user_utils import get_all_super_names
+    return {"super_names": get_all_super_names()}
 
 
 @router.get("/my-super-pages")
@@ -166,9 +182,9 @@ async def get_my_super_pages(
 ):
     """
     로그인 사용자 담당 슈퍼(거래처)에 해당하는 항목이 있는 페이지 목록.
-    super_import.csv 기준, 검토 탭 "내 담당만" 필터용 (유사도 90% 이상).
+    retail_user.csv 기준, 검토 탭 "내 담당만" 필터용 (유사도 90% 이상).
     """
-    from modules.utils.super_import_utils import get_super_names_for_username
+    from modules.utils.retail_user_utils import get_super_names_for_username
     super_names = get_super_names_for_username(current_user["username"] or "")
     pages = db.get_page_keys_by_super_names(
         super_names=super_names,
@@ -211,6 +227,34 @@ async def post_pages_by_customers(
         form_type=body.form_type,
     )
     return {"pages": pages}
+
+
+@router.post("/customer-similarity-mapping")
+async def post_customer_similarity_mapping(
+    body: CustomerSimilarityMappingRequest,
+    current_user=Depends(get_current_user),
+):
+    """
+    왼쪽(실제 거래처) 각각에 대해 오른쪽(담당) 중 유사도 최고인 1개 + 점수 반환.
+    notepad.ipynb find_similar_supers와 동일한 difflib 유사도 사용 (Levenshtein 아님).
+    """
+    left_list = [s.strip() for s in (body.customer_names or []) if s is not None]
+    right_list = [s.strip() for s in (body.super_names or []) if s is not None]
+    used_rights = set()
+    mapped: List[dict] = []
+    for left in left_list:
+        best_right = ""
+        best_score = 0.0
+        for right in right_list:
+            score = _similarity_difflib(left, right)
+            if score > best_score:
+                best_score = score
+                best_right = right
+        if best_right:
+            used_rights.add(best_right)
+        mapped.append({"left": left, "right": best_right, "score": round(best_score, 4)})
+    unmapped_rights = [r for r in right_list if r not in used_rights]
+    return {"mapped": mapped, "unmapped_rights": unmapped_rights}
 
 
 @router.get("/unit-price-by-product")
