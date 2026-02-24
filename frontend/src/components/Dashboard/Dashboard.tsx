@@ -34,15 +34,26 @@ export interface DashboardProps {
 export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) {
   const { user, logout } = useAuth()
   const queryClient = useQueryClient()
-  const isAdmin = user?.username === 'admin'
+  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const [chartByFormType, setChartByFormType] = useState(false)
   const [formTypeListModalFormType, setFormTypeListModalFormType] = useState<string | null>(null)
+  /** 연월 필터. null = 전체. RAG 섹션 제외한 현황 데이터에 적용 */
+  const [selectedYearMonth, setSelectedYearMonth] = useState<{ year: number; month: number } | null>(null)
   const { formTypeLabel } = useFormTypes()
+
+  const { data: availableYearMonthsData } = useQuery({
+    queryKey: ['items', 'stats', 'available-year-months'],
+    queryFn: () => itemsApi.getAvailableYearMonths(),
+  })
+  const yearMonthOptions = useMemo(
+    () => availableYearMonthsData?.year_months ?? [],
+    [availableYearMonthsData?.year_months]
+  )
 
   const { data: formTypesData, isLoading: formTypesLoading } = useQuery({
     queryKey: ['form-types'],
     queryFn: () => formTypesApi.getList(),
-    enabled: isAdmin,
+    // 현황 RAG·文書様式 섹션에서 비관리자도 읽기 위해 항상 조회
   })
 
   const updateFormTypeLabelMutation = useMutation({
@@ -68,15 +79,17 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
     }
   }, [formTypesData?.form_types])
 
+  const ymParam = selectedYearMonth ? { year: selectedYearMonth.year, month: selectedYearMonth.month } : undefined
+
   const { data: reviewByItemsData, isLoading: reviewByItemsLoading, error: reviewByItemsError } = useQuery({
-    queryKey: ['items', 'stats', 'review-by-items'],
-    queryFn: () => itemsApi.getReviewStatsByItems(),
+    queryKey: ['items', 'stats', 'review-by-items', selectedYearMonth?.year, selectedYearMonth?.month],
+    queryFn: () => itemsApi.getReviewStatsByItems(ymParam),
     refetchInterval: 60000,
   })
 
   const { data: reviewByUserData, isLoading: reviewByUserLoading, error: reviewByUserError } = useQuery({
-    queryKey: ['items', 'stats', 'review-by-user'],
-    queryFn: () => itemsApi.getReviewStatsByUser(),
+    queryKey: ['items', 'stats', 'review-by-user', selectedYearMonth?.year, selectedYearMonth?.month],
+    queryFn: () => itemsApi.getReviewStatsByUser(ymParam),
     refetchInterval: 60000,
   })
 
@@ -84,23 +97,18 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
     queryKey: ['rag-admin', 'status'],
     queryFn: () => ragAdminApi.getStatus(),
     refetchInterval: 60000,
+    // 현황 탭 RAG·文書様式·ページ役割 — 비관리자도 조회 가능 (백엔드 읽기 허용)
   })
 
   const { data: customerStatsData, isLoading: customerStatsLoading, error: customerStatsError } = useQuery({
-    queryKey: ['items', 'stats', 'by-customer'],
-    queryFn: () => itemsApi.getCustomerStats(100),
+    queryKey: ['items', 'stats', 'by-customer', selectedYearMonth?.year, selectedYearMonth?.month],
+    queryFn: () => itemsApi.getCustomerStats(100, ymParam),
     refetchInterval: 60000,
   })
 
   const { data: detailSummaryData, isLoading: detailSummaryLoading, error: detailSummaryError } = useQuery({
-    queryKey: ['items', 'stats', 'detail-summary'],
-    queryFn: () => itemsApi.getDetailSummary(),
-    refetchInterval: 60000,
-  })
-
-  const { data: documentsOverviewData } = useQuery({
-    queryKey: ['documents', 'overview'],
-    queryFn: () => documentsApi.getOverview(),
+    queryKey: ['items', 'stats', 'detail-summary', selectedYearMonth?.year, selectedYearMonth?.month],
+    queryFn: () => itemsApi.getDetailSummary(ymParam),
     refetchInterval: 60000,
   })
 
@@ -108,8 +116,18 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
   const { data: answerKeysFromImgData } = useQuery({
     queryKey: ['documents', 'answer-keys-from-img'],
     queryFn: () => documentsApi.getAnswerKeysFromImg(),
-    enabled: isAdmin,
+    // 현황 RAG 섹션에서 비관리자도 읽기 위해 항상 조회
   })
+
+  /** Img 폴더 내 정답지 문서의 총 페이지 수 */
+  const imgFolderPagesTotal = useMemo(() => {
+    if (!answerKeysFromImgData?.by_form_type) return 0
+    let n = 0
+    for (const arr of Object.values(answerKeysFromImgData.by_form_type)) {
+      for (const doc of arr) n += doc.total_pages ?? 0
+    }
+    return n
+  }, [answerKeysFromImgData])
 
   const chartSeries = useMemo(() => {
     if (!chartByFormType || !detailSummaryData?.by_year_month_by_form?.length) return null
@@ -174,6 +192,36 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
       </header>
 
       <div className="dashboard-body">
+        {/* 請求年月フィルタ（RAG 以外の検討・文書・得意先に適用） */}
+        <div className="dashboard-filter-bar">
+          <label className="dashboard-filter-label">請求年月</label>
+          <select
+            className="dashboard-filter-select"
+            value={
+              selectedYearMonth
+                ? `${selectedYearMonth.year}-${String(selectedYearMonth.month).padStart(2, '0')}`
+                : ''
+            }
+            onChange={(e) => {
+              const v = e.target.value
+              if (!v) {
+                setSelectedYearMonth(null)
+                return
+              }
+              const [y, m] = v.split('-').map(Number)
+              if (!isNaN(y) && !isNaN(m)) setSelectedYearMonth({ year: y, month: m })
+            }}
+          >
+            <option value="">全体</option>
+            {yearMonthOptions.map((ym) => (
+              <option key={`${ym.year}-${ym.month}`} value={`${ym.year}-${String(ym.month).padStart(2, '0')}`}>
+                {ym.year}年{String(ym.month).padStart(2, '0')}月
+              </option>
+            ))}
+          </select>
+          <span className="dashboard-filter-note">※ RAG・様式管理を除く統計に適用</span>
+        </div>
+
         {/* 検討状況（アイテム数基準・最上段）— 今月・前月比・処理量を見るため base DB 除く */}
         <section className="dashboard-section">
           <h2 className="dashboard-section-title">検討状況</h2>
@@ -271,13 +319,13 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
 
         {/* 検討チェック担当者別（증빙용 현황판） */}
         <section className="dashboard-section">
-          <h2 className="dashboard-section-title">検討チェック担当者別（증빙）</h2>
+          <h2 className="dashboard-section-title">検討チェック担当者別</h2>
           <p className="dashboard-section-note">
             ※ 誰が1次・2次チェックを何件したか。上記「検討状況」と同じ対象（detail・得意先あり）のみ集計。
           </p>
           {reviewByUserLoading && <div className="dashboard-loading">読み込み中...</div>}
           {reviewByUserError && <div className="dashboard-error">担当者別統計の取得に失敗しました</div>}
-          {!reviewByUserLoading && !reviewByUserError && reviewByUserData?.by_user?.length > 0 && (
+          {!reviewByUserLoading && !reviewByUserError && (
             <div className="dashboard-table-wrap">
               <table className="dashboard-table">
                 <thead>
@@ -449,71 +497,85 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
             ※ ベクターDB・様式・ページ役割は<strong>全文書</strong>（base DB・img 同期分を含む）を表示。
           </p>
           {ragLoading && <div className="dashboard-loading">読み込み中...</div>}
-          {ragError && <div className="dashboard-error dashboard-error-soft">RAG状態の取得に失敗しました（管理者のみの可能性があります）</div>}
+          {ragError && <div className="dashboard-error dashboard-error-soft">RAG状態の取得に失敗しました</div>}
           {!ragLoading && !ragError && ragData && (
-            <div className="dashboard-cards">
+            <div className="dashboard-cards dashboard-cards-rag">
               <div className="dashboard-card dashboard-card-rag">
                 <div className="dashboard-card-value">{ragData.total_vectors.toLocaleString()}</div>
                 <div className="dashboard-card-label">総ベクター数</div>
               </div>
-              {ragData.per_form_type?.length > 0 && (
-                <div className="dashboard-rag-by-form">
-                  {ragData.per_form_type.map(({ form_type, vector_count }) => (
-                    <div key={form_type ?? 'null'} className="dashboard-rag-form-row">
-                      <span className="dashboard-rag-form-label">様式 {formTypeLabel(form_type ?? '')}</span>
-                      <span className="dashboard-rag-form-value">{vector_count.toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <div className="dashboard-card dashboard-card-rag dashboard-card-img">
+                <div className="dashboard-card-value">{imgFolderPagesTotal.toLocaleString()}</div>
+                <div className="dashboard-card-label">正解表ページ数（base DB）</div>
+              </div>
+              <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
+                <div className="dashboard-card-value">{(ragData.answer_key_pages_total ?? 0).toLocaleString()}</div>
+                <div className="dashboard-card-label">正解表ページ数（upload DB）</div>
+              </div>
+              <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
+                <div className="dashboard-card-value">{(ragData.answer_key_pages_this_month ?? 0).toLocaleString()}</div>
+                <div className="dashboard-card-label">今月アップロード分</div>
+              </div>
+              <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
+                <div className="dashboard-card-value">{(ragData.answer_key_pages_last_month ?? 0).toLocaleString()}</div>
+                <div className="dashboard-card-label">先月アップロード分</div>
+              </div>
             </div>
           )}
 
-          {isAdmin && (
-            <div className="dashboard-subsection dashboard-form-type-labels-section">
-              <h3 className="dashboard-subtitle">様式名の管理</h3>
-              <p className="dashboard-section-note">
-                様式コード（01, 02…）の表示名を変更できます。一覧・フィルタ・検索などで使われる名前です。
-              </p>
-              {formTypesLoading ? (
-                <p className="dashboard-loading">読み込み中...</p>
-              ) : (
-                <div className="dashboard-form-type-labels-wrap">
-                  <table className="dashboard-form-type-labels-table">
-                    <colgroup>
-                      <col style={{ width: '5rem' }} />
-                      <col />
-                      <col style={{ width: '5rem' }} />
-                      <col style={{ width: '5rem' }} />
-                      <col style={{ width: '12.5rem' }} />
-                    </colgroup>
-                    <thead>
-                      <tr>
-                        <th>様式コード</th>
-                        <th>表示名</th>
-                        <th className="dashboard-th-num">嵌入文書数</th>
-                        <th className="dashboard-th-num">ページ数</th>
-                        <th className="dashboard-col-action">操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(formTypesData?.form_types ?? []).map((opt) => {
-                        const ragDocs = answerKeysFromImgData?.by_form_type?.[opt.value] ?? []
-                        const docCount = ragDocs.length
-                        const pageCount = ragDocs.reduce((sum, d) => sum + (d.total_pages ?? 0), 0)
-                        return (
+          {/* 文書様式・ページ役割 — 全員表示。管理人のみ様式名編集・保存/削除 */}
+          <div className="dashboard-subsection dashboard-form-type-labels-section">
+            {isAdmin && (
+              <>
+                <h3 className="dashboard-subtitle">様式名の管理</h3>
+                <p className="dashboard-section-note">
+                  様式コード（01, 02…）の表示名を変更できます。一覧・フィルタ・検索などで使われる名前です。
+                </p>
+              </>
+            )}
+            {formTypesLoading ? (
+              <p className="dashboard-loading">読み込み中...</p>
+            ) : (
+              <div className="dashboard-form-type-labels-wrap">
+                <table className="dashboard-form-type-labels-table">
+                  <colgroup>
+                    <col style={{ width: '5rem' }} />
+                    <col />
+                    <col style={{ width: '5rem' }} />
+                    <col style={{ width: '5rem' }} />
+                    <col style={{ width: '12.5rem' }} />
+                  </colgroup>
+                  <thead>
+                    <tr>
+                      <th>様式コード</th>
+                      <th>表示名</th>
+                      <th className="dashboard-th-num">嵌入文書数</th>
+                      <th className="dashboard-th-num">ページ数</th>
+                      <th className="dashboard-col-action">{isAdmin ? '操作' : '一覧'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(formTypesData?.form_types ?? []).map((opt) => {
+                      const ragDocs = answerKeysFromImgData?.by_form_type?.[opt.value] ?? []
+                      const docCount = ragDocs.length
+                      const pageCount = ragDocs.reduce((sum, d) => sum + (d.total_pages ?? 0), 0)
+                      return (
                         <tr key={opt.value}>
                           <td className="dashboard-form-type-code">{opt.value}</td>
                           <td>
-                            <input
-                              type="text"
-                              className="dashboard-form-type-label-input"
-                              value={formTypeLabelDrafts[opt.value] ?? opt.label}
-                              onChange={(e) =>
-                                setFormTypeLabelDrafts((prev) => ({ ...prev, [opt.value]: e.target.value }))
-                              }
-                              placeholder="表示名を入力"
-                            />
+                            {isAdmin ? (
+                              <input
+                                type="text"
+                                className="dashboard-form-type-label-input"
+                                value={formTypeLabelDrafts[opt.value] ?? opt.label}
+                                onChange={(e) =>
+                                  setFormTypeLabelDrafts((prev) => ({ ...prev, [opt.value]: e.target.value }))
+                                }
+                                placeholder="表示名を入力"
+                              />
+                            ) : (
+                              <span>{opt.label}</span>
+                            )}
                           </td>
                           <td className="dashboard-td-num">{docCount.toLocaleString()}</td>
                           <td className="dashboard-td-num">{pageCount.toLocaleString()}</td>
@@ -528,64 +590,68 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
                                 一覧
                               </button>
                             )}
-                            <button
-                              type="button"
-                              className="dashboard-button dashboard-button-small"
-                              disabled={updateFormTypeLabelMutation.isPending}
-                              onClick={() => {
-                                const name = (formTypeLabelDrafts[opt.value] ?? opt.label).trim()
-                                if (!name) return
-                                updateFormTypeLabelMutation.mutate(
-                                  { formCode: opt.value, displayName: name },
-                                  {
-                                    onSuccess: () => alert('保存しました。'),
-                                    onError: (err: unknown) => {
-                                      const msg =
-                                        err && typeof err === 'object' && 'response' in err
-                                          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                                          : null
-                                      alert(msg ? `保存に失敗しました: ${msg}` : '保存に失敗しました。')
-                                    },
-                                  }
-                                )
-                              }}
-                            >
-                              {updateFormTypeLabelMutation.isPending ? '保存中...' : '保存'}
-                            </button>
-                            <button
-                              type="button"
-                              className="dashboard-button dashboard-button-small dashboard-button-danger"
-                              disabled={deleteFormTypeMutation.isPending}
-                              onClick={() => {
-                                if (
-                                  !window.confirm(
-                                    `様式「${opt.value}」を削除しますか？\n使用中の文書がある場合は削除できません。`
-                                  )
-                                )
-                                  return
-                                deleteFormTypeMutation.mutate(opt.value, {
-                                  onSuccess: () => alert('削除しました。'),
-                                  onError: (err: unknown) => {
-                                    const msg =
-                                      err && typeof err === 'object' && 'response' in err
-                                        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                                        : null
-                                    alert(msg ? `削除に失敗しました: ${msg}` : '削除に失敗しました。')
-                                  },
-                                })
-                              }}
-                            >
-                              {deleteFormTypeMutation.isPending ? '削除中...' : '削除'}
-                            </button>
+                            {isAdmin && (
+                              <>
+                                <button
+                                  type="button"
+                                  className="dashboard-button dashboard-button-small"
+                                  disabled={updateFormTypeLabelMutation.isPending}
+                                  onClick={() => {
+                                    const name = (formTypeLabelDrafts[opt.value] ?? opt.label).trim()
+                                    if (!name) return
+                                    updateFormTypeLabelMutation.mutate(
+                                      { formCode: opt.value, displayName: name },
+                                      {
+                                        onSuccess: () => alert('保存しました。'),
+                                        onError: (err: unknown) => {
+                                          const msg =
+                                            err && typeof err === 'object' && 'response' in err
+                                              ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                              : null
+                                          alert(msg ? `保存に失敗しました: ${msg}` : '保存に失敗しました。')
+                                        },
+                                      }
+                                    )
+                                  }}
+                                >
+                                  {updateFormTypeLabelMutation.isPending ? '保存中...' : '保存'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="dashboard-button dashboard-button-small dashboard-button-danger"
+                                  disabled={deleteFormTypeMutation.isPending}
+                                  onClick={() => {
+                                    if (
+                                      !window.confirm(
+                                        `様式「${opt.value}」を削除しますか？\n使用中の文書がある場合は削除できません。`
+                                      )
+                                    )
+                                      return
+                                    deleteFormTypeMutation.mutate(opt.value, {
+                                      onSuccess: () => alert('削除しました。'),
+                                      onError: (err: unknown) => {
+                                        const msg =
+                                          err && typeof err === 'object' && 'response' in err
+                                            ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                            : null
+                                        alert(msg ? `削除に失敗しました: ${msg}` : '削除に失敗しました。')
+                                      },
+                                    })
+                                  }}
+                                >
+                                  {deleteFormTypeMutation.isPending ? '削除中...' : '削除'}
+                                </button>
+                              </>
+                            )}
                           </td>
                         </tr>
-                      )})}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           {/* 様式別 嵌入文書一覧 모달: 문서 클릭 시 정답지 탭으로 이동 */}
           {formTypeListModalFormType != null && onOpenAnswerKeyWithDocument && (

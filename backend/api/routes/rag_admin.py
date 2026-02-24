@@ -60,10 +60,9 @@ def _ensure_rag_candidate_column(db):
 
 def _ensure_admin(user: Dict[str, Any]) -> None:
     """
-    관리자 권한 확인 (username 이 'admin' 인 사용자만 허용)
+    관리자 권한 확인 (username='admin' 또는 is_admin=True)
     """
-    username = user.get("username")
-    if username != "admin":
+    if user.get("username") != "admin" and not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="관리자만 접근할 수 있습니다")
 
 
@@ -191,10 +190,10 @@ async def get_vector_db_status(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
-    현재 벡터 DB 상태 조회 (관리자 전용)
+    현재 벡터 DB 상태 조회. 로그인 사용자 전체 허용 (읽기 전용).
+    answer_key_pages_*: 사용자가 정답지로 지정해 DB에 올라간 문서의 페이지 수 (Img 폴더 제외).
     """
-    _ensure_admin(current_user)
-
+    # 읽기 전용이므로 관리자 제한 없음 — 현황 탭에서 비관리자도 RAG·文書様式·ページ役割 확인 가능
     rag_manager = get_rag_manager()
     total_vectors = rag_manager.count_examples()
 
@@ -214,9 +213,54 @@ async def get_vector_db_status(
             for row in cursor.fetchall()
         ]
 
+        # 정답지 문서(DB) 페이지 수: 전체 / 이번달 / 지난달 (created_at 기준)
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(total_pages), 0) FROM (
+                SELECT total_pages FROM documents_current WHERE is_answer_key_document = TRUE
+                UNION ALL
+                SELECT total_pages FROM documents_archive WHERE is_answer_key_document = TRUE
+            ) t
+            """
+        )
+        answer_key_pages_total = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(total_pages), 0) FROM (
+                SELECT total_pages FROM documents_current
+                WHERE is_answer_key_document = TRUE AND created_at >= date_trunc('month', CURRENT_DATE)
+                UNION ALL
+                SELECT total_pages FROM documents_archive
+                WHERE is_answer_key_document = TRUE AND created_at >= date_trunc('month', CURRENT_DATE)
+            ) t
+            """
+        )
+        answer_key_pages_this_month = int(cursor.fetchone()[0] or 0)
+
+        cursor.execute(
+            """
+            SELECT COALESCE(SUM(total_pages), 0) FROM (
+                SELECT total_pages FROM documents_current
+                WHERE is_answer_key_document = TRUE
+                  AND created_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
+                  AND created_at < date_trunc('month', CURRENT_DATE)
+                UNION ALL
+                SELECT total_pages FROM documents_archive
+                WHERE is_answer_key_document = TRUE
+                  AND created_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
+                  AND created_at < date_trunc('month', CURRENT_DATE)
+            ) t
+            """
+        )
+        answer_key_pages_last_month = int(cursor.fetchone()[0] or 0)
+
     return {
         "total_vectors": int(total_vectors),
         "per_form_type": per_form,
+        "answer_key_pages_total": answer_key_pages_total,
+        "answer_key_pages_this_month": answer_key_pages_this_month,
+        "answer_key_pages_last_month": answer_key_pages_last_month,
     }
 
 
@@ -515,20 +559,20 @@ async def build_vector_from_learning_pages(
     }
 
 
-SUPER_IMPORT_CSV_PATH = get_project_root() / "database" / "super_import.csv"
+RETAIL_USER_CSV_PATH = get_project_root() / "database" / "csv" / "retail_user.csv"
 
 
-@router.get("/super-import-csv")
-async def get_super_import_csv(
+@router.get("/retail-user-csv")
+async def get_retail_user_csv(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """super_import.csv をそのまま読み、一覧を返す（管理者専用）。担当・スーパータブで CSV 内容を表示。"""
+    """retail_user.csv をそのまま読み、一覧を返す（管理者専用）。担当・スーパータブで CSV 内容を表示。"""
     _ensure_admin(current_user)
     rows: List[Dict[str, str]] = []
-    if not SUPER_IMPORT_CSV_PATH.exists():
+    if not RETAIL_USER_CSV_PATH.exists():
         return {"rows": rows}
     try:
-        with open(SUPER_IMPORT_CSV_PATH, "r", encoding="utf-8") as f:
+        with open(RETAIL_USER_CSV_PATH, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 rows.append({
@@ -539,25 +583,25 @@ async def get_super_import_csv(
                     "username": (row.get("ID") or "").strip(),
                 })
     except Exception as e:
-        logger.exception("super_import.csv read failed: %s", e)
+        logger.exception("retail_user.csv read failed: %s", e)
         raise HTTPException(status_code=500, detail="CSVの読み込みに失敗しました")
     return {"rows": rows}
 
 
-class SuperImportCsvPutBody(BaseModel):
-    """super_import.csv 全体を上書きする用。"""
+class RetailUserCsvPutBody(BaseModel):
+    """retail_user.csv 全体を上書きする用。"""
     rows: List[Dict[str, str]]
 
 
-@router.put("/super-import-csv")
-async def put_super_import_csv(
-    body: SuperImportCsvPutBody,
+@router.put("/retail-user-csv")
+async def put_retail_user_csv(
+    body: RetailUserCsvPutBody,
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """super_import.csv を指定内容で上書き（管理者専用）。"""
+    """retail_user.csv を指定内容で上書き（管理者専用）。"""
     _ensure_admin(current_user)
     try:
-        with open(SUPER_IMPORT_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+        with open(RETAIL_USER_CSV_PATH, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["대표슈퍼코드", "대표슈퍼명", "담당자ID", "담당자명", "ID"])
             for r in body.rows:
@@ -569,7 +613,68 @@ async def put_super_import_csv(
                     (r.get("username") or "").strip(),
                 ])
     except Exception as e:
-        logger.exception("super_import.csv write failed: %s", e)
+        logger.exception("retail_user.csv write failed: %s", e)
+        raise HTTPException(status_code=500, detail="CSVの書き込みに失敗しました")
+    return {"message": "保存しました", "rows_count": len(body.rows)}
+
+
+DIST_RETAIL_CSV_PATH = get_project_root() / "database" / "csv" / "dist_retail.csv"
+
+
+@router.get("/dist-retail-csv")
+async def get_dist_retail_csv(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """dist_retail.csv をそのまま読み、一覧を返す（管理者専用）。"""
+    _ensure_admin(current_user)
+    rows: List[Dict[str, str]] = []
+    if not DIST_RETAIL_CSV_PATH.exists():
+        return {"rows": rows}
+    try:
+        with open(DIST_RETAIL_CSV_PATH, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append({
+                    "dist_code": (row.get("판매처코드") or "").strip(),
+                    "dist_name": (row.get("판매처명") or "").strip(),
+                    "super_code": (row.get("대표슈퍼코드") or "").strip(),
+                    "super_name": (row.get("대표슈퍼명") or "").strip(),
+                    "person_id": (row.get("담당자ID") or "").strip(),
+                    "person_name": (row.get("담당자명") or "").strip(),
+                })
+    except Exception as e:
+        logger.exception("dist_retail.csv read failed: %s", e)
+        raise HTTPException(status_code=500, detail="CSVの読み込みに失敗しました")
+    return {"rows": rows}
+
+
+class DistRetailCsvPutBody(BaseModel):
+    """dist_retail.csv 全体を上書きする用。"""
+    rows: List[Dict[str, str]]
+
+
+@router.put("/dist-retail-csv")
+async def put_dist_retail_csv(
+    body: DistRetailCsvPutBody,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """dist_retail.csv を指定内容で上書き（管理者専用）。"""
+    _ensure_admin(current_user)
+    try:
+        with open(DIST_RETAIL_CSV_PATH, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["판매처코드", "판매처명", "대표슈퍼코드", "대표슈퍼명", "담당자ID", "담당자명"])
+            for r in body.rows:
+                writer.writerow([
+                    (r.get("dist_code") or "").strip(),
+                    (r.get("dist_name") or "").strip(),
+                    (r.get("super_code") or "").strip(),
+                    (r.get("super_name") or "").strip(),
+                    (r.get("person_id") or "").strip(),
+                    (r.get("person_name") or "").strip(),
+                ])
+    except Exception as e:
+        logger.exception("dist_retail.csv write failed: %s", e)
         raise HTTPException(status_code=500, detail="CSVの書き込みに失敗しました")
     return {"message": "保存しました", "rows_count": len(body.rows)}
 
