@@ -79,16 +79,28 @@ DEBUG=true uv run rebate-server
 
 ### 4. 프론트엔드 (React)
 
-**다른 터미널**에서 실행합니다.
+**4.1 한 번에 실행 (권장)**
 
-**4.1 의존성 설치**
+프로젝트 루트에서 다음 한 줄로 백엔드·프론트를 동시에 띄웁니다.
+
+```bash
+./dev.sh
+```
+
+종료 시 `Ctrl+C` 한 번이면 두 서버가 함께 종료됩니다.
+
+**4.2 개별 실행**
+
+**다른 터미널**에서 각각 실행할 수도 있습니다.
+
+**4.3 의존성 설치**
 
 ```bash
 cd frontend
 npm install
 ```
 
-**4.2 개발 서버 실행**
+**4.4 개발 서버 실행**
 
 ```bash
 npm run dev
@@ -108,9 +120,8 @@ API는 백엔드 주소를 가리키도록 `frontend` 쪽 설정(`.env` 또는 `
 | 3 | 백엔드 의존성 | `uv sync` |
 | 4 | 환경 변수 | 루트에 `.env` 생성·작성 |
 | 5 | DB 생성·스키마 | `createdb` + `psql ... init_database.sql` |
-| 6 | 백엔드 실행 | `uv run rebate-server` |
-| 7 | 프론트 의존성 | `cd frontend` → `npm install` |
-| 8 | 프론트 실행 | `npm run dev` |
+| 6 | 백엔드+프론트 실행 | `./dev.sh` (권장) |
+| 7 | 또는 개별 실행 | 백엔드: `uv run rebate-server` / 프론트: `cd frontend` → `npm run dev` |
 
 가상환경을 수동으로 만들거나 `activate` 할 필요 없습니다. `uv sync` 후 `uv run rebate-server` 만 하면 됩니다.
 

@@ -39,5 +39,5 @@ rebate-server = "backend.main:run"
 where = ["."]
 include = ["backend*", "database*", "modules*"]
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []
