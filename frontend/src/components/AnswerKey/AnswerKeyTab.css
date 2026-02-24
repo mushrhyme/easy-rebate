@@ -546,6 +546,13 @@
   gap: 0.375rem;
 }
 
+.answer-key-kv-block-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #374151;
+  margin-bottom: 0.25rem;
+}
+
 .answer-key-kv-block.answer-key-kv-dirty {
   border-color: #f59e0b;
   background: #fffbeb;
@@ -656,6 +663,24 @@
 .answer-key-kv-select {
   cursor: pointer;
   height: 2rem;
+}
+
+/* 区 필드: 숫자 옆에 区_mapping 라벨 표시 */
+.answer-key-kv-value-with-ku {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+.answer-key-kv-value-with-ku .answer-key-kv-input {
+  flex: 0 1 auto;
+  min-width: 4rem;
+}
+.answer-key-ku-label {
+  font-size: 0.8rem;
+  color: #6b7280;
+  white-space: nowrap;
 }
 
 /* 키(컬럼) 관리 */

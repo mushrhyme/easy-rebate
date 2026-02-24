@@ -326,10 +326,21 @@
 .rag-admin-subtabs {
   display: inline-flex;
   gap: 0.4rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.35rem;
   border-radius: 999px;
   padding: 0.15rem;
   background: #eef2ff;
+}
+
+/* タブ直下の説明文: 上余白を詰める */
+.rag-admin-subtabs + .rag-admin-helper {
+  margin-top: 0.35rem;
+}
+
+/* 説明文と検索欄の間: 余白を確保 */
+.rag-admin-master-actions-top {
+  margin-top: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 .rag-admin-subtab-button {
@@ -350,7 +361,7 @@
 /* ユーザー表: master と同じグリッド・罫線スタイル */
 .rag-admin-users-table {
   width: 100%;
-  min-width: 720px;
+  min-width: 1320px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.85rem;
@@ -368,9 +379,9 @@
 
 .rag-admin-users-table th.rag-admin-master-col-action,
 .rag-admin-users-table td.rag-admin-master-col-action {
-  width: 160px;
-  min-width: 160px;
-  max-width: 160px;
+  width: 90px;
+  min-width: 90px;
+  max-width: 90px;
   box-sizing: border-box;
   overflow: visible;
   padding: 0.3rem 0.4rem !important;
@@ -409,12 +420,54 @@
   background: #fff;
 }
 
-/* データ行のみ: 読み取り専用列（ID, ログインID, 状態, 最終ログイン）を薄い背景で区別 */
+.rag-admin-th-admin {
+  width: 4rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.rag-admin-th-password {
+  min-width: 88px;
+  width: 88px;
+}
+.rag-admin-th-lastlogin,
+.rag-admin-cell-lastlogin {
+  min-width: 160px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td.rag-admin-th-admin {
+  vertical-align: middle;
+  text-align: center;
+}
+
+/* データ行のみ: 読み取り専用列（ID, ログインID, 最終ログイン）を薄い背景で区別 */
 .rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(1),
 .rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(2),
-.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(9),
-.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(10) {
+.rag-admin-users-table tbody tr:not(.rag-admin-master-new-row) td:nth-child(11) {
   background: #f8fafc;
+}
+
+.rag-admin-users-password-cell {
+  min-width: 88px;
+  vertical-align: middle;
+}
+.rag-admin-users-password-cell .rag-admin-password-cell-inner {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+}
+.rag-admin-users-password-cell .rag-admin-password-input {
+  width: 6.5rem;
+  min-width: 5rem;
+  flex-shrink: 0;
+}
+.rag-admin-users-password-cell .rag-admin-button-small {
+  flex-shrink: 0;
 }
 
 /* 基準管理 master_code グリッド */
@@ -539,13 +592,53 @@
   background: #1d4ed8;
 }
 
+.rag-admin-button-add-row:disabled {
+  background-color: #2563eb;
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .rag-admin-master-actions {
   margin-top: 0.75rem;
 }
 
-.rag-admin-master-actions-top {
-  margin-top: 0;
-  margin-bottom: 0.75rem;
+/* 検索欄を「検索ボックス」として明示 */
+.rag-admin-search-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  background: #f8fafc;
+  max-width: 100%;
+  min-width: 280px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.rag-admin-search-wrap:focus-within {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+  background: #fff;
+}
+.rag-admin-search-wrap .rag-admin-search-icon {
+  flex-shrink: 0;
+  color: #64748b;
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.rag-admin-search-wrap .rag-admin-master-filter-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0.15rem 0;
+}
+.rag-admin-search-wrap .rag-admin-master-filter-input::placeholder {
+  color: #94a3b8;
+}
+.rag-admin-search-wrap .rag-admin-master-filter-input:focus {
+  outline: none;
+  box-shadow: none;
 }
 
 @media (max-width: 768px) {

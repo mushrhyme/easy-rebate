@@ -4,7 +4,7 @@
  */
 import { useMemo, useState, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { createPortal } from 'react-dom'
-import { DataGrid, type Column, type DataGridHandle } from 'react-data-grid'
+import { DataGrid, type DataGridHandle } from 'react-data-grid'
 import 'react-data-grid/lib/styles.css'
 import { useQueryClient } from '@tanstack/react-query'
 import { useItems, useUpdateItem, useCreateItem, useDeleteItem, useAcquireLock, useReleaseLock, usePageMeta } from '@/hooks/useItems'
@@ -12,69 +12,25 @@ import { useItemLocks } from '@/hooks/useItemLocks'
 import { itemsApi } from '@/api/client'
 import { useAuth } from '@/contexts/AuthContext'
 import type { ReviewStatus } from '@/types'
+import {
+  type ItemsGridRdgProps,
+  type ItemsGridRdgHandle,
+  type BulkCheckState,
+  type GridRow,
+  CONDITION_AMOUNT_KEYS,
+} from './types'
+import { parseCellNum } from './utils'
+import { ComplexFieldDetail } from './ComplexFieldDetail'
+import { useItemsGridColumns } from './useItemsGridColumns'
 import './ItemsGridRdg.css'
 
-/** 증빙 툴팁용: ISO 일시 → 짧은 표시 (예: 2025-02-22 14:30) */
-function formatReviewDate(iso: string | null | undefined): string {
-  if (!iso) return ''
-  try {
-    const d = new Date(iso)
-    if (Number.isNaN(d.getTime())) return iso
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    const h = String(d.getHours()).padStart(2, '0')
-    const min = String(d.getMinutes()).padStart(2, '0')
-    return `${y}-${m}-${day} ${h}:${min}`
-  } catch {
-    return iso
-  }
-}
-
-interface ItemsGridRdgProps {
-  pdfFilename: string
-  pageNumber: number
-  formType: string | null
-  /** 현재 페이지 1次/2次 전부 체크·일부 체크 상태 변경 시 호출 (체크박스 표시용) */
-  onBulkCheckStateChange?: (state: BulkCheckState) => void
-}
-
-export interface ItemsGridRdgHandle {
-  /** Ctrl+S와 동일: 편집 중인 첫 행 저장 후 락 해제 */
-  save: () => void
-  /** 현재 페이지 그리드의 1次 검토를 모두 체크 */
-  checkAllFirst: () => Promise<void>
-  /** 현재 페이지 그리드의 2次 검토를 모두 체크 */
-  checkAllSecond: () => Promise<void>
-  /** 현재 페이지 그리드의 1次 검토를 모두 해제 */
-  uncheckAllFirst: () => Promise<void>
-  /** 현재 페이지 그리드의 2次 검토를 모두 해제 */
-  uncheckAllSecond: () => Promise<void>
-}
-
-export interface BulkCheckState {
-  allFirstChecked: boolean
-  allSecondChecked: boolean
-  someFirstChecked: boolean
-  someSecondChecked: boolean
-}
-
-interface GridRow {
-  item_id: number
-  item_order: number
-  first_review_checked: boolean
-  second_review_checked: boolean
-  first_review_reviewed_at?: string | null
-  first_review_reviewed_by?: string | null
-  second_review_reviewed_at?: string | null
-  second_review_reviewed_by?: string | null
-  [key: string]: string | number | boolean | null | undefined // item_data 필드들 (예: 商品名)
-}
+// 외부에서 import 가능하도록 re-export
+export type { ItemsGridRdgHandle, BulkCheckState }
 
 export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(function ItemsGridRdg({
   pdfFilename,
   pageNumber,
-  formType,
+  formType: _formType,
   onBulkCheckStateChange,
 }, ref) {
   const { data, isLoading, error } = useItems(pdfFilename, pageNumber)
@@ -248,8 +204,6 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
   const remoteUpdatedItemsRef = useRef<Set<number>>(new Set()) // WebSocket으로 업데이트된 아이템 ID 추적
   const remoteUpdatedValuesRef = useRef<Map<number, { first: boolean; second: boolean }>>(new Map()) // WebSocket으로 받은 체크박스 값 저장
-  const prevItemsLengthRef = useRef(items.length) // 이전 items 길이 저장
-  const prevItemIdsRef = useRef<string>(items.map(i => i.item_id).join(',')) // 이전 item_id 목록 저장
   const editingItemIdsRef = useRef(editingItemIds) // 편집 중인 아이템 ID 참조 저장
 
   // editingItemIds 변경 시 ref 업데이트
@@ -282,6 +236,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
+      // タイプ는 JSON 결과 그대로 사용 (별도 디폴트 없음)
 
       return row
     })
@@ -540,469 +495,77 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     }
   }, [updateItem, sessionId, queryClient, pdfFilename, pageNumber])
 
-  // 검토 탭 컬럼 순서: API의 item_data_keys(RAG key_order) 우선 사용, 없으면 첫 행 item_data 키 순서
-  const itemDataKeysFromApi = data?.item_data_keys && data.item_data_keys.length > 0 ? data.item_data_keys : null
-
-  // 컬럼 정의 + 행 높이 자동 계산 함수
-  const { columns, getRowHeight } = useMemo<{
-    columns: Column<GridRow>[]
-    getRowHeight: (row: GridRow) => number
-  }>(() => {
-    // items가 비어있어도 기본 컬럼은 표시
-
-    // items가 비어있을 때 기본 컬럼만 사용
-    let itemDataKeys: string[] = []
-    let orderedKeys: string[] = []
-    
-    if (hasItems) {
-      const firstItem = items[0]
-      // DB에 실제로 존재하는 키만 수집 (없는 컬럼 표시 방지)
-      const keysInDb = new Set<string>()
-      items.forEach((item) => {
-        if (item.item_data) {
-          Object.keys(item.item_data).forEach((key) => keysInDb.add(key))
-        }
-      })
-
-      // 정렬 순서: API item_data_keys(RAG key_order) 우선, 없으면 첫 행 키 순서
-      if (itemDataKeysFromApi) {
-        itemDataKeys = [...itemDataKeysFromApi]
-      } else {
-        itemDataKeys = firstItem.item_data ? Object.keys(firstItem.item_data) : []
-      }
-
-      // 키 이름 정규화:
-      // - LLM / RAG 설정에서는 '得意先名' 으로 나오는데,
-      //   DB에는 '得意先' 으로 저장된 경우가 있어 순서가 밀리는 문제를 방지
-      const normalizeKey = (key: string): string => {
-        // customer 계열 필드: DB에 존재하는 쪽 이름으로 맞춘다
-        if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先')) {
-          return '得意先'
-        }
-        if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先名')) {
-          return '得意先名'
-        }
-        return key
-      }
-
-      const normalizedItemDataKeys = itemDataKeys.map(normalizeKey)
-
-      // key_order 순서를 유지하되, DB에 있는 키만 표시
-      const orderedFromApi = normalizedItemDataKeys.filter((key) => keysInDb.has(key))
-      const extraKeys = Array.from(keysInDb).filter((key) => !normalizedItemDataKeys.includes(key))
-      orderedKeys = [...orderedFromApi, ...extraKeys]
-
-      // 디버깅용: 참조 문서의 전체 key_order와 실제 컬럼 순서를 모두 출력
-      console.log('🔵 [ItemsGridRdg] itemDataKeysFromApi(API에서 받은 전체 key_order)=', itemDataKeysFromApi)
-      console.log('🔵 [ItemsGridRdg] normalizedItemDataKeys(정규화된 key_order)=', normalizedItemDataKeys)
-      console.log('🔵 [ItemsGridRdg] keysInDb(DB에 실제 존재하는 키 전체)=', Array.from(keysInDb))
-      console.log('🔵 [ItemsGridRdg] orderedFromApi(API 순서를 따른 실제 사용 키)=', orderedFromApi)
-      console.log('🔵 [ItemsGridRdg] extraKeys(API에는 없지만 DB에만 있는 키)=', extraKeys)
-      console.log('🔵 [ItemsGridRdg] orderedKeys(그리드에 표시되는 최종 컬럼 순서 전체)=', orderedKeys)
-    }
-
-    // 컬럼 너비: 컬럼명 길이 vs 데이터 최대 길이 중 큰 쪽 기준 (일본어 헤더가 한 줄에 들어가도록 글자당 여유)
-    const CHAR_PX = 11   // 일본어·한글 글자당 픽셀 (컬럼명 한 줄 표시용)
-    const PADDING_PX = 18
-    const COL_WIDTH_MIN = 78  // 4글자 컬럼명(数量単位 등) 한 줄 최소
-    const COL_WIDTH_MAX = 280
-
-    const calculateColumnWidth = (key: string, name: string): number => {
-      const headerWidth = name.length * CHAR_PX + PADDING_PX
-      let maxDataLength = 0
-      if (hasItems) {
-        items.forEach((item) => {
-          const value = item.item_data?.[key]
-          if (value != null) {
-            const len = String(value).length
-            if (len > maxDataLength) maxDataLength = len
-          }
+  // 행 추가/삭제는 useItemsGridColumns에서 사용하므로 먼저 정의
+  const handleAddRow = useCallback(async (afterItemId?: number) => {
+    if (!pdfFilename || !pageNumber) return
+    try {
+      const emptyItemData: Record<string, unknown> = {}
+      if (items.length > 0 && items[0].item_data) {
+        Object.keys(items[0].item_data).forEach((key) => {
+          const value = items[0].item_data![key]
+          if (typeof value === 'string') emptyItemData[key] = ''
+          else if (typeof value === 'number') emptyItemData[key] = 0
+          else if (typeof value === 'boolean') emptyItemData[key] = false
+          else emptyItemData[key] = null
         })
       }
-      const dataWidth = maxDataLength * CHAR_PX + PADDING_PX
-      const rawWidth = Math.max(headerWidth, dataWidth, COL_WIDTH_MIN)
-      return Math.min(rawWidth, COL_WIDTH_MAX)
-    }
-
-    const cols: Column<GridRow>[] = [
-      {
-        key: 'item_order',
-        name: '行',
-        width: 34,
-        minWidth: 34,
-        frozen: true,
-        resizable: false,
-        renderCell: ({ row }) => (
-          <div className="rdg-cell-no" title={`No. ${row.item_order}`}>
-            {row.item_order}
-          </div>
-        ),
-      },
-    ]
-
-    // items가 있을 때만 편집 및 검토 컬럼 추가
-    if (hasItems) {
-      // 통합 액션 컬럼 (편집/추가/삭제) - ヘッダ短縮で幅を最小化
-      cols.push({
-        key: 'actions',
-        name: '編',
-        width: 34,
-        minWidth: 34,
-        frozen: true,
-        resizable: false,
-        renderCell: ({ row }) => {
-          const itemId = row.item_id
-          const isEditing = editingItemIds.has(itemId)
-          const isLocked = isItemLocked(itemId)
-          const lockedBy = getLockedBy(itemId)
-          const isLockedByMe = lockedBy === sessionId
-          const isLockedByOthers = isLocked && !isLockedByMe
-          const isHovered = hoveredRowId === itemId
-
-          return (
-            <ActionCellWithMenu
-              isHovered={isHovered}
-              isEditing={isEditing}
-              isLockedByOthers={isLockedByOthers}
-              lockedBy={lockedBy}
-              onMouseEnter={() => setHoveredRowId(itemId)}
-              onMouseLeave={() => setHoveredRowId(null)}
-              onAdd={() => handleAddRow(itemId)}
-              onDelete={() => handleDeleteRow(itemId)}
-              createItemPending={createItem.isPending}
-              deleteItemPending={deleteItem.isPending}
-            />
-          )
-        },
+      await createItem.mutateAsync({
+        itemData: emptyItemData,
+        afterItemId,
       })
-
-      cols.push({
-        key: 'first_review_checked',
-        name: '1次',
-        width: 40,
-        minWidth: 40,
-        frozen: true,
-        resizable: false,
-        editable: false, // 그리드 편집 기능 비활성화
-        renderCell: ({ row }) => {
-          const isChecked = row.first_review_checked || false
-          const tooltipText =
-            isChecked && (row.first_review_reviewed_by || row.first_review_reviewed_at)
-              ? `1次: ${row.first_review_reviewed_by ?? ''}${row.first_review_reviewed_at ? ` (${formatReviewDate(row.first_review_reviewed_at)})` : ''}`.trim()
-              : isChecked
-                ? '1次レビュー完了'
-                : '1次レビュー未完了'
-          return (
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                height: '100%',
-                width: '100%',
-              }}
-            >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
-                  handleCheckboxUpdate(row.item_id, 'first_review_checked', !isChecked)
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onMouseEnter={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  setReviewTooltip({ text: tooltipText, x: rect.left + rect.width / 2, y: rect.top })
-                }}
-                onMouseLeave={() => setReviewTooltip(null)}
-                style={{
-                  cursor: 'pointer',
-                  width: '20px',
-                  height: '20px',
-                  border: '2px solid',
-                  borderColor: isChecked ? '#667eea' : '#999',
-                  borderRadius: '3px',
-                  backgroundColor: isChecked ? '#667eea' : '#fff',
-                  color: isChecked ? '#fff' : 'transparent',
-                  fontSize: '14px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                  margin: 0,
-                  lineHeight: 1,
-                  transition: 'all 0.2s ease',
-                }}
-                title={tooltipText}
-              >
-                {isChecked ? '✓' : ''}
-              </button>
-            </div>
-          )
-        },
-      })
-      
-      cols.push({
-        key: 'second_review_checked',
-        name: '2次',
-        width: 40,
-        minWidth: 40,
-        frozen: true,
-        resizable: false,
-        editable: false, // 그리드 편집 기능 비활성화
-        renderCell: ({ row }) => {
-          const isChecked = row.second_review_checked || false
-          const tooltipText =
-            isChecked && (row.second_review_reviewed_by || row.second_review_reviewed_at)
-              ? `2次: ${row.second_review_reviewed_by ?? ''}${row.second_review_reviewed_at ? ` (${formatReviewDate(row.second_review_reviewed_at)})` : ''}`.trim()
-              : isChecked
-                ? '2次レビュー完了'
-                : '2次レビュー未完了'
-          return (
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                height: '100%',
-                width: '100%',
-              }}
-            >
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
-                  handleCheckboxUpdate(row.item_id, 'second_review_checked', !isChecked)
-                }}
-                onMouseDown={(e) => e.stopPropagation()}
-                onMouseEnter={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  setReviewTooltip({ text: tooltipText, x: rect.left + rect.width / 2, y: rect.top })
-                }}
-                onMouseLeave={() => setReviewTooltip(null)}
-                style={{
-                  cursor: 'pointer',
-                  width: '20px',
-                  height: '20px',
-                  border: '2px solid',
-                  borderColor: isChecked ? '#667eea' : '#999',
-                  borderRadius: '3px',
-                  backgroundColor: isChecked ? '#667eea' : '#fff',
-                  color: isChecked ? '#fff' : 'transparent',
-                  fontSize: '14px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 0,
-                  margin: 0,
-                  lineHeight: 1,
-                  transition: 'all 0.2s ease',
-                }}
-                title={tooltipText}
-              >
-                {isChecked ? '✓' : ''}
-              </button>
-            </div>
-          )
-        },
-      })
-      
-      // タイプ 컬럼 추가 (2차 컬럼 옆에 고정)
-      cols.push({
-        key: 'タイプ',
-        name: 'タイプ',
-        width: 100,
-        minWidth: 100,
-        frozen: true,
-        resizable: false,
-        editable: false,
-        renderCell: ({ row }) => {
-          const currentValue = row['タイプ'] || null
-          const isEditing = editingItemIds.has(row.item_id)
-          
-          if (isEditing) {
-            const selectValue =
-              typeof currentValue === 'string' || typeof currentValue === 'number'
-                ? currentValue
-                : ''
-            return (
-              <select
-                value={selectValue}
-                onChange={(e) => {
-                  const newValue = e.target.value === '' ? null : e.target.value
-                  handleCellChange(row.item_id, 'タイプ', newValue)
-                }}
-                style={{ 
-                  width: '100%', 
-                  border: '1px solid #ccc', 
-                  padding: '4px',
-                  borderRadius: '4px',
-                  fontSize: '13px'
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <option value="">Null</option>
-                <option value="条件">条件</option>
-                <option value="販促費8%">販促費8%</option>
-                <option value="販促費10%">販促費10%</option>
-                <option value="CF8%">CF8%</option>
-                <option value="CF10%">CF10%</option>
-                <option value="非課税">非課税</option>
-              </select>
-            )
-          }
-          return <span>{currentValue || 'Null'}</span>
-        },
-      })
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string }; status?: number }; message?: string }
+      const msg = err?.response?.data?.detail ?? err?.message ?? '행 추가에 실패했습니다'
+      alert(`행 추가에 실패했습니다: ${msg}`)
     }
+  }, [pdfFilename, pageNumber, items, createItem])
 
-    // item_data 필드들을 DB 순서대로 추가 (자동 너비 계산)
-    // items가 있을 때만 item_data 필드 추가
-    if (hasItems) {
-      orderedKeys.forEach((key) => {
-        // customer, タイプ는 별도 처리. 商品名 등은 item_data 키로 그대로 표시
-        if (key !== 'customer' && key !== 'タイプ') {
-          // 복잡한 구조(객체/배열) 필드는 그리드에 표시하지 않음 (배지로 표시)
-          // 첫 번째 아이템의 값으로 타입 확인
-          const firstValue = items[0]?.item_data?.[key]
-          const isComplexType = firstValue !== null && 
-            firstValue !== undefined && 
-            (typeof firstValue === 'object' || Array.isArray(firstValue))
-          
-          if (isComplexType) {
-            // 복잡한 구조는 그리드에 표시하지 않음 (배지로 표시)
-            return
-          }
-          
-          const dataBasedWidth = calculateColumnWidth(key, key)
-          cols.push({
-            key,
-            name: key,
-            width: dataBasedWidth,
-            minWidth: Math.max(dataBasedWidth, COL_WIDTH_MIN),
-            resizable: true,
-            renderCell: ({ row }) => {
-              const isEditing = editingItemIds.has(row.item_id)
-              const value = row[key] ?? ''
-              if (isEditing) {
-                return (
-                  <input
-                    type="text"
-                    value={String(value)}
-                    onChange={(e) => handleCellChange(row.item_id, key, e.target.value)}
-                    style={{ width: '100%', border: 'none', padding: '4px' }}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                )
-              }
-              return <span>{String(value)}</span>
-            },
-          })
-        }
-      })
+  const handleDeleteRow = useCallback(async (itemId: number) => {
+    if (!confirm('정말로 이 행을 삭제하시겠습니까?')) return
+    try {
+      await deleteItem.mutateAsync(itemId)
+    } catch {
+      alert('행 삭제에 실패했습니다')
     }
+  }, [deleteItem])
 
-    // 공통 필드 추가 (customer는 별도 컬럼, 商品名 등은 item_data 키로 표시됨)
-    // 하지만 별도 컬럼으로도 표시할 수 있음 (필요시)
-    // 현재는 item_data에 있는 필드만 사용
+  const itemDataKeysFromApi = data?.item_data_keys?.length ? data.item_data_keys : null
+  const kuMapping = useMemo(() => {
+    const meta = pageMetaData?.page_meta
+    const raw = meta?.区_mapping ?? meta?.['区_mapping']
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    const entries = Object.entries(raw).filter(([, v]) => v != null && typeof v === 'string') as [string, string][]
+    if (entries.length === 0) return null
+    return Object.fromEntries(entries.map(([k, v]) => [String(k).trim(), v]))
+  }, [pageMetaData?.page_meta])
+  const getKuLabel = useCallback(
+    (value: unknown): string | null => {
+      if (!kuMapping || value == null) return null
+      const s = String(value).trim()
+      return s ? (kuMapping[s] ?? kuMapping[String(Number(s))] ?? null) : null
+    },
+    [kuMapping]
+  )
 
-    // 컬럼 너비: 데이터/헤더 길이 기준 유지 (minWidth 보장, 가로 스크롤로 전체 확인)
-    const getColWidth = (col: Column<GridRow>): number => {
-      const w = col.width
-      if (typeof w === 'number') return w
-      if (typeof w === 'string') return parseInt(w, 10) || COL_WIDTH_MIN
-      return COL_WIDTH_MIN
-    }
-    const adjustedCols: Column<GridRow>[] = cols.map((col) => {
-      const w = getColWidth(col)
-      const existingMin = col.minWidth
-      const minW = existingMin != null ? existingMin : (col.frozen ? w : Math.max(w, COL_WIDTH_MIN))
-      return { ...col, width: w, minWidth: minW }
-    })
-
-    // 전체 컬럼 너비가 컨테이너보다 좁으면,
-    // 고정(frozen) 컬럼은 그대로 두고, 나머지 컬럼들을 스케일업해서 오른쪽 여백을 최대한 제거
-    const totalWidth = adjustedCols.reduce((sum, col) => sum + getColWidth(col), 0)
-    const availableWidth = containerWidth || totalWidth
-    let scaledCols: Column<GridRow>[] | null = null
-
-    if (availableWidth > 0 && totalWidth < availableWidth) {
-      const frozenCols = adjustedCols.filter((col) => col.frozen)
-      const flexibleCols = adjustedCols.filter((col) => !col.frozen)
-
-      const frozenWidth = frozenCols.reduce((sum, col) => sum + getColWidth(col), 0)
-      const flexibleWidth = flexibleCols.reduce((sum, col) => sum + getColWidth(col), 0)
-
-      const targetFlexibleWidth = Math.max(flexibleWidth, availableWidth - frozenWidth)
-
-      if (flexibleWidth > 0 && targetFlexibleWidth > flexibleWidth) {
-        const scale = targetFlexibleWidth / flexibleWidth
-        let remaining = availableWidth - frozenWidth
-
-        scaledCols = adjustedCols.map((col, idx) => {
-          if (col.frozen) {
-            return col
-          }
-          const w = getColWidth(col)
-          let newWidth = Math.max(col.minWidth ?? COL_WIDTH_MIN, Math.floor(w * scale))
-
-          // 마지막 flexible 컬럼에 남은 여유를 몰아서 줘서 합이 딱 맞도록 조정
-          const isLastFlexible = adjustedCols
-            .slice(idx + 1)
-            .every((nextCol) => nextCol.frozen)
-
-          if (isLastFlexible) {
-            newWidth = Math.max(newWidth, remaining)
-          }
-
-          remaining -= newWidth
-          return { ...col, width: newWidth }
-        })
-      }
-    }
-
-    const finalCols = scaledCols ?? adjustedCols
-
-    // 행 높이 자동 계산: 줄바꿈되는 모든 데이터 컬럼 너비로 필요한 줄 수 추정 → 글자 줄넘김 시 높이 맞춤
-    const FIXED_ROW_HEIGHT_KEYS = new Set(['item_order', 'actions', 'first_review_checked', 'second_review_checked', 'タイプ'])
-    const wrapColumnWidths: Record<string, number> = {}
-    finalCols.forEach((col) => {
-      if (!FIXED_ROW_HEIGHT_KEYS.has(col.key)) wrapColumnWidths[col.key] = getColWidth(col)
-    })
-    // 일본어·한글은 글자당 폭이 커서 한 줄당 글자 수를 적게 잡아 줄 수를 넉넉히 추정 (줄넘김 시 행 높이 부족 방지)
-    const PX_PER_CHAR = 10
-    const LINE_HEIGHT_PX = 22 // line-height + 여유 (폰트에 따라 잘림 방지)
-    const CELL_PADDING_V = 12
-    const ROW_HEIGHT_BUFFER = 8 // 세로 잘림 방지
-    const MIN_ROW_HEIGHT = 36
-    const MAX_CHARS_PER_LINE = 8 // CJK는 한 줄에 많이 안 들어가므로 상한
-
-    const getRowHeight = (row: GridRow): number => {
-      let maxLines = 1
-      for (const [key, width] of Object.entries(wrapColumnWidths)) {
-        // 컬럼 key는 得意先으로 통일될 수 있지만 row에는 得意先名으로 올 수 있음
-        const val = row[key] ?? (key === '得意先' ? row['得意先名'] : key === '得意先名' ? row['得意先'] : undefined)
-        if (val == null) continue
-        const str = String(val).trim()
-        if (!str) continue
-        const effectiveWidth = Math.max(40, width - 20) // 패딩·보더 여유 차감
-        let charsPerLine = Math.max(1, Math.floor(effectiveWidth / PX_PER_CHAR))
-        charsPerLine = Math.min(charsPerLine, MAX_CHARS_PER_LINE) // CJK 두 줄 인식 보장
-        let lines = Math.ceil(str.length / charsPerLine)
-        // 짧은 문자열(4~12자)은 좁은 컬럼에서 두 줄로 보일 수 있으므로 최소 2줄로 간주 (예: サカガミ G)
-        if (str.length >= 4 && str.length <= 12) lines = Math.max(lines, 2)
-        if (lines > maxLines) maxLines = lines
-      }
-      const contentHeight = CELL_PADDING_V + maxLines * LINE_HEIGHT_PX + ROW_HEIGHT_BUFFER
-      return Math.max(MIN_ROW_HEIGHT, contentHeight)
-    }
-
-    return { columns: finalCols, getRowHeight }
-  }, [items, itemDataKeysFromApi, editingItemIds, handleCellChange, handleCheckboxUpdate, containerWidth, isItemLocked, getLockedBy, sessionId])
-
+  const { columns, getRowHeight } = useItemsGridColumns({
+    items,
+    itemDataKeysFromApi,
+    containerWidth,
+    editingItemIds,
+    hoveredRowId,
+    setHoveredRowId,
+    setReviewTooltip,
+    handleCellChange,
+    handleCheckboxUpdate,
+    handleAddRow,
+    handleDeleteRow,
+    isItemLocked,
+    getLockedBy,
+    sessionId,
+    getKuLabel,
+    createItemPending: createItem.isPending,
+    deleteItemPending: deleteItem.isPending,
+  })
 
   // 행 편집 시작 (락 획득)
   const handleEdit = async (itemId: number) => {
@@ -1204,72 +767,6 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     }
   }
 
-  // 행 추가 핸들러 (맨 아래에 추가)
-  const handleAddRow = useCallback(async (afterItemId?: number) => {
-    if (!pdfFilename || !pageNumber) return
-
-    try {
-      // 빈 행 데이터로 새 아이템 생성
-      const emptyItemData: Record<string, any> = {}
-
-      // 기존 아이템들의 필드를 기반으로 빈 값들 추가
-      if (items.length > 0) {
-        const firstItem = items[0]
-        if (firstItem.item_data) {
-          Object.keys(firstItem.item_data).forEach(key => {
-            const value = firstItem.item_data[key]
-            // 기본값 설정
-            if (typeof value === 'string') {
-              emptyItemData[key] = ''
-            } else if (typeof value === 'number') {
-              emptyItemData[key] = 0
-            } else if (typeof value === 'boolean') {
-              emptyItemData[key] = false
-            } else {
-              emptyItemData[key] = null
-            }
-          })
-        }
-      }
-
-      await createItem.mutateAsync({
-        itemData: emptyItemData,
-        customer: '',
-        afterItemId: afterItemId,
-      })
-
-    } catch (error: any) {
-      console.error('❌ [handleAddRow] 행 추가 실패:', error)
-      const errorMessage = error?.response?.data?.detail || error?.message || '행 추가에 실패했습니다'
-      console.error('❌ [handleAddRow] 에러 상세:', {
-        status: error?.response?.status,
-        detail: error?.response?.data?.detail,
-        fullError: error,
-      })
-      alert(`행 추가에 실패했습니다: ${errorMessage}`)
-    }
-  }, [pdfFilename, pageNumber, items, createItem])
-
-  // 행 삭제 핸들러
-  const handleDeleteRow = useCallback(async (itemId: number) => {
-    console.log('🔵 [handleDeleteRow] 시작:', { itemId, type: typeof itemId })
-    
-    // 현재 행 데이터 확인
-    const currentRow = rows.find(r => r.item_id === itemId)
-    console.log('🔵 [handleDeleteRow] 현재 행 데이터:', { currentRow, allRows: rows.map(r => ({ item_id: r.item_id, item_order: r.item_order })) })
-    
-    if (!confirm('정말로 이 행을 삭제하시겠습니까?')) return
-
-    try {
-      console.log('🔵 [handleDeleteRow] deleteItem.mutateAsync 호출:', itemId)
-      await deleteItem.mutateAsync(itemId)
-      console.log('✅ [handleDeleteRow] 삭제 성공')
-    } catch (error) {
-      console.error('❌ [handleDeleteRow] 행 삭제 실패:', error)
-      alert('행 삭제에 실패했습니다')
-    }
-  }, [deleteItem, rows])
-
   // 셀 변경 핸들러 (react-data-grid의 기본 편집 기능은 사용하지 않음)
   const onRowsChange = useCallback(
     (updatedRows: GridRow[]) => {
@@ -1341,42 +838,6 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     console.log('🔵 [pageMetaFields] 최종 필드:', fields)
     return fields
   }, [pageMetaData])
-
-  // 중첩 객체를 flatten하는 함수 - hooks는 조건부 return 이전에 호출되어야 함
-  const flattenObject = useCallback((obj: any, prefix = ''): Array<{ key: string; value: any }> => {
-    const result: Array<{ key: string; value: any }> = []
-    
-    if (obj === null || obj === undefined) {
-      return [{ key: prefix || 'null', value: 'null' }]
-    }
-    
-    if (Array.isArray(obj)) {
-      obj.forEach((item, index) => {
-        if (typeof item === 'object' && item !== null) {
-          result.push(...flattenObject(item, prefix ? `${prefix}[${index}]` : `[${index}]`))
-        } else {
-          result.push({ key: prefix ? `${prefix}[${index}]` : `[${index}]`, value: String(item) })
-        }
-      })
-    } else if (typeof obj === 'object') {
-      Object.keys(obj).forEach((key) => {
-        const newKey = prefix ? `${prefix}.${key}` : key
-        const value = obj[key]
-        
-        if (value === null || value === undefined) {
-          result.push({ key: newKey, value: 'null' })
-        } else if (typeof value === 'object' || Array.isArray(value)) {
-          result.push(...flattenObject(value, newKey))
-        } else {
-          result.push({ key: newKey, value: String(value) })
-        }
-      })
-    } else {
-      result.push({ key: prefix || 'value', value: String(obj) })
-    }
-    
-    return result
-  }, [])
 
   // items가 비어있으면 그리드 숨김 (cover/summary 페이지 등)
   const isEmpty = !hasItems
@@ -1547,6 +1008,16 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
               if (row.first_review_checked || row.second_review_checked) {
                 classes = classes ? `${classes} row-checked` : 'row-checked'
               }
+              // NET < 本部長 이면 행 전체 노란색 음영 (条件金額: 単価|条件|対象数量又は金額 중 첫 유효값)
+              const condNum = CONDITION_AMOUNT_KEYS.map((k) => parseCellNum(row[k])).find((n) => n != null) ?? null
+              const shikiriNum = parseCellNum(row['仕切'])
+              const honbuchoNum = parseCellNum(row['本部長'])
+              if (condNum != null && shikiriNum != null && honbuchoNum != null) {
+                const net = shikiriNum - condNum
+                if (net < honbuchoNum) {
+                  classes = classes ? `${classes} row-net-warning` : 'row-net-warning'
+                }
+              }
               return classes.trim()
             }}
             defaultColumnOptions={{
@@ -1566,37 +1037,12 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         </div>
       )}
 
-      {/* 복잡한 필드 상세 테이블 (배지 아래 빈 화면에 표시) */}
       {selectedComplexField && (
-        <div className="complex-field-detail">
-          <div className="complex-field-detail-header">
-            <h3>{selectedComplexField.key}</h3>
-            <button 
-              className="complex-field-detail-close"
-              onClick={() => setSelectedComplexField(null)}
-            >
-              ×
-            </button>
-          </div>
-          <div className="complex-field-detail-content">
-            <table className="complex-field-table">
-              <thead>
-                <tr>
-                  <th>キー</th>
-                  <th>値</th>
-                </tr>
-              </thead>
-              <tbody>
-                {flattenObject(selectedComplexField.value).map((item, index) => (
-                  <tr key={index}>
-                    <td className="complex-field-key">{item.key}</td>
-                    <td className="complex-field-value">{item.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ComplexFieldDetail
+          keyName={selectedComplexField.key}
+          value={selectedComplexField.value}
+          onClose={() => setSelectedComplexField(null)}
+        />
       )}
 
       {/* 1次/2次 체크 증빙 툴팁 (마우스 오버 시 바로 표시) */}
@@ -1619,145 +1065,3 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     </div>
   )
 })
-
-/**
- * 액션 메뉴가 있는 셀 컴포넌트
- * 메뉴 위치를 동적으로 계산하여 버튼 아래에 정확히 표시
- */
-interface ActionCellWithMenuProps {
-  isHovered: boolean
-  isEditing: boolean
-  isLockedByOthers: boolean
-  lockedBy: string | null
-  onMouseEnter: () => void
-  onMouseLeave: () => void
-  onAdd: () => void
-  onDelete: () => void
-  createItemPending: boolean
-  deleteItemPending: boolean
-}
-
-const ActionCellWithMenu = ({
-  isHovered,
-  isEditing,
-  isLockedByOthers,
-  lockedBy,
-  onMouseEnter,
-  onMouseLeave,
-  onAdd,
-  onDelete,
-  createItemPending,
-  deleteItemPending,
-}: ActionCellWithMenuProps) => {
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
-
-  // 메뉴 위치 계산 (우측 배치, 버튼 세로 중앙 정렬)
-  useEffect(() => {
-    if (isHovered && buttonRef.current) {
-      const updatePosition = () => {
-        if (!buttonRef.current) return
-        
-        const buttonRect = buttonRef.current.getBoundingClientRect()
-        
-        // 메뉴가 이미 렌더링되어 있으면 정확한 높이로 계산
-        if (menuRef.current) {
-          const menuHeight = menuRef.current.offsetHeight
-          const buttonCenterY = buttonRect.top + buttonRect.height / 2
-          setMenuPosition({
-            top: buttonCenterY - menuHeight / 2, // 버튼 중앙에 메뉴 중앙 맞춤
-            left: buttonRect.right - 4, // 버튼 우측에 -4px (겹침 허용)
-          })
-        } else {
-          // 메뉴가 아직 렌더링되지 않았으면 대략적인 위치 설정
-          setMenuPosition({
-            top: buttonRect.top + buttonRect.height / 2 - 60, // 대략적인 중앙 위치 (메뉴 높이 약 120px 가정)
-            left: buttonRect.right - 4, // 버튼 우측에 -4px (겹침 허용)
-          })
-          
-          // 메뉴가 렌더링된 후 위치 재조정
-          setTimeout(() => {
-            if (menuRef.current && buttonRef.current) {
-              const menuHeight = menuRef.current.offsetHeight
-              const buttonRect = buttonRef.current.getBoundingClientRect()
-              const buttonCenterY = buttonRect.top + buttonRect.height / 2
-              setMenuPosition({
-                top: buttonCenterY - menuHeight / 2,
-                left: buttonRect.right - 4, // 버튼 우측에 -4px (겹침 허용)
-              })
-            }
-          }, 0)
-        }
-      }
-      
-      updatePosition()
-    } else {
-      setMenuPosition(null)
-    }
-  }, [isHovered])
-
-  const menuContent = isHovered && menuPosition ? (
-    <div
-      ref={menuRef}
-      className="action-menu"
-      style={{
-        position: 'fixed',
-        top: `${menuPosition.top}px`,
-        left: `${menuPosition.left}px`,
-        zIndex: 99999,
-      }}
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-    >
-          {/* 행 추가 버튼 */}
-          <button
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onAdd()
-            }}
-            className="action-menu-item action-menu-add"
-            disabled={isEditing || isLockedByOthers || createItemPending}
-            title={isLockedByOthers ? `編集中: ${lockedBy}` : 'この行の下に行を追加'}
-          >
-            ➕ 追加
-          </button>
-
-          {/* 삭제 버튼 */}
-          <button
-            onClick={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onDelete()
-            }}
-            className="action-menu-item action-menu-delete"
-            disabled={isEditing || isLockedByOthers || deleteItemPending}
-            title={isLockedByOthers ? `編集中: ${lockedBy}` : '行を削除'}
-          >
-            🗑️ 削除
-          </button>
-    </div>
-  ) : null
-
-  return (
-    <>
-      <div
-        className="action-cell-container"
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
-      >
-        {/* 기본: 연필 / 編集中 or 他ユーザーがロック: 鍵 */}
-        <button
-          ref={buttonRef}
-          className={`btn-action-main ${(isEditing || isLockedByOthers) ? 'btn-action-main-locked' : ''}`}
-          title={isLockedByOthers ? `編集中: ${lockedBy ?? ''}` : isEditing ? '編集中' : '操作メニュー'}
-        >
-          {isEditing || isLockedByOthers ? '🔒' : '✏️'}
-        </button>
-      </div>
-      {/* 호버 메뉴를 Portal로 body에 렌더링 */}
-      {typeof document !== 'undefined' && menuContent && createPortal(menuContent, document.body)}
-    </>
-  )
-}

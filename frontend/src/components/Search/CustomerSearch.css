@@ -360,7 +360,7 @@
   color: #6b7280;
 }
 
-/* 貯蔵・正解帳作成：検索ボタンと同じトーンで統一 */
+/* 保存・正解帳作成：検索ボタンと同じトーンで統一 */
 .page-navigation-section .nav-action-buttons {
   display: flex;
   align-items: center;
@@ -387,7 +387,7 @@
   background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
 }
 
-/* 貯蔵：보라 그라데이션과 톤 맞춘 붉은색 그라데이션 */
+/* 保存：보라 그라데이션과 톤 맞춘 붉은색 그라데이션 */
 .page-navigation-section .nav-action-btn.nav-save-btn {
   background: linear-gradient(135deg, #ef5350 0%, #c62828 100%);
   color: white;

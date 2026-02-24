@@ -133,6 +133,46 @@
   gap: 2rem;
 }
 
+.dashboard-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.dashboard-filter-label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.dashboard-filter-select {
+  min-width: 140px;
+  padding: 6px 10px;
+  font-size: 0.9375rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #1e293b;
+  cursor: pointer;
+}
+
+.dashboard-filter-select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+.dashboard-filter-note {
+  font-size: 0.8125rem;
+  color: #64748b;
+}
+
 .dashboard-section {
   background: #fff;
   border-radius: 12px;
@@ -406,13 +446,20 @@
   gap: 1rem;
 }
 
+/** RAG セクション: 5枚のカードを等幅で画面いっぱいに */
+.dashboard-cards-rag {
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1rem;
+}
+
 .dashboard-cards-review {
   grid-template-columns: repeat(5, 1fr);
   gap: 1.25rem;
 }
 
 @media (max-width: 900px) {
-  .dashboard-cards-review {
+  .dashboard-cards-review,
+  .dashboard-cards-rag {
     grid-template-columns: repeat(2, 1fr);
   }
 }
@@ -520,6 +567,25 @@
 .dashboard-card-rag .dashboard-card-value {
   color: #4f46e5;
 }
+
+.dashboard-card-answer-key {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.06) 0%, rgba(22, 163, 74, 0.08) 100%);
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.dashboard-card-answer-key .dashboard-card-value {
+  color: #15803d;
+}
+
+.dashboard-card-img {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.06) 0%, rgba(37, 99, 235, 0.08) 100%);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
+.dashboard-card-img .dashboard-card-value {
+  color: #1d4ed8;
+}
+
 
 /* テーブル */
 .dashboard-table-wrap {

@@ -313,6 +313,13 @@
   background-color: #ddd6fe !important;
 }
 
+/* NET < 本部長 行: 文字色を赤に（行全体、背景は変更しない） */
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-net-warning .rdg-cell,
+.rdg-container .rdg .rdg-row.row-net-warning .rdg-cell,
+.rdg-row.row-net-warning .rdg-cell {
+  color: #c62828 !important;
+}
+
 /* 編集モード進入時のセルスタイル（視覚的フィードバック） */
 .rdg-cell[role="gridcell"] {
   cursor: cell;
