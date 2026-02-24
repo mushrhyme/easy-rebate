@@ -19,6 +19,7 @@ CREATE TABLE users (
     role VARCHAR(100),
     category VARCHAR(100),
     is_active BOOLEAN DEFAULT TRUE,
+    is_admin BOOLEAN DEFAULT FALSE,
     password_hash VARCHAR(255),
     force_password_change BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -37,7 +38,7 @@ CREATE TABLE user_sessions (
     user_agent TEXT
 );
 
--- pg_trgm: 슈퍼명 유사도 검색(90% 이상)용 (super_import.csv 기반 담당 필터에 사용)
+-- pg_trgm: 슈퍼명 유사도 검색(90% 이상)용 (retail_user.csv 기반 담당 필터에 사용)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ============================================
@@ -446,7 +447,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================
 -- 로그인ID.xlsx → users 반영 (CSV 있으면 실행)
 -- ============================================
--- 먼저: python -m database.export_users_csv 로 database/users_import.csv 생성
+-- 먼저: python -m database.export_users_csv 로 database/csv/users_import.csv 생성 (해당 스크립트 있을 경우)
 -- 프로젝트 루트에서 실행: psql -U postgres -d rebate_db -f database/init_database.sql
 -- CSV 8열: 빈열, ID, 이름(한글), 名前, 부서명(한글), 部署, 권한, 분류
 
@@ -461,7 +462,7 @@ CREATE TEMP TABLE _users_csv (
     col_8 TEXT
 );
 
-\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8) FROM 'database/users_import.csv' WITH (FORMAT csv, HEADER true);
+\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8) FROM 'database/csv/users_import.csv' WITH (FORMAT csv, HEADER true);
 
 INSERT INTO users (username, display_name, display_name_ja, department_ko, department_ja, role, category, is_active)
 SELECT
@@ -501,5 +502,5 @@ CREATE INDEX IF NOT EXISTS idx_page_data_archive_page_meta_trgm
   ON page_data_archive USING gin ((page_meta::text) gin_trgm_ops);
 
 -- ============================================
--- 초기화 완료 (담당·슈퍼는 super_import.csv 파일만 사용、DB 테이블 없음)
+-- 초기화 완료 (담당·슈퍼는 database/csv/retail_user.csv 등 CSV만 사용、DB 테이블 없음)
 -- ============================================
