@@ -4,8 +4,17 @@ import { ragAdminApi, authApi, type CreateUserPayload, type UpdateUserPayload } 
 import { useAuth } from '@/contexts/AuthContext'
 import './RagAdminPanel.css'
 
-type AdminSubTab = 'master' | 'users'
-/** super_import.csv 1行（CSV 5列のみ） */
+type AdminSubTab = 'dist_retail' | 'master' | 'users'
+/** dist_retail.csv 1行（CSV 6列） */
+type DistRetailRow = {
+  dist_code: string
+  dist_name: string
+  super_code: string
+  super_name: string
+  person_id: string
+  person_name: string
+}
+/** retail_user.csv 1行（CSV 5列のみ） */
 type CsvRow = {
   super_code: string
   super_name: string
@@ -24,6 +33,7 @@ type UserRow = {
   role: string | null
   category: string | null
   is_active: boolean
+  is_admin?: boolean
   created_at?: string | null
   last_login_at?: string | null
 }
@@ -31,16 +41,16 @@ type UserRow = {
 export const RagAdminPanel = () => {
   const { user } = useAuth()
   const queryClient = useQueryClient()
-  const isAdmin = user?.username === 'admin'
-  const [adminSubTab, setAdminSubTab] = useState<AdminSubTab>('master')
+  const isAdmin = user?.is_admin === true || user?.username === 'admin'
+  const [adminSubTab, setAdminSubTab] = useState<AdminSubTab>('dist_retail')
 
   const {
     data: csvData,
     isLoading: csvLoading,
     refetch: refetchCsv,
   } = useQuery({
-    queryKey: ['rag-admin', 'super-import-csv'],
-    queryFn: () => ragAdminApi.getSuperImportCsv(),
+    queryKey: ['rag-admin', 'retail-user-csv'],
+    queryFn: () => ragAdminApi.getRetailUserCsv(),
     enabled: isAdmin,
   })
 
@@ -50,9 +60,8 @@ export const RagAdminPanel = () => {
     enabled: isAdmin,
   })
 
-  const updateUserActiveMutation = useMutation({
-    mutationFn: ({ userId, isActive }: { userId: number; isActive: boolean }) =>
-      authApi.updateUser(userId, { is_active: isActive }),
+  const deleteUserMutation = useMutation({
+    mutationFn: (userId: number) => authApi.deleteUser(userId),
     onSuccess: () => {
       refetchUsers()
     },
@@ -77,6 +86,7 @@ export const RagAdminPanel = () => {
     category: '',
   })
   const [userFilter, setUserFilter] = useState('')
+  const [resettingPasswordUserId, setResettingPasswordUserId] = useState<number | null>(null)
 
   useEffect(() => {
     if (usersData && Array.isArray(usersData)) {
@@ -98,29 +108,34 @@ export const RagAdminPanel = () => {
   const filteredUsers = useMemo(() => {
     const list = (usersData ?? []) as UserRow[]
     const q = userFilter.trim().toLowerCase()
-    if (!q) return list
-    return list.filter(
-      (u) =>
-        (u.username ?? '').toLowerCase().includes(q) ||
-        (u.display_name ?? '').toLowerCase().includes(q) ||
-        (u.display_name_ja ?? '').toLowerCase().includes(q) ||
-        (u.department_ko ?? '').toLowerCase().includes(q) ||
-        (u.role ?? '').toLowerCase().includes(q) ||
-        (u.category ?? '').toLowerCase().includes(q)
-    )
+    const filtered = q
+      ? list.filter(
+          (u) =>
+            (u.username ?? '').toLowerCase().includes(q) ||
+            (u.display_name ?? '').toLowerCase().includes(q) ||
+            (u.display_name_ja ?? '').toLowerCase().includes(q) ||
+            (u.department_ko ?? '').toLowerCase().includes(q) ||
+            (u.role ?? '').toLowerCase().includes(q) ||
+            (u.category ?? '').toLowerCase().includes(q)
+        )
+      : list
+    return [...filtered].sort((a, b) => a.user_id - b.user_id)
   }, [usersData, userFilter])
 
-  const updateUserInfoMutation = useMutation({
-    mutationFn: ({ userId, draft }: { userId: number; draft: UserDraft }) => {
-      const payload: UpdateUserPayload = {
-        display_name: draft.display_name.trim() || undefined,
-        display_name_ja: draft.display_name_ja.trim() || undefined,
-        department_ko: draft.department_ko.trim() || undefined,
-        department_ja: draft.department_ja.trim() || undefined,
-        role: draft.role.trim() || undefined,
-        category: draft.category.trim() || undefined,
-      }
-      return authApi.updateUser(userId, payload)
+  const saveAllUsersMutation = useMutation({
+    mutationFn: async () => {
+      const promises = Object.entries(userDrafts).map(([userId, draft]) => {
+        const payload: UpdateUserPayload = {
+          display_name: draft.display_name.trim() || undefined,
+          display_name_ja: draft.display_name_ja.trim() || undefined,
+          department_ko: draft.department_ko.trim() || undefined,
+          department_ja: draft.department_ja.trim() || undefined,
+          role: draft.role.trim() || undefined,
+          category: draft.category.trim() || undefined,
+        }
+        return authApi.updateUser(Number(userId), payload)
+      })
+      return Promise.all(promises)
     },
     onSuccess: () => {
       refetchUsers()
@@ -154,6 +169,65 @@ export const RagAdminPanel = () => {
     },
   })
 
+  // ---- 販売先-小売先 (dist_retail.csv) ----
+  const {
+    data: distRetailData,
+    isLoading: distRetailLoading,
+    refetch: refetchDistRetail,
+  } = useQuery({
+    queryKey: ['rag-admin', 'dist-retail-csv'],
+    queryFn: () => ragAdminApi.getDistRetailCsv(),
+    enabled: isAdmin,
+  })
+
+  const [distRetailFilter, setDistRetailFilter] = useState('')
+  const [distRetailRows, setDistRetailRows] = useState<DistRetailRow[]>([])
+  const [newDistRetailDraft, setNewDistRetailDraft] = useState<DistRetailRow>({
+    dist_code: '', dist_name: '', super_code: '', super_name: '', person_id: '', person_name: '',
+  })
+
+  useEffect(() => {
+    if (!distRetailLoading && distRetailData?.rows) setDistRetailRows(distRetailData.rows as DistRetailRow[])
+  }, [distRetailLoading, distRetailData])
+
+  const saveDistRetailMutation = useMutation({
+    mutationFn: (rows: DistRetailRow[]) => ragAdminApi.putDistRetailCsv(rows),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rag-admin', 'dist-retail-csv'] })
+      refetchDistRetail()
+    },
+  })
+
+  const filteredDistRetailRows = useMemo(() => {
+    const q = distRetailFilter.trim().toLowerCase()
+    const filtered = q
+      ? distRetailRows.filter((r) =>
+          (r.dist_code ?? '').toLowerCase().includes(q) ||
+          (r.dist_name ?? '').toLowerCase().includes(q) ||
+          (r.super_code ?? '').toLowerCase().includes(q) ||
+          (r.super_name ?? '').toLowerCase().includes(q) ||
+          (r.person_id ?? '').toLowerCase().includes(q) ||
+          (r.person_name ?? '').toLowerCase().includes(q)
+        )
+      : distRetailRows
+    return [...filtered].sort((a, b) =>
+      (a.dist_code ?? '').localeCompare(b.dist_code ?? '') ||
+      (a.super_code ?? '').localeCompare(b.super_code ?? '')
+    )
+  }, [distRetailRows, distRetailFilter])
+
+  const updateDistRetailRow = (index: number, field: keyof DistRetailRow, value: string) => {
+    setDistRetailRows((prev) => prev.map((row, i) => (i === index ? { ...row, [field]: value } : row)))
+  }
+  const addDistRetailRow = () => {
+    setDistRetailRows((prev) => [...prev, { ...newDistRetailDraft }])
+    setNewDistRetailDraft({ dist_code: '', dist_name: '', super_code: '', super_name: '', person_id: '', person_name: '' })
+  }
+  const removeDistRetailRow = (index: number) => {
+    setDistRetailRows((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // ---- 小売先管理 (retail_user.csv) ----
   const [csvFilter, setCsvFilter] = useState('')
   const [csvRows, setCsvRows] = useState<CsvRow[]>([])
   /** 新規行入力用（行を追加の上段の5セル） */
@@ -170,23 +244,28 @@ export const RagAdminPanel = () => {
   }, [csvLoading, csvData])
 
   const saveCsvMutation = useMutation({
-    mutationFn: (rows: CsvRow[]) => ragAdminApi.putSuperImportCsv(rows),
+    mutationFn: (rows: CsvRow[]) => ragAdminApi.putRetailUserCsv(rows),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rag-admin', 'super-import-csv'] })
+      queryClient.invalidateQueries({ queryKey: ['rag-admin', 'retail-user-csv'] })
       refetchCsv()
     },
   })
 
   const filteredCsvRows = useMemo(() => {
     const q = csvFilter.trim().toLowerCase()
-    if (!q) return csvRows
-    return csvRows.filter(
-      (r) =>
-        (r.username ?? '').toLowerCase().includes(q) ||
-        (r.super_code ?? '').toLowerCase().includes(q) ||
-        (r.super_name ?? '').toLowerCase().includes(q) ||
-        (r.person_id ?? '').toLowerCase().includes(q) ||
-        (r.person_name ?? '').toLowerCase().includes(q)
+    const filtered = q
+      ? csvRows.filter(
+          (r) =>
+            (r.username ?? '').toLowerCase().includes(q) ||
+            (r.super_code ?? '').toLowerCase().includes(q) ||
+            (r.super_name ?? '').toLowerCase().includes(q) ||
+            (r.person_id ?? '').toLowerCase().includes(q) ||
+            (r.person_name ?? '').toLowerCase().includes(q)
+        )
+      : csvRows
+    return [...filtered].sort((a, b) =>
+      (a.super_code ?? '').localeCompare(b.super_code ?? '') ||
+      (a.person_id ?? '').localeCompare(b.person_id ?? '')
     )
   }, [csvRows, csvFilter])
 
@@ -249,7 +328,7 @@ export const RagAdminPanel = () => {
           </div>
           <div className="rag-admin-title-text">
             <h1 className="rag-admin-title-main">基準情報管理</h1>
-            <p className="rag-admin-title-sub">Reference & Master Data Admin</p>
+            <p className="rag-admin-title-sub">Master Data Management</p>
           </div>
         </div>
       </div>
@@ -260,38 +339,221 @@ export const RagAdminPanel = () => {
           <div className="rag-admin-subtabs">
             <button
               type="button"
+              className={`rag-admin-subtab-button ${adminSubTab === 'dist_retail' ? 'active' : ''}`}
+              onClick={() => setAdminSubTab('dist_retail')}
+            >
+              販売先-小売先
+            </button>
+            <button
+              type="button"
               className={`rag-admin-subtab-button ${adminSubTab === 'master' ? 'active' : ''}`}
               onClick={() => setAdminSubTab('master')}
             >
-              super_import.csv
+              小売先-担当者
             </button>
             <button
               type="button"
               className={`rag-admin-subtab-button ${adminSubTab === 'users' ? 'active' : ''}`}
               onClick={() => setAdminSubTab('users')}
             >
-              ユーザー管理
+              ユーザーアカウント
             </button>
           </div>
+
+          {adminSubTab === 'dist_retail' && (
+            <>
+              <p className="rag-admin-helper">
+                販売先と小売先のマッピングを表示・編集します。編集後「保存」で上書きします。
+              </p>
+              {distRetailLoading ? (
+                <p>読み込み中...</p>
+              ) : (
+                <>
+                  <div className="rag-admin-master-actions rag-admin-master-actions-top">
+                    <div className="rag-admin-search-wrap" role="search">
+                      <svg className="rag-admin-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                      </svg>
+                      <input
+                        type="search"
+                        className="rag-admin-master-filter-input"
+                        placeholder="販売先コード・販売先名・スーパーコード・スーパー名・担当者ID・担当者名"
+                        value={distRetailFilter}
+                        onChange={(e) => setDistRetailFilter(e.target.value)}
+                        aria-label="検索"
+                      />
+                    </div>
+                  </div>
+                  <div className="rag-admin-master-grid-wrap">
+                    <table className="rag-admin-master-table">
+                      <thead>
+                        <tr>
+                          <th>販売先コード</th>
+                          <th>販売先名</th>
+                          <th>代表スーパーコード</th>
+                          <th>代表スーパー名</th>
+                          <th>担当者ID</th>
+                          <th>担当者名</th>
+                          <th className="rag-admin-master-col-action">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="rag-admin-master-new-row">
+                          <td>
+                            <input type="text" className="rag-admin-master-cell-input"
+                              value={newDistRetailDraft.dist_code}
+                              onChange={(e) => setNewDistRetailDraft((prev) => ({ ...prev, dist_code: e.target.value }))}
+                              placeholder="販売先コード" />
+                          </td>
+                          <td>
+                            <input type="text" className="rag-admin-master-cell-input"
+                              value={newDistRetailDraft.dist_name}
+                              onChange={(e) => setNewDistRetailDraft((prev) => ({ ...prev, dist_name: e.target.value }))}
+                              placeholder="販売先名" />
+                          </td>
+                          <td>
+                            <input type="text" className="rag-admin-master-cell-input"
+                              value={newDistRetailDraft.super_code}
+                              onChange={(e) => setNewDistRetailDraft((prev) => ({ ...prev, super_code: e.target.value }))}
+                              placeholder="代表スーパーコード" />
+                          </td>
+                          <td>
+                            <input type="text" className="rag-admin-master-cell-input"
+                              value={newDistRetailDraft.super_name}
+                              onChange={(e) => setNewDistRetailDraft((prev) => ({ ...prev, super_name: e.target.value }))}
+                              placeholder="代表スーパー名" />
+                          </td>
+                          <td>
+                            <input type="text" className="rag-admin-master-cell-input"
+                              value={newDistRetailDraft.person_id}
+                              onChange={(e) => setNewDistRetailDraft((prev) => ({ ...prev, person_id: e.target.value }))}
+                              placeholder="担当者ID" />
+                          </td>
+                          <td>
+                            <input type="text" className="rag-admin-master-cell-input"
+                              value={newDistRetailDraft.person_name}
+                              onChange={(e) => setNewDistRetailDraft((prev) => ({ ...prev, person_name: e.target.value }))}
+                              placeholder="担当者名" />
+                          </td>
+                          <td className="rag-admin-master-col-action">
+                            <button
+                              type="button"
+                              className="rag-admin-button rag-admin-button-small rag-admin-button-add-row"
+                              onClick={addDistRetailRow}
+                            >
+                              行を追加
+                            </button>
+                          </td>
+                        </tr>
+                        {distRetailRows.map((row, index) => {
+                          const q = distRetailFilter.trim().toLowerCase()
+                          if (
+                            q &&
+                            ![row.dist_code, row.dist_name, row.super_code, row.super_name, row.person_id, row.person_name]
+                              .some((v) => (v || '').toLowerCase().includes(q))
+                          ) return null
+                          return (
+                            <tr key={index}>
+                              <td>
+                                <input type="text" className="rag-admin-master-cell-input"
+                                  value={row.dist_code}
+                                  onChange={(e) => updateDistRetailRow(index, 'dist_code', e.target.value)} />
+                              </td>
+                              <td>
+                                <input type="text" className="rag-admin-master-cell-input"
+                                  value={row.dist_name}
+                                  onChange={(e) => updateDistRetailRow(index, 'dist_name', e.target.value)} />
+                              </td>
+                              <td>
+                                <input type="text" className="rag-admin-master-cell-input"
+                                  value={row.super_code}
+                                  onChange={(e) => updateDistRetailRow(index, 'super_code', e.target.value)} />
+                              </td>
+                              <td>
+                                <input type="text" className="rag-admin-master-cell-input"
+                                  value={row.super_name}
+                                  onChange={(e) => updateDistRetailRow(index, 'super_name', e.target.value)} />
+                              </td>
+                              <td>
+                                <input type="text" className="rag-admin-master-cell-input"
+                                  value={row.person_id}
+                                  onChange={(e) => updateDistRetailRow(index, 'person_id', e.target.value)} />
+                              </td>
+                              <td>
+                                <input type="text" className="rag-admin-master-cell-input"
+                                  value={row.person_name}
+                                  onChange={(e) => updateDistRetailRow(index, 'person_name', e.target.value)} />
+                              </td>
+                              <td className="rag-admin-master-col-action">
+                                <button
+                                  type="button"
+                                  className="rag-admin-button rag-admin-button-small rag-admin-button-danger"
+                                  onClick={() => {
+                                    if (!window.confirm('この行を削除しますか？')) return
+                                    removeDistRetailRow(index)
+                                  }}
+                                >
+                                  削除
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="rag-admin-helper">
+                    表示: {filteredDistRetailRows.length} / {distRetailRows.length} 件
+                  </p>
+                  <div className="rag-admin-master-actions">
+                    <button
+                      type="button"
+                      className="rag-admin-button primary"
+                      disabled={saveDistRetailMutation.isPending}
+                      onClick={() => {
+                        saveDistRetailMutation.mutate(distRetailRows, {
+                          onSuccess: () => alert('保存しました。'),
+                          onError: (err: unknown) => {
+                            const msg =
+                              err && typeof err === 'object' && 'response' in err
+                                ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                : null
+                            alert(msg ? `保存に失敗: ${msg}` : '保存に失敗しました。')
+                          },
+                        })
+                      }}
+                    >
+                      {saveDistRetailMutation.isPending ? '保存中...' : '保存'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
           {adminSubTab === 'master' && (
             <>
               <p className="rag-admin-helper">
-                super_import.csv の内容を表示・編集します。編集後「CSVを保存」でファイルに上書きします。
+                小売店マスターの内容を表示し、編集します。 編集後、ファイルを「保存」で上書きします。
               </p>
               {csvLoading ? (
                 <p>読み込み中...</p>
               ) : (
                 <>
                   <div className="rag-admin-master-actions rag-admin-master-actions-top">
-                    <input
-                      type="text"
-                      className="rag-admin-master-filter-input"
-                      placeholder="検索（スーパーコード・スーパー名・担当者ID・担当者名・ID）"
-                      value={csvFilter}
-                      onChange={(e) => setCsvFilter(e.target.value)}
-                      style={{ minWidth: '280px' }}
-                    />
+                    <div className="rag-admin-search-wrap" role="search">
+                      <svg className="rag-admin-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                      </svg>
+                      <input
+                        type="search"
+                        className="rag-admin-master-filter-input"
+                        placeholder="スーパーコード・スーパー名・担当者ID・担当者名・ID"
+                        value={csvFilter}
+                        onChange={(e) => setCsvFilter(e.target.value)}
+                        aria-label="検索"
+                      />
+                    </div>
                   </div>
                   <div className="rag-admin-master-grid-wrap">
                     <table className="rag-admin-master-table">
@@ -466,7 +728,7 @@ export const RagAdminPanel = () => {
                         })
                       }}
                     >
-                      {saveCsvMutation.isPending ? '保存中...' : 'CSVを保存'}
+                      {saveCsvMutation.isPending ? '保存中...' : '保存'}
                     </button>
                   </div>
                 </>
@@ -477,21 +739,26 @@ export const RagAdminPanel = () => {
           {adminSubTab === 'users' && (
             <>
               <p className="rag-admin-helper">
-                ユーザーDBの全項目を表示・編集します。ログイン回数はUIでは非表示です。
+                ユーザーDBの全項目を表示・編集します。ログイン回数はUIでは非表示です。初期パスワードはログインIDと同一です。「初期化」でログインIDと同一のパスワードに戻します（忘れた場合に使用）。
               </p>
               {usersLoading ? (
                 <p>読み込み中...</p>
               ) : (
                 <>
                   <div className="rag-admin-master-actions rag-admin-master-actions-top">
-                    <input
-                      type="text"
-                      className="rag-admin-master-filter-input"
-                      placeholder="検索（ログインID・表示名）"
-                      value={userFilter}
-                      onChange={(e) => setUserFilter(e.target.value)}
-                      style={{ minWidth: '280px' }}
-                    />
+                    <div className="rag-admin-search-wrap" role="search">
+                      <svg className="rag-admin-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                      </svg>
+                      <input
+                        type="search"
+                        className="rag-admin-master-filter-input"
+                        placeholder="ユーザー名・表示名・部署・権限・分類で検索"
+                        value={userFilter}
+                        onChange={(e) => setUserFilter(e.target.value)}
+                        aria-label="検索"
+                      />
+                    </div>
                   </div>
                   <div className="rag-admin-master-grid-wrap">
                     <table className="rag-admin-users-table">
@@ -505,8 +772,9 @@ export const RagAdminPanel = () => {
                           <th>部署(JA)</th>
                           <th>権限</th>
                           <th>分類</th>
-                          <th>状態</th>
-                          <th>最終ログイン</th>
+                          <th className="rag-admin-th-password">パスワード</th>
+                          <th className="rag-admin-th-admin">管理者</th>
+                          <th className="rag-admin-th-lastlogin">最終ログイン</th>
                           <th className="rag-admin-master-col-action">操作</th>
                         </tr>
                       </thead>
@@ -576,7 +844,9 @@ export const RagAdminPanel = () => {
                               placeholder="分類"
                             />
                           </td>
-                          <td colSpan={2}>—</td>
+                          <td>—</td>
+                          <td className="rag-admin-th-admin">—</td>
+                          <td>—</td>
                           <td className="rag-admin-master-col-action">
                             <button
                               type="button"
@@ -587,7 +857,7 @@ export const RagAdminPanel = () => {
                               }
                               onClick={() => createUserMutation.mutate()}
                             >
-                              {createUserMutation.isPending ? '追加中...' : 'ユーザー追加'}
+                              {createUserMutation.isPending ? '追加中...' : '行を追加'}
                             </button>
                           </td>
                         </tr>
@@ -688,31 +958,63 @@ export const RagAdminPanel = () => {
                                   placeholder="分類"
                                 />
                               </td>
-                              <td>{u.is_active ? '有効' : '無効'}</td>
-                              <td>{u.last_login_at ?? '—'}</td>
-                              <td className="rag-admin-master-col-action">
+                              <td className="rag-admin-users-password-cell">
                                 <button
                                   type="button"
                                   className="rag-admin-button rag-admin-button-small"
-                                  disabled={updateUserInfoMutation.isPending}
-                                  onClick={() =>
-                                    updateUserInfoMutation.mutate({ userId: u.user_id, draft })
-                                  }
+                                  disabled={resettingPasswordUserId !== null}
+                                  onClick={async () => {
+                                    setResettingPasswordUserId(u.user_id)
+                                    try {
+                                      await authApi.updateUser(u.user_id, { password: '' })
+                                      refetchUsers()
+                                    } catch (err: unknown) {
+                                      const msg =
+                                        err && typeof err === 'object' && 'response' in err
+                                          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                          : null
+                                      alert(msg ? `初期化に失敗: ${msg}` : '初期化に失敗しました。')
+                                    } finally {
+                                      setResettingPasswordUserId(null)
+                                    }
+                                  }}
                                 >
-                                  {updateUserInfoMutation.isPending ? '保存中...' : '保存'}
+                                  {resettingPasswordUserId === u.user_id ? '初期化中...' : '初期化'}
                                 </button>
+                              </td>
+                              <td className="rag-admin-th-admin">
+                                <input
+                                  type="checkbox"
+                                  checked={!!u.is_admin}
+                                  disabled={u.user_id === user?.user_id}
+                                  title={u.user_id === user?.user_id ? '自分自身の管理者権限は変更できません' : ''}
+                                  onChange={async () => {
+                                    const next = !u.is_admin
+                                    try {
+                                      await authApi.updateUser(u.user_id, { is_admin: next })
+                                      refetchUsers()
+                                    } catch (e) {
+                                      alert('管理者権限の更新に失敗しました')
+                                    }
+                                  }}
+                                />
+                              </td>
+                              <td className="rag-admin-cell-lastlogin" title={u.last_login_at ?? undefined}>
+                                  {u.last_login_at
+                                    ? u.last_login_at.replace('T', ' ').slice(0, 19)
+                                    : '—'}
+                                </td>
+                              <td className="rag-admin-master-col-action">
                                 <button
                                   type="button"
                                   className="rag-admin-button rag-admin-button-small rag-admin-button-danger"
-                                  disabled={updateUserActiveMutation.isPending || u.user_id === user?.user_id}
-                                  onClick={() =>
-                                    updateUserActiveMutation.mutate({
-                                      userId: u.user_id,
-                                      isActive: !u.is_active,
-                                    })
-                                  }
+                                  disabled={deleteUserMutation.isPending || u.user_id === user?.user_id}
+                                  onClick={() => {
+                                    if (!window.confirm(`「${u.username}」を削除しますか？この操作は元に戻せません。`)) return
+                                    deleteUserMutation.mutate(u.user_id)
+                                  }}
                                 >
-                                  {u.is_active ? '無効化' : '有効化'}
+                                  削除
                                 </button>
                               </td>
                             </tr>
@@ -724,6 +1026,19 @@ export const RagAdminPanel = () => {
                   <p className="rag-admin-helper">
                     表示: {filteredUsers.length} / {(usersData ?? []).length} 件
                   </p>
+                  <div className="rag-admin-master-actions">
+                    <button
+                      type="button"
+                      className="rag-admin-button primary"
+                      disabled={
+                        saveAllUsersMutation.isPending ||
+                        Object.keys(userDrafts).length === 0
+                      }
+                      onClick={() => saveAllUsersMutation.mutate()}
+                    >
+                      {saveAllUsersMutation.isPending ? '保存中...' : '保存'}
+                    </button>
+                  </div>
                 </>
               )}
             </>

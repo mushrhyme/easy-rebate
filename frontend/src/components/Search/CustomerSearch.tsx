@@ -12,28 +12,6 @@ import type { Document } from '@/types'
 import { getDocumentYearMonth } from '@/utils/documentDate'
 import './CustomerSearch.css'
 
-/** 문자열 유사도 0~1 (difflib SequenceMatcher.ratio와 유사). Levenshtein 기반. */
-function stringSimilarity(a: string, b: string): number {
-  const x = (a ?? '').trim()
-  const y = (b ?? '').trim()
-  if (!x || !y) return 0
-  const n = x.length
-  const m = y.length
-  const dp: number[][] = Array(n + 1)
-  for (let i = 0; i <= n; i++) dp[i] = Array(m + 1).fill(0)
-  for (let i = 0; i <= n; i++) dp[i][0] = i
-  for (let j = 0; j <= m; j++) dp[0][j] = j
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      const cost = x[i - 1] === y[j - 1] ? 0 : 1
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
-    }
-  }
-  const dist = dp[n][m]
-  const maxLen = Math.max(n, m, 1)
-  return 1 - dist / maxLen
-}
-
 // 페이지 타입
 interface Page {
   pdfFilename: string
@@ -238,28 +216,29 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     enabled: showCustomerListModal,
   })
 
-  // 왼쪽(실제 거래처) 기준 유사도 매핑: 각 왼쪽에 가장 유사한 오른쪽(担当) 1개 + 매핑 안 된 오른쪽은 왼쪽 공란으로
+  // 왼쪽(실제 거래처) vs 오른쪽(대표슈퍼명 전체) 유사도 매핑. notepad find_similar_supers와 동일하게 전체 풀에서 최적 매칭
+  const leftList = reviewTabCustomersData?.customer_names ?? []
+  const { data: allSuperNamesData } = useQuery({
+    queryKey: ['search', 'all-super-names'],
+    queryFn: () => searchApi.getAllSuperNames(),
+    enabled: showCustomerListModal,
+  })
+  const rightListForMapping = allSuperNamesData?.super_names ?? []
+  const { data: mappingData } = useQuery({
+    queryKey: ['search', 'customer-similarity-mapping', leftList, rightListForMapping],
+    queryFn: () => searchApi.getCustomerSimilarityMapping(leftList, rightListForMapping),
+    enabled: showCustomerListModal && (leftList.length > 0 || rightListForMapping.length > 0),
+  })
   const customerMappingRows = useMemo(() => {
-    const leftList = reviewTabCustomersData?.customer_names ?? []
-    const rightList = mySupersError ? [] : (mySupersData?.super_names ?? [])
-    const mapped: { left: string; right: string; score: number }[] = []
-    const usedRights = new Set<string>()
-    for (const left of leftList) {
-      let bestRight = ''
-      let bestScore = 0
-      for (const right of rightList) {
-        const score = stringSimilarity(left, right)
-        if (score > bestScore) {
-          bestScore = score
-          bestRight = right
-        }
-      }
-      if (bestRight) usedRights.add(bestRight)
-      mapped.push({ left, right: bestRight, score: bestScore })
+    if (!mappingData) return { mapped: [], unmappedRights: [] }
+    const mySupers = mySupersError ? [] : (mySupersData?.super_names ?? [])
+    const usedRights = new Set((mappingData.mapped ?? []).map((m) => m.right))
+    const unmappedRights = mySupers.filter((r) => !usedRights.has(r))
+    return {
+      mapped: mappingData.mapped,
+      unmappedRights,
     }
-    const unmappedRights = rightList.filter((r) => !usedRights.has(r))
-    return { mapped, unmappedRights }
-  }, [reviewTabCustomersData?.customer_names, mySupersData?.super_names, mySupersError])
+  }, [mappingData, mySupersData?.super_names, mySupersError])
 
   // 모든 페이지를 평탄화하여 리스트 생성 (검색어가 없을 때 사용)
   // 선택된 연월(또는 기본 최신 연월)의 데이터만 필터링 (정답지 대상 문서 제외)
@@ -369,6 +348,38 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
       }
     })
   }, [selectedCustomerNamesForFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewFilter, reviewStats])
+
+  // 검토 드롭다운 괄호 안 페이지 수: 담당자/검색/양식지 적용된 범위만 집계 (검토 필터 적용 전)
+  const filteredReviewCounts = useMemo(() => {
+    let pages: Page[]
+    if (selectedCustomerNamesForFilter.length > 0) {
+      pages = filterPages
+    } else if (searchQuery.trim()) {
+      pages = searchPages
+    } else {
+      pages = allPages
+    }
+    if (formTypeFilter) {
+      pages = pages.filter((p) => p.formType === formTypeFilter)
+    }
+    const keySet = new Set(pages.map((p) => `${p.pdfFilename}_${p.pageNumber}`))
+    if (!reviewStats?.page_stats) {
+      return { firstReviewed: 0, firstNotReviewed: 0, secondReviewed: 0, secondNotReviewed: 0 }
+    }
+    let firstReviewed = 0
+    let firstNotReviewed = 0
+    let secondReviewed = 0
+    let secondNotReviewed = 0
+    reviewStats.page_stats.forEach((stat) => {
+      const key = `${stat.pdf_filename}_${stat.page_number}`
+      if (!keySet.has(key)) return
+      if (stat.first_reviewed) firstReviewed += 1
+      else firstNotReviewed += 1
+      if (stat.second_reviewed) secondReviewed += 1
+      else secondNotReviewed += 1
+    })
+    return { firstReviewed, firstNotReviewed, secondReviewed, secondNotReviewed }
+  }, [selectedCustomerNamesForFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewStats])
 
   // 현재 페이지 정보
   const currentPage = displayPages[currentPageIndex] || null
@@ -735,7 +746,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
               </button>
             </span>
           )}
-          {/* 貯蔵 + 正解帳作成（管理者のみ）：同じトーンで並べる */}
+          {/* 保存 + 正解帳作成（管理者のみ）：同じトーンで並べる */}
           <div className="nav-action-buttons">
             <button
               type="button"
@@ -743,7 +754,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
               onClick={() => gridRef.current?.save?.()}
               title="編集中の行を保存（Ctrl+Sと同じ）"
             >
-              貯蔵
+              保存
             </button>
             {currentPage && (
               <button
@@ -820,12 +831,12 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
             <ReviewRateBadges stats={currentPageStats} />
           </div>
 
-          {/* 검토 필터 드롭다운 */}
+          {/* 검토 필터 드롭다운: 담당자/검색/양식지 필터 적용 범위 기준 페이지 수 */}
           <ReviewFilterDropdown
-            firstReviewedCount={reviewStats?.first_reviewed_count || 0}
-            firstNotReviewedCount={reviewStats?.first_not_reviewed_count || 0}
-            secondReviewedCount={reviewStats?.second_reviewed_count || 0}
-            secondNotReviewedCount={reviewStats?.second_not_reviewed_count || 0}
+            firstReviewedCount={filteredReviewCounts.firstReviewed}
+            firstNotReviewedCount={filteredReviewCounts.firstNotReviewed}
+            secondReviewedCount={filteredReviewCounts.secondReviewed}
+            secondNotReviewedCount={filteredReviewCounts.secondNotReviewed}
             currentFilter={reviewFilter}
             onFilterChange={handleReviewFilterChange}
           />
@@ -1001,13 +1012,13 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
         </div>
       )}
 
-      {/* 取引先一覧モーダル: 左=実際取引先、右=担当(super_import)、類似度でマッピング */}
+      {/* 取引先一覧モーダル: 左=実際取引先、右=担当(retail_user)、類似度でマッピング */}
       {showCustomerListModal && (
         <div className="answer-key-modal-overlay" onClick={() => setShowCustomerListModal(false)}>
           <div className="answer-key-modal answer-key-modal-wide customer-list-modal" onClick={(e) => e.stopPropagation()}>
             <h3 className="answer-key-modal-title">取引先一覧（類似度マッピング）</h3>
             <p className="customer-list-modal-desc">
-              左: 検討タブの実際の取引先（{effectiveYearMonth.year}年{effectiveYearMonth.month}月）、右: 担当（super_import）。左を基準に最も類似度の高い右を1件マッピング。
+              左: 検討タブの実際の取引先（{effectiveYearMonth.year}年{effectiveYearMonth.month}月）、右: 担当（retail_user）。左を基準に最も類似度の高い右を1件マッピング。
             </p>
             {(reviewTabCustomersLoading || mySupersLoading) && (
               <p className="customer-list-loading">読込中…</p>
@@ -1022,7 +1033,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
                     <tr>
                       <th className="customer-list-th-check">選択</th>
                       <th>実際の取引先（左）</th>
-                      <th>担当（super_import）（右）</th>
+                      <th>担当（retail_user）（右）</th>
                       <th>類似度</th>
                     </tr>
                   </thead>
@@ -1416,13 +1427,20 @@ const PageImageViewer = ({
     return () => ro.disconnect()
   }, [imageSize, applyScaleToWidth])
 
-  const handleImageZoom = useCallback((e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      e.preventDefault()
-      userHasZoomedRef.current = true
-      setImageScale((s) => Math.min(3, Math.max(0.25, s - e.deltaY * 0.002)))
+  /* 휠 확대 시 페이지 스크롤 방지: passive: false 로 preventDefault 유효화 */
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        userHasZoomedRef.current = true
+        setImageScale((s) => Math.min(3, Math.max(0.25, s - e.deltaY * 0.002)))
+      }
     }
-  }, [])
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [data?.image_url])
 
   return (
     <div className="page-image-viewer">
@@ -1445,7 +1463,6 @@ const PageImageViewer = ({
           <div
             ref={containerRef}
             className="image-container image-container-zoom"
-            onWheel={handleImageZoom}
             role="img"
             aria-label="Ctrl+ホイールで拡大縮小"
           >

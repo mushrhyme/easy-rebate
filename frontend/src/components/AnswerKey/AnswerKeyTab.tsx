@@ -11,125 +11,31 @@ import { useFormTypes } from '@/hooks/useFormTypes'
 import { useAuth } from '@/contexts/AuthContext'
 import { getApiBaseUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
+import {
+  type GridRow,
+  type InitialDocumentForAnswerKey,
+  type AnswerKeyTabProps,
+  SYSTEM_ROW_KEYS,
+  HIDDEN_ROW_KEYS,
+  TYPE_OPTIONS_BASE,
+  CUSTOMER_KEYS,
+  PRODUCT_NAME_KEYS,
+  PAGE_META_DELETE_SENTINEL,
+  pickFromGen,
+} from './answerKeyTabConstants'
+import { AnswerKeyLeftPanel } from './AnswerKeyLeftPanel'
+import { AnswerKeyRightPanel, type AnswerKeyRightPanelCtx } from './AnswerKeyRightPanel'
 import './AnswerKeyTab.css'
 
-interface GridRow {
-  item_id: number
-  page_number: number
-  item_order: number
-  version: number
-  /** 데이터 필드는 모두 item_data의 키(예: 得意先, 商品名 등)를 그대로 사용 */
-  [key: string]: string | number | boolean | null | undefined
-}
-
-const SYSTEM_ROW_KEYS = ['item_id', 'page_number', 'item_order', 'version']
-
-const KEY_LABELS: Record<string, string> = {
-  page_number: 'ページ',
-  item_order: '順番',
-  得意先: '得意先',
-  '商品名': '商品名',
-  item_id: 'item_id',
-  version: 'version',
-}
-
-/** タイプ 필드 기본 드롭다운 옵션 (벡터 DB 생성 시 타입도 반영) */
-const TYPE_OPTIONS_BASE = [
-  { value: '', label: '—' },
-  { value: '条件', label: '条件' },
-  { value: '販促費8%', label: '販促費8%' },
-  { value: '販促費10%', label: '販促費10%' },
-  { value: 'CF8%', label: 'CF8%' },
-  { value: 'CF10%', label: 'CF10%' },
-  { value: '非課税', label: '非課税' },
-]
-
-/** RAG 현황판에서 문서 클릭 시 넘어오는 초기 문서 (relative_path 있으면 img 기반 뷰) */
-export interface InitialDocumentForAnswerKey {
-  pdf_filename: string
-  total_pages: number
-  relative_path: string | null
-}
-
-interface AnswerKeyTabProps {
-  /** 검토 탭 또는 RAG 현황판에서 정답지 탭으로 이동 시 자동 선택할 문서 */
-  initialDocument?: InitialDocumentForAnswerKey | null
-  /** initialDocument 적용 후 호출 (한 번만 선택되도록) */
-  onConsumeInitialDocument?: () => void
-  /** 정답지 지정 해제(원복) 성공 시 호출 — 검토 탭으로 이동 등 */
-  onRevokeSuccess?: () => void
-}
-
-/** API 정답 생성 결과의 일본어 키 → UI 표시 필드 매핑 (프롬프트가 일본어 키로 반환할 때) */
-const CUSTOMER_KEYS = ['得意先名', '得意先様', '得意先', '取引先']
-const PRODUCT_NAME_KEYS = ['商品名']
-const PAGE_META_DELETE_SENTINEL = '__DELETE__'
-
-function pickFromGen(gen: Record<string, unknown>, keys: string[]): string | null {
-  for (const k of keys) {
-    const v = gen[k]
-    if (v != null && typeof v === 'string' && v.trim() !== '') return v.trim()
-  }
-  return null
-}
-
-/** 중첩 객체를 키 경로(예: recipient.name) + 값 배열로 평탄화 (참조 뷰 표시용) */
-function flattenKv(obj: Record<string, any>, prefix = ''): Array<{ key: string; value: string }> {
-  const result: Array<{ key: string; value: string }> = []
-  for (const [k, v] of Object.entries(obj)) {
-    const keyPath = prefix ? `${prefix}.${k}` : k
-    if (v != null && typeof v === 'object' && !Array.isArray(v)) {
-      result.push(...flattenKv(v, keyPath))
-    } else if (Array.isArray(v)) {
-      result.push({ key: keyPath, value: JSON.stringify(v) })
-    } else {
-      result.push({ key: keyPath, value: String(v ?? '—') })
-    }
-  }
-  return result
-}
-
-/** 평탄화된 키·값을 생성 탭과 동일하게 group / sub 기준으로 그룹화 */
-function groupMetaFieldsByPath(fields: Array<{ key: string; value: string }>): Array<{ group: string; sub: string | null; fields: Array<{ key: string; value: string }> }> {
-  const byGroup: Record<string, Record<string, Array<{ key: string; value: string }>>> = {}
-  fields.forEach((f) => {
-    const tokens = f.key.split('.')
-    const hasHierarchy = tokens.length > 1
-    const group = hasHierarchy ? tokens[0] || 'root' : 'root'
-    const sub = tokens.length > 2 ? tokens[1] : ''
-    const subKey = sub || '__no_sub__'
-    if (!byGroup[group]) byGroup[group] = {}
-    if (!byGroup[group][subKey]) byGroup[group][subKey] = []
-    byGroup[group][subKey].push(f)
-  })
-  const preferredOrder = ['document_meta', 'party', 'payment', 'totals', 'root']
-  const result: Array<{ group: string; sub: string | null; fields: Array<{ key: string; value: string }> }> = []
-  const pushGroup = (group: string) => {
-    const subs = byGroup[group]
-    if (!subs) return
-    Object.keys(subs)
-      .sort()
-      .forEach((subKey) => {
-        result.push({
-          group,
-          sub: subKey === '__no_sub__' ? null : subKey,
-          fields: subs[subKey],
-        })
-      })
-  }
-  preferredOrder.forEach((g) => pushGroup(g))
-  Object.keys(byGroup)
-    .filter((g) => !preferredOrder.includes(g))
-    .sort()
-    .forEach((g) => pushGroup(g))
-  return result
-}
+export type { InitialDocumentForAnswerKey }
 
 export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevokeSuccess }: AnswerKeyTabProps) {
   const { sessionId } = useAuth()
   const queryClient = useQueryClient()
   /** 정답 생성 직후 한 번은 서버 동기화 effect가 rows를 덮어쓰지 않도록 */
   const skipNextSyncFromServerRef = useRef(false)
+  /** 저장 시 항상 최신 rows 사용 (클로저 지연으로 タイプ 등이 빠지는 것 방지) */
+  const rowsRef = useRef<GridRow[]>([])
   const [selectedDoc, setSelectedDoc] = useState<{ pdf_filename: string; total_pages: number } | null>(null)
   /** RAG(img) 문서일 때 relative_path — 이게 있으면 img 기반 answer.json/이미지 사용 */
   const [selectedDocRelativePath, setSelectedDocRelativePath] = useState<string | null>(null)
@@ -167,6 +73,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const [imageScale, setImageScale] = useState(1)
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null)
   const imageScrollRef = useRef<HTMLDivElement>(null)
+  const imageZoomContainerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     setImageScale(1)
     setImageSize(null)
@@ -182,6 +89,20 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setImageScale((s) => (s === 1 ? scaleToWidth : s))
   }, [imageSize])
 
+  /* 휠 확대 시 페이지 스크롤 방지: passive: false 로 preventDefault 유효화 */
+  useEffect(() => {
+    const el = imageZoomContainerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        setImageScale((s) => Math.min(3, Math.max(0.25, s - e.deltaY * 0.002)))
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   useFormTypes()
   const { data: documentsData } = useQuery({
     queryKey: ['documents', 'for-answer-key-tab'],
@@ -193,6 +114,13 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     queryKey: ['answer-json-from-img', selectedDocRelativePath ?? ''],
     queryFn: () => documentsApi.getAnswerJsonFromImg(selectedDocRelativePath!),
     enabled: !!selectedDocRelativePath,
+  })
+
+  /** base DB 문서: answer-json 한 번 로드 → 메모리에서 편집 → 저장 시에만 DB 반영 (순서/정렬 이슈 제거) */
+  const { data: answerJsonFromDb } = useQuery({
+    queryKey: ['document-answer-json', selectedDoc?.pdf_filename ?? ''],
+    queryFn: () => documentsApi.getDocumentAnswerJson(selectedDoc!.pdf_filename),
+    enabled: !!selectedDoc?.pdf_filename && !selectedDocRelativePath,
   })
 
   const revokeAnswerKeyMutation = useMutation({
@@ -454,8 +382,8 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       : [],
   })
 
-  const allItemsLoaded = isRagMode ? !!answerJsonFromImg : pageItemsQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
-  const allPageMetaLoaded = isRagMode ? !!answerJsonFromImg : pageMetaQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
+  const allItemsLoaded = isRagMode ? !!answerJsonFromImg : (!!answerJsonFromDb || pageItemsQueries.every((q) => !q.isLoading && (q.data != null || q.isError)))
+  const allPageMetaLoaded = isRagMode ? !!answerJsonFromImg : (!!answerJsonFromDb || pageMetaQueries.every((q) => !q.isLoading && (q.data != null || q.isError)))
   const allDataLoaded = allItemsLoaded && allPageMetaLoaded
   const allImagesLoaded = isRagMode ? true : pageImageQueries.every((q) => !q.isLoading && q.data != null)
 
@@ -467,12 +395,72 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       .filter((p) => p > 0)
   }, [selectedDoc, pageMetaQueries])
 
-  // RAG(img) 문서: answerJsonFromImg.pages → rows 동기화 (참조 전용, 편집/저장 없음)
+  // RAG(img) 문서: answer.json 순서 그대로 — pages/items 모두 인덱스 순으로만 접근해 0,1,2,...,10,11 보장
   useEffect(() => {
-    if (!isRagMode || !answerJsonFromImg?.pages?.length) return
+    if (!isRagMode || !answerJsonFromImg?.pages) return
+    const pagesArr = Array.isArray(answerJsonFromImg.pages) ? answerJsonFromImg.pages : []
+    if (pagesArr.length === 0) return
     const combined: GridRow[] = []
+    const keysOrder: string[] = []
     const keysSet = new Set<string>()
-    answerJsonFromImg.pages.forEach((page: Record<string, any>) => {
+    for (let pi = 0; pi < pagesArr.length; pi++) {
+      const page = pagesArr[pi] as Record<string, any>
+      const pageNum = Number(page?.page_number) || pi + 1
+      let items: any[] = []
+      const rawItems = page?.items
+      if (Array.isArray(rawItems)) {
+        // 인덱스 0,1,2,... 순으로만 추출 (이터레이션 순서 의존 제거)
+        items = Array.from({ length: rawItems.length }, (_, i) => rawItems[i])
+      } else if (rawItems && typeof rawItems === 'object') {
+        items = Object.entries(rawItems)
+          .sort((a, b) => Number(a[0]) - Number(b[0]))
+          .map(([, v]) => v)
+      }
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx]
+        const itemData = item?.item_data ?? item
+        const row: GridRow = {
+          item_id: pageNum * 1000 + idx,
+          page_number: pageNum,
+          item_order: idx + 1,
+          version: 1,
+        }
+        if (itemData && typeof itemData === 'object') {
+          Object.keys(itemData).forEach((k) => {
+            if (SYSTEM_ROW_KEYS.includes(k)) return
+            row[k] = itemData[k]
+            if (!keysSet.has(k)) {
+              keysSet.add(k)
+              keysOrder.push(k)
+            }
+          })
+        }
+        row.item_order = idx + 1
+        ;(row as Record<string, unknown>)._displayIndex = pageNum * 10000 + idx
+        combined.push(row)
+      }
+    }
+    combined.sort(
+      (a, b) =>
+        a.page_number - b.page_number ||
+        Number((a as Record<string, unknown>)._displayIndex ?? 0) - Number((b as Record<string, unknown>)._displayIndex ?? 0)
+    )
+    setRows(combined)
+    setItemDataKeys(keysOrder)
+  }, [isRagMode, answerJsonFromImg])
+
+  // base DB: answer-json 한 번 로드 → rows 동기화 (JSON 배열 순서 그대로, DB N회 조회 없음)
+  useEffect(() => {
+    if (!!selectedDocRelativePath || !answerJsonFromDb?.pages?.length) return
+    if (skipNextSyncFromServerRef.current) {
+      skipNextSyncFromServerRef.current = false
+      return
+    }
+    if (dirtyIds.size > 0 || pageMetaDirtyPages.size > 0) return
+    const combined: GridRow[] = []
+    const keysOrder: string[] = []
+    const keysSet = new Set<string>()
+    answerJsonFromDb.pages.forEach((page: Record<string, any>) => {
       const pageNum = Number(page.page_number) || 0
       const items = Array.isArray(page.items) ? page.items : []
       items.forEach((item: any, idx: number) => {
@@ -487,33 +475,42 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           Object.keys(itemData).forEach((k) => {
             if (SYSTEM_ROW_KEYS.includes(k)) return
             row[k] = itemData[k]
-            keysSet.add(k)
+            if (!keysSet.has(k)) {
+              keysSet.add(k)
+              keysOrder.push(k)
+            }
           })
         }
+        row.item_order = idx + 1
         combined.push(row)
       })
     })
+    combined.sort((a, b) => a.page_number - b.page_number || Number(a.item_order ?? 0) - Number(b.item_order ?? 0) || a.item_id - b.item_id)
     setRows(combined)
-    setItemDataKeys(Array.from(keysSet))
-  }, [isRagMode, answerJsonFromImg])
+    setItemDataKeys(keysOrder.length ? keysOrder : [...keysSet])
+    setDirtyIds(new Set())
+    setPageMetaFlatEdits({})
+    setPageMetaDirtyPages(new Set())
+  }, [answerJsonFromDb, selectedDocRelativePath, dirtyIds.size, pageMetaDirtyPages.size])
 
-  // 서버 items/page_meta가 갱신될 때만 로컬 rows 동기화 (DB 문서 전용)
+  // (레거시) base DB를 answer-json이 아닌 페이지별 API로 로드할 때만 사용 — answerJsonFromDb 사용 시 미실행
   const pageItemsDataUpdatedAt = pageItemsQueries.map((q) => q.dataUpdatedAt ?? 0).join(',')
   useEffect(() => {
-    if (!selectedDoc || !allDataLoaded || isRagMode) return
+    if (!selectedDoc || !allDataLoaded || !!selectedDocRelativePath || answerJsonFromDb != null) return
     if (skipNextSyncFromServerRef.current) {
       skipNextSyncFromServerRef.current = false
       return
     }
     if (dirtyIds.size > 0 || pageMetaDirtyPages.size > 0) return
     const combined: GridRow[] = []
-    let keys: string[] = []
+    let serverKeys: string[] = []
+    const keysFromItems = new Set<string>()
     for (let p = 0; p < pageItemsQueries.length; p++) {
       const res = pageItemsQueries[p].data as { items: any[]; item_data_keys?: string[] | null } | undefined
       if (!res?.items) continue
-      if (res.item_data_keys?.length) keys = res.item_data_keys
+      if (res.item_data_keys?.length) serverKeys = res.item_data_keys
       const pageNum = p + 1
-        res.items.forEach((item) => {
+      res.items.forEach((item) => {
         const row: GridRow = {
           item_id: item.item_id,
           page_number: pageNum,
@@ -524,22 +521,44 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           Object.keys(item.item_data).forEach((k) => {
             if (SYSTEM_ROW_KEYS.includes(k)) return
             row[k] = item.item_data[k]
+            keysFromItems.add(k)
           })
         }
         combined.push(row)
       })
     }
+    // API/응답 순서가 문자열 정렬일 수 있으므로, 저장 전에 page_number → item_order(숫자) 순으로 정렬
+    combined.sort((a, b) => a.page_number - b.page_number || Number(a.item_order ?? 0) - Number(b.item_order ?? 0) || a.item_id - b.item_id)
     setRows(combined)
-    if (keys.length) setItemDataKeys(keys)
+    // 서버 키 순서 유지 + items에만 있는 키(예: タイプ) 추가 → 저장 후에도 드롭다운 값 유지
+    const mergedKeys =
+      serverKeys.length > 0
+        ? [...serverKeys, ...[...keysFromItems].filter((k) => !serverKeys.includes(k))]
+        : [...keysFromItems]
+    if (mergedKeys.length) setItemDataKeys(mergedKeys)
     setDirtyIds(new Set())
     setPageMetaFlatEdits({})
     setPageMetaDirtyPages(new Set())
   }, [selectedDoc, allDataLoaded, isRagMode, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size])
 
-  const currentPageRows = useMemo(
-    () => rows.filter((r) => r.page_number === currentPage),
-    [rows, currentPage]
-  )
+  useEffect(() => {
+    rowsRef.current = rows
+  }, [rows])
+
+  // 우측 정답 목록: RAG는 _displayIndex(페이지별 0,1,2,...,10,11) 숫자 순, 없으면 item_order 숫자 순
+  const currentPageRows = useMemo(() => {
+    const filtered = rows.filter((r) => r.page_number === currentPage)
+    return filtered.sort((a, b) => {
+      const da = (a as Record<string, unknown>)._displayIndex
+      const db = (b as Record<string, unknown>)._displayIndex
+      const na = Number(da)
+      const nb = Number(db)
+      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+      const oa = parseInt(String(a.item_order ?? 0), 10) || 0
+      const ob = parseInt(String(b.item_order ?? 0), 10) || 0
+      return oa - ob || a.item_id - b.item_id
+    })
+  }, [rows, currentPage])
 
   /** キー・値 그리드/관리용 데이터 키: 현재 페이지만 사용 (페이지별로 다른 item 구조 대응) */
   const dataKeysForDisplay = useMemo(() => {
@@ -558,11 +577,16 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     return keysList
   }, [itemDataKeys, currentPageRows])
 
+  /** キー・値 탭: API item_data_keys 순서 = JSON/문서 순서. item_id/version은 내부 식별용 → 표시하지 않음 */
   const displayKeys = useMemo(() => {
-    const base = ['page_number', 'item_order', '得意先', '商品名'] as const
-    const rest = dataKeysForDisplay.filter((k) => !(base as readonly string[]).includes(k))
-    return [...base, ...rest, 'item_id', 'version']
-  }, [dataKeysForDisplay])
+    const head = ['page_number', 'item_order']
+    const dataKeySet = new Set<string>()
+    currentPageRows.forEach((r) => Object.keys(r).forEach((k) => { if (!HIDDEN_ROW_KEYS.has(k)) dataKeySet.add(k) }))
+    const ordered = itemDataKeys.length
+      ? [...itemDataKeys.filter((k) => dataKeySet.has(k)), ...[...dataKeySet].filter((k) => !itemDataKeys.includes(k))]
+      : [...dataKeySet]
+    return [...head, ...ordered]
+  }, [currentPageRows, itemDataKeys])
 
   const editableKeys = useMemo(() => {
     return new Set(['得意先', '商品名', ...dataKeysForDisplay])
@@ -584,9 +608,11 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   }, [rows])
 
   const onValueChange = useCallback((itemId: number, key: string, value: string | number | boolean | null) => {
-    setRows((prev) =>
-      prev.map((r) => (r.item_id !== itemId ? r : { ...r, [key]: value }))
-    )
+    setRows((prev) => {
+      const next = prev.map((r) => (r.item_id !== itemId ? r : { ...r, [key]: value }))
+      rowsRef.current = next
+      return next
+    })
     setDirtyIds((d) => new Set(d).add(itemId))
   }, [])
 
@@ -720,20 +746,72 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     delete cur[parts[parts.length - 1]]
   }, [])
 
+  /** page 레벨에서 page_meta로 쓸 때 제외할 키 (items는 항상 제외) */
+  const PAGE_LEVEL_EXCLUDE_KEYS = useMemo(() => new Set(['items', 'page_number', 'page_role']), [])
+
   const currentPageMetaData = useMemo(() => {
     if (!selectedDoc) return null
     if (isRagMode && answerJsonFromImg?.pages) {
       const page = answerJsonFromImg.pages.find((p: any) => Number(p.page_number) === currentPage)
       if (!page) return null
+      // RAG answer.json에는 page_meta 키가 없을 수 있음 → page 루트에서 items/page_number/page_role 제외한 것만 page_meta로 사용
+      let page_meta: Record<string, any> =
+        page.page_meta != null && typeof page.page_meta === 'object' && !Array.isArray(page.page_meta)
+          ? page.page_meta
+          : {}
+      if (Object.keys(page_meta).length === 0 && typeof page === 'object') {
+        page_meta = {}
+        Object.keys(page).forEach((k) => {
+          if (!PAGE_LEVEL_EXCLUDE_KEYS.has(k)) page_meta[k] = (page as Record<string, any>)[k]
+        })
+      }
       return {
         page_role: page.page_role ?? null,
-        page_meta: (page.page_meta ?? page) as Record<string, any>,
+        page_meta,
+      }
+    }
+    if (answerJsonFromDb?.pages) {
+      const page = answerJsonFromDb.pages.find((p: any) => Number(p.page_number) === currentPage)
+      if (!page) return null
+      // DB 쪽도 page_meta 없으면 page 전체 쓰지 않고, items 제외한 키만 사용
+      let page_meta: Record<string, any> =
+        page.page_meta != null && typeof page.page_meta === 'object' && !Array.isArray(page.page_meta)
+          ? page.page_meta
+          : {}
+      if (Object.keys(page_meta).length === 0 && typeof page === 'object') {
+        page_meta = {}
+        Object.keys(page).forEach((k) => {
+          if (!PAGE_LEVEL_EXCLUDE_KEYS.has(k)) page_meta[k] = (page as Record<string, any>)[k]
+        })
+      }
+      return {
+        page_role: page.page_role ?? null,
+        page_meta,
       }
     }
     const q = pageMetaQueries[currentPage - 1]
     if (!q?.data) return null
     return q.data as { page_role: string | null; page_meta: Record<string, any> }
-  }, [selectedDoc, currentPage, isRagMode, answerJsonFromImg, pageMetaQueries])
+  }, [selectedDoc, currentPage, isRagMode, answerJsonFromImg, answerJsonFromDb, pageMetaQueries, PAGE_LEVEL_EXCLUDE_KEYS])
+
+  /** detail 페이지용: page_meta.区_mapping (숫자 → ラベル). 키/값 문자열 정규화 (number 혼용 대비) */
+  const kuMapping = useMemo(() => {
+    const meta = currentPageMetaData?.page_meta
+    const raw = meta?.区_mapping ?? meta?.['区_mapping']
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+    const entries = Object.entries(raw).filter(
+      ([, v]) => v != null && typeof v === 'string'
+    ) as [string, string][]
+    if (entries.length === 0) return null
+    return Object.fromEntries(entries.map(([k, v]) => [String(k).trim(), v]))
+  }, [currentPageMetaData?.page_meta])
+
+  const getKuLabel = useCallback((value: unknown): string | null => {
+    if (!kuMapping || value == null) return null
+    const s = String(value).trim()
+    if (!s) return null
+    return kuMapping[s] ?? kuMapping[String(Number(s))] ?? null
+  }, [kuMapping])
 
   const currentPageMetaFields = useMemo(() => {
     const base = currentPageMetaData?.page_meta ?? {}
@@ -812,21 +890,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
   }, [currentPage])
 
-  const onPageMetaKeyRename = useCallback((oldKey: string, newKey: string) => {
-    const n = (newKey ?? '').trim()
-    if (!n || n === oldKey) return
-    setPageMetaFlatEdits((prev) => {
-      const page = prev[currentPage] ?? {}
-      const val = page[oldKey]
-      if (val === undefined) return prev
-      const next = { ...page }
-      delete next[oldKey]
-      next[n] = val
-      return { ...prev, [currentPage]: next }
-    })
-    setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
-  }, [currentPage])
-
   /** page_meta 키 전체 경로 변경 (편집된 값이 없어도 현재 표시값으로 새 키 설정) */
   const onPageMetaKeyRenameFull = useCallback((oldKey: string, newKey: string, currentValue: string) => {
     const n = (newKey ?? '').trim()
@@ -888,7 +951,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const updateItemMutation = useMutation({
     mutationFn: ({ itemId, row }: { itemId: number; row: GridRow }) => {
       const item_data: Record<string, unknown> = {}
-      const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version']
+      const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version', '_displayIndex']
       Object.keys(row).forEach((k) => {
         if (excludeFromItemData.includes(k)) return
         item_data[k] = row[k]
@@ -1000,7 +1063,8 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     const pageMeta = buildPageMetaFromEdits(currentPage)
     const pageRole =
       pageRoleEdits[currentPage] ?? currentPageMetaData?.page_role ?? 'detail'
-    const items = currentPageRows.map(({ item_id, page_number, item_order, version, ...rest }) => rest)
+    // _displayIndex는 정렬용 내부 키 → JSON/저장에는 포함하지 않음
+    const items = currentPageRows.map(({ item_id, page_number, item_order, version, _displayIndex, ...rest }) => rest)
     return { page_role: pageRole, ...pageMeta, items }
   }, [currentPage, pageRoleEdits, currentPageMetaData?.page_role, currentPageRows, buildPageMetaFromEdits])
 
@@ -1137,7 +1201,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             setRows((prev) => {
               const other = prev.filter((r) => r.page_number !== currentPage)
               return [...other, ...updatedCurrent].sort(
-                (a, b) => (a.page_number - b.page_number) || ((a.item_order ?? 0) - (b.item_order ?? 0))
+                (a, b) => (a.page_number - b.page_number) || (Number(a.item_order ?? 0) - Number(b.item_order ?? 0))
               )
             })
             setDirtyIds((d) => new Set([...d, ...newDirty]))
@@ -1161,7 +1225,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               await updateItemMutation.mutateAsync({ itemId: row.item_id, row: updatedRow })
             }
             const extraItems = parsedItems!.slice(existingCount) as Record<string, unknown>[]
-            const excludeFromItemData = ['customer', 'item_id', 'page_number', 'item_order', 'version']
+            const excludeFromItemData = ['customer', 'item_id', 'page_number', 'item_order', 'version', '_displayIndex']
             let lastItemId = currentPageRows[currentPageRows.length - 1].item_id
             for (const item of extraItems) {
               const customer = (item.customer ?? item['得意先'] ?? null) as string | null
@@ -1172,7 +1236,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
                 selectedDoc!.pdf_filename,
                 currentPage,
                 item_data,
-                customer ?? undefined,
                 lastItemId
               )
               lastItemId = created.item_id
@@ -1217,76 +1280,186 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   }, [jsonEditText, currentPage, currentPageRows, selectedDoc, queryClient, itemToGridRow, updateItemMutation])
 
   const handleSaveGrid = useCallback(async () => {
-    if (!selectedDoc || (dirtyIds.size === 0 && pageMetaDirtyPages.size === 0)) {
+    if (!selectedDoc) return
+    const latestRows = rowsRef.current
+    const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
+    if (!hasDirty) {
       setSaveMessage('変更がありません。')
       return
     }
     setSaveStatus('saving')
     setSaveMessage('')
     try {
-      for (const itemId of dirtyIds) {
-        const row = rows.find((r) => r.item_id === itemId)
-        if (!row) continue
-        await updateItemMutation.mutateAsync({ itemId, row })
-      }
-      for (const pageNum of pageMetaDirtyPages) {
-        const pageMeta = buildPageMetaFromEdits(pageNum)
-        const pageRole =
-          pageRoleEdits[pageNum] ??
-          (pageMetaQueries[pageNum - 1]?.data as { page_role?: string } | undefined)?.page_role ??
+      const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version', '_displayIndex']
+      const pages: Array<{ page_number: number; page_role: string; page_meta: Record<string, unknown>; items: Array<Record<string, unknown>> }> = []
+      for (let p = 1; p <= selectedDoc.total_pages; p++) {
+        const pageRows = latestRows.filter((r) => r.page_number === p)
+        let item_data_list = pageRows
+          .sort((a, b) => Number(a.item_order ?? 0) - Number(b.item_order ?? 0))
+          .map((row) => {
+            const item_data: Record<string, unknown> = {}
+            Object.keys(row).forEach((k) => {
+              if (!excludeFromItemData.includes(k)) item_data[k] = row[k]
+            })
+            return item_data
+          })
+        const edits = pageMetaFlatEdits[p] ?? {}
+        Object.entries(edits).forEach(([path, value]) => {
+          if (value === PAGE_META_DELETE_SENTINEL) return
+          const m = /^items\[(\d+)\]\.(.+)$/.exec(path)
+          if (m) {
+            const idx = parseInt(m[1], 10)
+            const field = m[2]
+            if (idx >= 0 && idx < item_data_list.length) item_data_list[idx][field] = value
+          }
+        })
+        const page_roleRaw =
+          pageRoleEdits[p] ??
+          (pageMetaQueries[p - 1]?.data as { page_role?: string } | undefined)?.page_role ??
+          (isRagMode && answerJsonFromImg?.pages
+            ? (answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
+            : undefined) ??
           'detail'
-        await documentsApi.updatePageMeta(selectedDoc.pdf_filename, pageNum, pageMeta, pageRole)
+        const page_role = ['cover', 'detail', 'summary', 'reply'].includes(page_roleRaw) ? page_roleRaw : 'detail'
+        let page_meta: Record<string, unknown>
+        if (isRagMode && answerJsonFromImg?.pages) {
+          const basePage = answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
+          page_meta = {}
+          if (basePage) {
+            Object.keys(basePage).forEach((k) => {
+              if (k !== 'items' && k !== 'page_number' && k !== 'page_role헉') page_meta[k] = basePage[k]
+            })
+          }
+          const edits = pageMetaFlatEdits[p] ?? {}
+          Object.entries(edits).forEach(([path, value]) => {
+            if (value === PAGE_META_DELETE_SENTINEL) return
+            setNestedByPath(page_meta, path, value)
+          })
+        } else {
+          page_meta = buildPageMetaFromEdits(p) as Record<string, unknown>
+        }
+        pages.push({ page_number: p, page_role, page_meta, items: item_data_list })
+      }
+      if (isRagMode && selectedDocRelativePath) {
+        await documentsApi.saveAnswerJsonFromImg(selectedDocRelativePath, { pages })
+        queryClient.invalidateQueries({ queryKey: ['answer-json-from-img', selectedDocRelativePath] })
+      } else {
+        await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
+        skipNextSyncFromServerRef.current = true
+        queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
+        queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
+        queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
       }
       setDirtyIds(new Set())
       setPageMetaFlatEdits({})
       setPageMetaDirtyPages(new Set())
       setPageRoleEdits((prev) => {
         const next = { ...prev }
-        pageMetaDirtyPages.forEach((p) => delete next[p])
+        pageMetaDirtyPages.forEach((pn) => delete next[pn])
         return next
       })
-      queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-      queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
-      setSaveMessage('グリッドの変更を保存しました。')
+      setSaveMessage(isRagMode ? 'JSONファイルを保存しました。' : 'グリッドの変更を保存しました。')
       setSaveStatus('done')
     } catch (e: any) {
       setSaveMessage(e?.response?.data?.detail || e?.message || '保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, dirtyIds, rows, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, updateItemMutation, buildPageMetaFromEdits, queryClient])
+  }, [selectedDoc, selectedDocRelativePath, isRagMode, answerJsonFromImg, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
 
   const handleSaveAsAnswerKey = useCallback(async () => {
     if (!selectedDoc) return
     setSaveStatus('saving')
     setSaveMessage('')
     try {
-      if (dirtyIds.size > 0) {
-        for (const itemId of dirtyIds) {
-          const row = rows.find((r) => r.item_id === itemId)
-          if (!row) continue
-          await updateItemMutation.mutateAsync({ itemId, row })
+      const latestRows = rowsRef.current
+      const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
+      if (hasDirty) {
+        const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version', '_displayIndex']
+        const pages: Array<{ page_number: number; page_role: string; page_meta: Record<string, unknown>; items: Array<Record<string, unknown>> }> = []
+        for (let p = 1; p <= selectedDoc.total_pages; p++) {
+          const pageRows = latestRows.filter((r) => r.page_number === p)
+          let item_data_list = pageRows
+            .sort((a, b) => Number(a.item_order ?? 0) - Number(b.item_order ?? 0))
+            .map((row) => {
+              const item_data: Record<string, unknown> = {}
+              Object.keys(row).forEach((k) => {
+                if (!excludeFromItemData.includes(k)) item_data[k] = row[k]
+              })
+              return item_data
+            })
+          const edits = pageMetaFlatEdits[p] ?? {}
+          Object.entries(edits).forEach(([path, value]) => {
+            if (value === PAGE_META_DELETE_SENTINEL) return
+            const m = /^items\[(\d+)\]\.(.+)$/.exec(path)
+            if (m) {
+              const idx = parseInt(m[1], 10)
+              const field = m[2]
+              if (idx >= 0 && idx < item_data_list.length) item_data_list[idx][field] = value
+            }
+          })
+          const page_roleRaw =
+            pageRoleEdits[p] ??
+            (pageMetaQueries[p - 1]?.data as { page_role?: string } | undefined)?.page_role ??
+            (isRagMode && answerJsonFromImg?.pages
+              ? (answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
+              : answerJsonFromDb?.pages
+                ? (answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
+                : undefined) ??
+            'detail'
+        const page_role = ['cover', 'detail', 'summary', 'reply'].includes(page_roleRaw) ? page_roleRaw : 'detail'
+        let page_meta: Record<string, unknown>
+        if (isRagMode && answerJsonFromImg?.pages) {
+          const basePage = answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
+          page_meta = {}
+          if (basePage) {
+            Object.keys(basePage).forEach((k) => {
+              if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
+            })
+          }
+          const editsForMeta = pageMetaFlatEdits[p] ?? {}
+          Object.entries(editsForMeta).forEach(([path, value]) => {
+            if (value === PAGE_META_DELETE_SENTINEL) return
+            if (/^items\[\d+\]\./.test(path)) return
+            setNestedByPath(page_meta, path, value)
+          })
+        } else if (answerJsonFromDb?.pages) {
+          const basePage = answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
+          page_meta = {}
+          if (basePage) {
+            Object.keys(basePage).forEach((k) => {
+              if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
+            })
+          }
+          const editsForMeta = pageMetaFlatEdits[p] ?? {}
+          Object.entries(editsForMeta).forEach(([path, value]) => {
+            if (value === PAGE_META_DELETE_SENTINEL) return
+            if (/^items\[\d+\]\./.test(path)) return
+            setNestedByPath(page_meta, path, value)
+          })
+        } else {
+          page_meta = buildPageMetaFromEdits(p) as Record<string, unknown>
+        }
+        pages.push({ page_number: p, page_role, page_meta, items: item_data_list })
+      }
+      if (isRagMode && selectedDocRelativePath) {
+          await documentsApi.saveAnswerJsonFromImg(selectedDocRelativePath, { pages })
+          queryClient.invalidateQueries({ queryKey: ['answer-json-from-img', selectedDocRelativePath] })
+        } else {
+          await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
+          skipNextSyncFromServerRef.current = true
+          queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
+          queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
+          queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
         }
         setDirtyIds(new Set())
-      }
-      if (pageMetaDirtyPages.size > 0) {
-        for (const pageNum of pageMetaDirtyPages) {
-          const pageMeta = buildPageMetaFromEdits(pageNum)
-          const pageRole =
-            pageRoleEdits[pageNum] ??
-            (pageMetaQueries[pageNum - 1]?.data as { page_role?: string } | undefined)?.page_role ??
-            'detail'
-          await documentsApi.updatePageMeta(selectedDoc.pdf_filename, pageNum, pageMeta, pageRole)
-        }
         setPageMetaFlatEdits({})
         setPageMetaDirtyPages(new Set())
         setPageRoleEdits((prev) => {
           const next = { ...prev }
-          pageMetaDirtyPages.forEach((p) => delete next[p])
+          pageMetaDirtyPages.forEach((pn) => delete next[pn])
           return next
         })
       }
-      queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-      queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
       setSaveStatus('building')
       setSaveMessage('学習フラグを設定し、ベクターDBに登録しています…')
       for (let p = 1; p <= selectedDoc.total_pages; p++) {
@@ -1305,7 +1478,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       setSaveMessage(e?.response?.data?.detail || e?.message || '正解表の保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, dirtyIds, rows, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, buildPageMetaFromEdits, updateItemMutation, queryClient])
+  }, [selectedDoc, selectedDocRelativePath, isRagMode, answerJsonFromImg, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
 
   const imageUrls = useMemo(() => {
     if (isRagMode && selectedDocRelativePath && selectedDoc?.total_pages) {
@@ -1428,578 +1601,89 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
 
       {selectedDoc && (
         <div className="answer-key-main">
-          <div className="answer-key-left">
-            <div className="answer-key-page-nav">
-              <button
-                type="button"
-                className="answer-key-nav-btn"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-                aria-label="前のページ"
-              >
-                ← 前
-              </button>
-              <span className="answer-key-page-info">
-                {currentPage} / {selectedDoc.total_pages}
-              </span>
-              <button
-                type="button"
-                className="answer-key-nav-btn"
-                onClick={() =>
-                  setCurrentPage((p) => Math.min(selectedDoc.total_pages, p + 1))
-                }
-                disabled={currentPage >= selectedDoc.total_pages}
-                aria-label="次のページ"
-              >
-                次 →
-              </button>
-            </div>
-            <div ref={imageScrollRef} className="answer-key-left-scroll">
-              <div
-                className="answer-key-page-view answer-key-page-view-zoom"
-                onWheel={(e) => {
-                  if (e.ctrlKey || e.metaKey) {
-                    e.preventDefault()
-                    setImageScale((s) => Math.min(3, Math.max(0.25, s - e.deltaY * 0.002)))
-                  }
-                }}
-              >
-                {!allImagesLoaded && <p className="answer-key-loading">画像読み込み中…</p>}
-                {allImagesLoaded && imageUrls[currentPage - 1] && (
-                  <div
-                    key={`img-wrap-${currentPage}`}
-                    className="answer-key-image-zoom-wrapper"
-                    style={
-                      imageSize
-                        ? { width: imageSize.w * imageScale, height: imageSize.h * imageScale }
-                        : undefined
-                    }
-                  >
-                    <img
-                      key={currentPage}
-                      src={imageUrls[currentPage - 1]!}
-                      alt={`Page ${currentPage}`}
-                      className="answer-key-page-img"
-                      onLoad={(e) => {
-                        const img = e.currentTarget
-                        setImageSize({ w: img.naturalWidth, h: img.naturalHeight })
-                      }}
-                      style={
-                        imageSize
-                          ? {
-                              width: imageSize.w * imageScale,
-                              height: imageSize.h * imageScale,
-                              objectFit: 'fill',
-                            }
-                          : undefined
-                      }
-                    />
-                  </div>
-                )}
-              </div>
-              <div className="answer-key-ocr-section">
-                <div className="answer-key-ocr-header">
-                  <label className="answer-key-ocr-label">OCRテキスト</label>
-                  <div className="answer-key-ocr-rerun-wrap">
-                    <select
-                      className="answer-key-ocr-azure-model-select"
-                      value={ocrRerunAzureModel}
-                      onChange={(e) => setOcrRerunAzureModel(e.target.value)}
-                      title="Azure 모델 선택"
-                    >
-                      <option value="prebuilt-layout">prebuilt-layout（表・レイアウト）</option>
-                      <option value="prebuilt-read">prebuilt-read（OCRのみ）</option>
-                      <option value="prebuilt-document">prebuilt-document（一般文書）</option>
-                    </select>
-                    <button
-                      type="button"
-                      className="answer-key-btn answer-key-ocr-rerun-btn"
-                      onClick={() => rerunOcrMutation.mutate({ azureModel: ocrRerunAzureModel })}
-                      disabled={!selectedDoc || rerunOcrMutation.isPending}
-                      title="Azure Document Intelligenceで現在ページを再認識"
-                    >
-                      {rerunOcrMutation.isPending ? '認識中…' : 'Azureで再認識'}
-                    </button>
-                  </div>
-                </div>
-                <textarea
-                  className="answer-key-ocr-text"
-                  readOnly
-                  value={
-                    pageOcrTextQueries[currentPage - 1]?.data?.ocr_text ??
-                    (pageOcrTextQueries[currentPage - 1]?.isLoading ? '読み込み中…' : '')
-                  }
-                  placeholder="（OCR 텍스트 없음）"
-                  rows={6}
-                />
-              </div>
-            </div>
-          </div>
+          <AnswerKeyLeftPanel
+            selectedDoc={selectedDoc}
+            currentPage={currentPage}
+            setCurrentPage={setCurrentPage}
+            imageScrollRef={imageScrollRef}
+            imageZoomContainerRef={imageZoomContainerRef}
+            allImagesLoaded={allImagesLoaded}
+            imageUrls={imageUrls}
+            imageScale={imageScale}
+            imageSize={imageSize}
+            setImageSize={setImageSize}
+            pageOcrTextQueries={pageOcrTextQueries}
+            ocrRerunAzureModel={ocrRerunAzureModel}
+            setOcrRerunAzureModel={setOcrRerunAzureModel}
+            rerunOcrMutation={rerunOcrMutation}
+          />
 
-          <div className="answer-key-right">
-            <div className="answer-key-right-tabs">
-              <button
-                type="button"
-                className={`answer-key-tab-btn ${rightView === 'kv' ? 'active' : ''}`}
-                onClick={() => setRightView('kv')}
-              >
-                キー・値
-              </button>
-              <button
-                type="button"
-                className={`answer-key-tab-btn ${rightView === 'template' ? 'active' : ''}`}
-                onClick={() => {
-                  setRightView('template')
-                  setTemplateEntries(firstRowToTemplateEntries(currentPageRows[0]))
-                }}
-              >
-                テンプレート（先頭行）
-              </button>
-              <button
-                type="button"
-                className={`answer-key-tab-btn ${rightView === 'json' ? 'active' : ''}`}
-                onClick={() => {
-                  setRightView('json')
-                  syncJsonEditFromAnswer()
-                }}
-              >
-                JSON
-              </button>
-            </div>
-            <div className="answer-key-grid-header">
-              {(dirtyIds.size > 0 || pageMetaDirtyPages.size > 0) && (
-                <span className="answer-key-dirty-badge">未保存: {dirtyIds.size + pageMetaDirtyPages.size}件</span>
-              )}
-              <div className="answer-key-provider-row">
-                <select
-                  className="answer-key-provider-select"
-                  value={answerProvider}
-                  onChange={(e) => setAnswerProvider(e.target.value as 'gemini' | 'gpt-5.2')}
-                  title="画像からページ全体の正解を一度に生成（Vision）"
-                >
-                  <option value="gpt-5.2">GPT</option>
-                  <option value="gemini">Gemini</option>
-                </select>
-                <button
-                  type="button"
-                  className="answer-key-gemini-btn"
-                  onClick={() =>
-                    selectedDoc &&
-                    generateAnswerMutation.mutate({
-                      pdfFilename: selectedDoc.pdf_filename,
-                      pageNumber: currentPage,
-                      currentRows: rows,
-                      currentItemDataKeys: itemDataKeys,
-                      provider: answerProvider,
-                    })
-                  }
-                  disabled={!selectedDoc || generateAnswerMutation.isPending}
-                  title="選択したモデルでこのページの正解を一括生成"
-                >
-                  {generateAnswerMutation.isPending ? '生成中…' : '正解生成'}
-                </button>
-              </div>
-            </div>
-            {rightView === 'json' && (
-              <div className="answer-key-json-view">
-                <label className="answer-key-ocr-label">正解表JSON（編集後に適用）</label>
-                <textarea
-                  className="answer-key-json-textarea"
-                  value={jsonEditText}
-                  onChange={(e) => setJsonEditText(e.target.value)}
-                  placeholder='{"page_role":"detail","items":[...]}'
-                  spellCheck={false}
-                />
-                <button
-                  type="button"
-                  className="answer-key-btn answer-key-apply-json-btn"
-                  onClick={applyJsonEdit}
-                >
-                  JSONを適用
-                </button>
-              </div>
-            )}
-            {rightView === 'template' && (
-              <div className="answer-key-template-view">
-                <p className="answer-key-template-desc">
-                先頭行のみ表示します。キー・値を編集し、「残り行を生成」で選択中のモデル（GPT/Gemini）が同じキー構造の全行を生成します。  
-                </p>
-                {!allDataLoaded && (
-                  <p className="answer-key-template-loading">データ読み込み中…</p>
-                )}
-                {allDataLoaded && currentPageRows.length === 0 && templateEntries.length === 0 && (
-                  <p className="answer-key-template-empty-hint">
-                    このページに行がありません。「キー追加」でキーを入力した後「残り行を生成」を押すと、全行を生成します。
-                  </p>
-                )}
-                <div className="answer-key-template-entries">
-                  {templateEntries.map((entry) => (
-                    <div key={entry.id} className="answer-key-template-row">
-                      <input
-                        type="text"
-                        className="answer-key-template-key"
-                        value={entry.key}
-                        onChange={(e) => updateTemplateEntry(entry.id, 'key', e.target.value)}
-                        placeholder="キー"
-                      />
-                      <input
-                        type="text"
-                        className="answer-key-template-value"
-                        value={entry.value}
-                        onChange={(e) => updateTemplateEntry(entry.id, 'value', e.target.value)}
-                        placeholder="値"
-                      />
-                      <button
-                        type="button"
-                        className="answer-key-template-remove"
-                        onClick={() => removeTemplateEntry(entry.id)}
-                        title="削除"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <button type="button" className="answer-key-btn answer-key-template-add" onClick={addTemplateEntry}>
-                  キー追加
-                </button>
-                <button
-                  type="button"
-                  className="answer-key-btn answer-key-gemini-btn"
-                  onClick={() => generateFromTemplateMutation.mutate()}
-                  disabled={!selectedDoc || generateFromTemplateMutation.isPending || templateEntries.every((e) => !(e.key ?? '').trim())}
-                  title="この行をテンプレートにし、選択中のモデルで残りの行を生成します"
-                >
-                  {generateFromTemplateMutation.isPending ? '生成中…' : '残り行を生成'}
-                </button>
-              </div>
-            )}
-            {rightView === 'kv' && !allDataLoaded && <p className="answer-key-loading">データ読み込み中…</p>}
-            {rightView === 'kv' && allDataLoaded && rows.length === 0 && currentPageMetaFields.length === 0 && (
-              <p className="answer-key-empty">このページにはpage_metaも行もありません。</p>
-            )}
-            {rightView === 'kv' && allDataLoaded && (rows.length > 0 || currentPageMetaFields.length > 0 || itemDataKeys.length > 0) && (
-              <div className="answer-key-kv-scroll">
-                <div className="answer-key-page-label">p.{currentPage}</div>
-                <div className="answer-key-page-role-row">
-                  <label className="answer-key-ocr-label">page_role</label>
-                  <select
-                    className="answer-key-page-role-select"
-                    value={pageRoleEdits[currentPage] ?? currentPageMetaData?.page_role ?? 'detail'}
-                    onChange={(e) => {
-                      setPageRoleEdits((prev) => ({ ...prev, [currentPage]: e.target.value }))
-                      setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
-                    }}
-                    title="표지(cover) / 상세(detail) / 요약(summary) / 회신(reply)"
-                  >
-                    <option value="detail">detail（明細）</option>
-                    <option value="cover">cover（表紙）</option>
-                    <option value="summary">summary（合計）</option>
-                    <option value="reply">reply（返信）</option>
-                  </select>
-                </div>
-                <div className={`answer-key-meta-block ${pageMetaDirtyPages.has(currentPage) ? 'answer-key-kv-dirty' : ''}`}>
-                  <div className="answer-key-meta-section-label">page_meta（キー・値の直接編集）</div>
-                  {groupedPageMetaFields.map(({ group, sub, fields }, groupIdx) => (
-                    <div key={`page-meta-group-${currentPage}-${groupIdx}-${group}-${sub ?? 'root'}`} className="answer-key-meta-group">
-                      <div className="answer-key-meta-group-header">
-                        <span className="answer-key-meta-group-label">
-                          {group === 'root' ? 'その他' : group}
-                          {sub ? ` / ${sub}` : ''}
-                        </span>
-                        <button
-                          type="button"
-                          className="answer-key-meta-group-delete-btn"
-                          onClick={() => onPageMetaGroupRemove(group, sub, fields)}
-                          title="このグループ全体を削除"
-                        >
-                          グループ削除
-                        </button>
-                      </div>
-                      {fields.map(({ key: metaKey, value }, metaIdx) => (
-                        <div
-                          key={`page-meta-${currentPage}-${metaIdx}-${metaKey}`}
-                          className="answer-key-kv-row answer-key-kv-row-with-delete"
-                        >
-                          <input
-                            type="text"
-                            className="answer-key-kv-key-input"
-                            value={editingPageMetaKey === metaKey ? editingPageMetaKeyValue : metaKey}
-                            title="キー（フルパス編集可）"
-                            onChange={(e) => {
-                              if (editingPageMetaKey !== metaKey) {
-                                setEditingPageMetaKey(metaKey)
-                                setEditingPageMetaKeyValue(e.target.value)
-                              } else {
-                                setEditingPageMetaKeyValue(e.target.value)
-                              }
-                            }}
-                            onFocus={() => {
-                              setEditingPageMetaKey(metaKey)
-                              setEditingPageMetaKeyValue(metaKey)
-                            }}
-                            onBlur={() => {
-                              if (editingPageMetaKey === metaKey) {
-                                const n = editingPageMetaKeyValue.trim()
-                                if (n && n !== metaKey) onPageMetaKeyRenameFull(metaKey, n, value)
-                                setEditingPageMetaKey(null)
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (editingPageMetaKey === metaKey && e.key === 'Enter') {
-                                const n = editingPageMetaKeyValue.trim()
-                                if (n && n !== metaKey) onPageMetaKeyRenameFull(metaKey, n, value)
-                                setEditingPageMetaKey(null)
-                                e.currentTarget.blur()
-                              }
-                              if (e.key === 'Escape') {
-                                setEditingPageMetaKey(null)
-                                e.currentTarget.blur()
-                              }
-                            }}
-                            placeholder="例: totals.役務提供.入金額"
-                          />
-                          {metaKey === 'タイプ' || metaKey.endsWith('.タイプ') ? (
-                            <select
-                              className="answer-key-kv-input answer-key-kv-select"
-                              value={value}
-                              onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
-                            >
-                              {(() => {
-                                const opts = [...typeOptions]
-                                if (value != null && String(value).trim() !== '' && !opts.some((o) => o.value === value)) {
-                                  opts.unshift({ value: String(value).trim(), label: String(value).trim() })
-                                }
-                                return opts.map((opt) => (
-                                  <option key={opt.value || '_'} value={opt.value}>
-                                    {opt.label}
-                                  </option>
-                                ))
-                              })()}
-                            </select>
-                          ) : (
-                            <input
-                              type="text"
-                              className="answer-key-kv-input"
-                              value={value}
-                              onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
-                              placeholder="値"
-                            />
-                          )}
-                          <button
-                            type="button"
-                            className="answer-key-kv-delete-btn"
-                            onClick={() => onPageMetaKeyRemove(metaKey)}
-                            title="このキーを削除"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ))}
-                  <div className="answer-key-kv-row answer-key-kv-row-with-delete answer-key-add-row">
-                    <input
-                      type="text"
-                      className="answer-key-kv-key-input"
-                      value={newPageMetaKey}
-                      onChange={(e) => setNewPageMetaKey(e.target.value)}
-                      placeholder="例: totals.役務提供.新規キー"
-                      title="フルパスで入力（例: totals.役務提供.入金額）"
-                    />
-                    <input
-                      type="text"
-                      className="answer-key-kv-input"
-                      value={newPageMetaValue}
-                      onChange={(e) => setNewPageMetaValue(e.target.value)}
-                      placeholder="値"
-                    />
-                    <button
-                      type="button"
-                      className="answer-key-btn answer-key-kv-add-btn"
-                      onClick={() => {
-                        onPageMetaKeyAdd(newPageMetaKey, newPageMetaValue)
-                        setNewPageMetaKey('')
-                        setNewPageMetaValue('')
-                      }}
-                      disabled={!newPageMetaKey.trim()}
-                    >
-                      キー追加
-                    </button>
-                  </div>
-                </div>
-                {currentPageRows.length === 0 ? (
-                  currentPageMetaFields.length > 0 ? null : <p className="answer-key-empty">このページには行がありません。</p>
-                ) : (
-                  <>
-                    <div className="answer-key-meta-section-label">items（キー・値の直接編集）</div>
-                    {currentPageRows.map((row) => (
-                      <div
-                        key={row.item_id}
-                        className={`answer-key-kv-block ${dirtyIds.has(row.item_id) ? 'answer-key-kv-dirty' : ''}`}
-                      >
-                        {displayKeys.map((key) => {
-                            const label = KEY_LABELS[key] ?? key
-                            const val = row[key]
-                            const isArray = Array.isArray(val)
-                            const isObject = !isArray && val !== null && typeof val === 'object'
-                            const isComplex = isArray || isObject
-                            const strVal =
-                              val == null
-                                ? ''
-                                : isArray
-                                  ? `配列(${val.length}件)`
-                                  : isObject
-                                    ? '[オブジェクト]'
-                                    : String(val)
-                            const isDataKey = dataKeysForDisplay.includes(key)
-                            const isEditable = editableKeys.has(key)
-                            const keyDisplay =
-                              editingKeyName === key
-                                ? editingKeyValue
-                                : (KEY_LABELS[key] ?? key)
-                            return (
-                              <div key={key} className="answer-key-kv-row answer-key-kv-row-with-delete">
-                                {isDataKey ? (
-                                  <input
-                                    type="text"
-                                    className="answer-key-kv-key-input"
-                                    value={editingKeyName === key ? editingKeyValue : keyDisplay}
-                                    onChange={(e) => {
-                                      setEditingKeyName(key)
-                                      setEditingKeyValue(e.target.value)
-                                    }}
-                                    onBlur={() => {
-                                      const n = editingKeyValue.trim()
-                                      if (n && n !== key) onRenameKey(key, n)
-                                      setEditingKeyName(null)
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        const n = editingKeyValue.trim()
-                                        if (n && n !== key) onRenameKey(key, n)
-                                        setEditingKeyName(null)
-                                      }
-                                      if (e.key === 'Escape') setEditingKeyName(null)
-                                    }}
-                                    onFocus={() => {
-                                      setEditingKeyName(key)
-                                      setEditingKeyValue(keyDisplay)
-                                    }}
-                                    placeholder="キー"
-                                  />
-                                ) : (
-                                  <span className="answer-key-kv-key">{label}</span>
-                                )}
-                                {isEditable ? (
-                                  key === 'タイプ' ? (
-                                    <select
-                                      className="answer-key-kv-input answer-key-kv-select"
-                                      value={isComplex ? '' : strVal}
-                                      onChange={(e) =>
-                                        onValueChange(
-                                          row.item_id,
-                                          key,
-                                          e.target.value === '' ? null : e.target.value
-                                        )
-                                      }
-                                    >
-                                      {typeOptions.map((opt) => (
-                                        <option key={opt.value || '_'} value={opt.value}>
-                                          {opt.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  ) : (
-                                    <input
-                                      type="text"
-                                      className="answer-key-kv-input"
-                                      value={isComplex ? '' : strVal}
-                                      onChange={(e) =>
-                                        onValueChange(
-                                          row.item_id,
-                                          key,
-                                          e.target.value === '' ? null : e.target.value
-                                        )
-                                      }
-                                      placeholder={isComplex ? strVal : undefined}
-                                    />
-                                  )
-                                ) : (
-                                  <span className="answer-key-kv-val">{strVal || '—'}</span>
-                                )}
-                                {isDataKey ? (
-                                  <button
-                                    type="button"
-                                    className="answer-key-kv-delete-btn"
-                                    onClick={() => onRemoveKey(key)}
-                                    title="このキーを削除"
-                                  >
-                                    ×
-                                  </button>
-                                ) : (
-                                  <span className="answer-key-kv-delete-placeholder" />
-                                )}
-                              </div>
-                            )
-                          })}
-                      </div>
-                    ))}
-                    <div className="answer-key-kv-row answer-key-add-row answer-key-items-add-key">
-                      <input
-                        type="text"
-                        className="answer-key-kv-key-input"
-                        value={newKeyInput}
-                        onChange={(e) => setNewKeyInput(e.target.value)}
-                        placeholder="새 키（모든 행에 추가）"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            onAddKey(newKeyInput)
-                            setNewKeyInput('')
-                          }
-                        }}
-                      />
-                      <span className="answer-key-kv-add-hint">모든 행에 추가</span>
-                      <button
-                        type="button"
-                        className="answer-key-btn answer-key-kv-add-btn"
-                        onClick={() => {
-                          onAddKey(newKeyInput)
-                          setNewKeyInput('')
-                        }}
-                        disabled={!newKeyInput.trim()}
-                      >
-                        キー追加
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            <div className="answer-key-actions">
-              <button
-                type="button"
-                className="answer-key-btn answer-key-btn-secondary"
-                onClick={handleSaveGrid}
-                disabled={(dirtyIds.size === 0 && pageMetaDirtyPages.size === 0) || saveStatus === 'saving' || saveStatus === 'building'}
-              >
-                変更保存
-              </button>
-              <button
-                type="button"
-                className="answer-key-btn answer-key-btn-primary"
-                onClick={handleSaveAsAnswerKey}
-                disabled={saveStatus === 'saving' || saveStatus === 'building'}
-              >
-                {saveStatus === 'building' ? '登録中…' : '正解表として保存（ベクターDBに登録）'}
-              </button>
-            </div>
-            {saveMessage && (
-              <p className={`answer-key-status ${saveStatus === 'error' ? 'answer-key-status-error' : ''}`}>
-                {saveMessage}
-              </p>
-            )}
-          </div>
+          <AnswerKeyRightPanel
+            ctx={{
+              rightView,
+              setRightView,
+              firstRowToTemplateEntries: (row: unknown) => firstRowToTemplateEntries(row as GridRow | undefined),
+              currentPageRows,
+              setTemplateEntries,
+              syncJsonEditFromAnswer,
+              dirtyIds,
+              pageMetaDirtyPages,
+              answerProvider,
+              setAnswerProvider,
+              generateAnswerMutation: generateAnswerMutation as AnswerKeyRightPanelCtx['generateAnswerMutation'],
+              selectedDoc,
+              rows,
+              itemDataKeys,
+              jsonEditText,
+              setJsonEditText,
+              applyJsonEdit,
+              allDataLoaded,
+              templateEntries,
+              updateTemplateEntry,
+              removeTemplateEntry,
+              addTemplateEntry,
+              generateFromTemplateMutation,
+              currentPage,
+              currentPageMetaFields,
+              pageRoleEdits,
+              setPageRoleEdits,
+              setPageMetaDirtyPages,
+              currentPageMetaData,
+              groupedPageMetaFields,
+              onPageMetaGroupRemove,
+              editingPageMetaKey,
+              setEditingPageMetaKey,
+              editingPageMetaKeyValue,
+              setEditingPageMetaKeyValue,
+              onPageMetaKeyRenameFull,
+              onPageMetaChange,
+              onPageMetaKeyRemove,
+              typeOptions,
+              newPageMetaKey,
+              setNewPageMetaKey,
+              newPageMetaValue,
+              setNewPageMetaValue,
+              onPageMetaKeyAdd,
+              displayKeys,
+              dataKeysForDisplay,
+              editableKeys,
+              editingKeyName,
+              setEditingKeyName,
+              editingKeyValue,
+              setEditingKeyValue,
+              onRenameKey,
+              onValueChange,
+              onRemoveKey,
+              onAddKey,
+              getKuLabel,
+              newKeyInput,
+              setNewKeyInput,
+              handleSaveGrid,
+              handleSaveAsAnswerKey,
+              saveStatus,
+              saveMessage,
+            }}
+          />
         </div>
       )}
     </div>
