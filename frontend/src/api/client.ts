@@ -161,6 +161,18 @@ export const documentsApi = {
   },
 
   /**
+   * 現在状態を answer-json として DB に一括保存（行ごとの PUT なし・高速、ベクターDBなし）
+   */
+  saveAnswerJson: async (
+    pdfFilename: string,
+    body: { pages: Array<{ page_number: number; page_role?: string; page_meta?: Record<string, unknown>; items: Array<Record<string, unknown>> }> }
+  ): Promise<{ success: boolean; message: string; pages_count: number }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.put(`/api/documents/${encoded}/answer-json`, body)
+    return response.data
+  },
+
+  /**
    * RAG DB ソース: img フォルダ内の正解表一覧（form_type 別）
    * 戻り: { by_form_type: { "01": [ { pdf_name, relative_path, total_pages }, ... ], ... } }
    */
@@ -184,6 +196,20 @@ export const documentsApi = {
   }> => {
     const response = await client.get('/api/documents/answer-json-from-img', {
       params: { relative_path: relativePath },
+    })
+    return response.data
+  },
+
+  /**
+   * img 폴더의 Page*_answer.json에만 저장 (DB 미사용). RAG 문서는 여기서 읽어오므로 여기 저장해야 null 덮어쓰기 없음.
+   */
+  saveAnswerJsonFromImg: async (
+    relativePath: string,
+    body: { pages: Array<{ page_number: number; page_role?: string; page_meta?: Record<string, unknown>; items: Array<Record<string, unknown>> }> }
+  ): Promise<{ success: boolean; message: string; pages_count: number }> => {
+    const response = await client.put('/api/documents/answer-json-from-img', {
+      relative_path: relativePath,
+      pages: body.pages,
     })
     return response.data
   },
@@ -537,9 +563,20 @@ export const itemsApi = {
   },
 
   /**
-   * 検討状況（アイテム数基準・detail・得意先ありのみ）
+   * 現況フィルタ用。請求年月が設定されている文書の distinct 一覧。
+   * 返却: { year_months: [{ year, month }, ...] }
    */
-  getReviewStatsByItems: async (): Promise<{
+  getAvailableYearMonths: async (): Promise<{
+    year_months: Array<{ year: number; month: number }>
+  }> => {
+    const response = await client.get('/api/items/stats/available-year-months')
+    return response.data
+  },
+
+  /**
+   * 検討状況（アイテム数基準・detail・得意先ありのみ）。year/month で請求年月絞り込み可。
+   */
+  getReviewStatsByItems: async (params?: { year?: number; month?: number }): Promise<{
     total_item_count: number
     total_document_count: number
     first_checked_count: number
@@ -547,14 +584,15 @@ export const itemsApi = {
     second_checked_count: number
     second_not_checked_count: number
   }> => {
-    const response = await client.get('/api/items/stats/review-by-items')
+    const q = params && params.year != null && params.month != null ? { year: params.year, month: params.month } : {}
+    const response = await client.get('/api/items/stats/review-by-items', { params: q })
     return response.data
   },
 
   /**
-   * 検討チェックを誰が何件したか（증빙용 현황판）
+   * 検討チェックを誰が何件したか。year/month で請求年月絞り込み可。
    */
-  getReviewStatsByUser: async (): Promise<{
+  getReviewStatsByUser: async (params?: { year?: number; month?: number }): Promise<{
     by_user: Array<{
       user_id: number
       display_name: string
@@ -562,14 +600,15 @@ export const itemsApi = {
       second_checked_count: number
     }>
   }> => {
-    const response = await client.get('/api/items/stats/review-by-user')
+    const q = params && params.year != null && params.month != null ? { year: params.year, month: params.month } : {}
+    const response = await client.get('/api/items/stats/review-by-user', { params: q })
     return response.data
   },
 
   /**
-   * detail ページ・得意先ありのみのアイテム数集計（文書セクション用）
+   * detail ページ・得意先ありのみのアイテム数集計。year/month で請求年月絞り込み可。
    */
-  getDetailSummary: async (): Promise<{
+  getDetailSummary: async (params?: { year?: number; month?: number }): Promise<{
     total_item_count: number
     total_document_count: number
     by_channel: Array<{ channel: string; item_count: number }>
@@ -577,14 +616,18 @@ export const itemsApi = {
     by_year_month: Array<{ year: number; month: number; item_count: number }>
     by_year_month_by_form: Array<{ year: number; month: number; form_type: string; item_count: number }>
   }> => {
-    const response = await client.get('/api/items/stats/detail-summary')
+    const q = params && params.year != null && params.month != null ? { year: params.year, month: params.month } : {}
+    const response = await client.get('/api/items/stats/detail-summary', { params: q })
     return response.data
   },
 
   /**
-   * 得意先（거래처）별 통계（detail のみ・得意先ありのみ）
+   * 得意先別統計。year/month で請求年月絞り込み可。
    */
-  getCustomerStats: async (limit?: number): Promise<{
+  getCustomerStats: async (
+    limit?: number,
+    params?: { year?: number; month?: number }
+  ): Promise<{
     customers: Array<{
       customer_name: string
       document_count: number
@@ -592,8 +635,13 @@ export const itemsApi = {
       item_count: number
     }>
   }> => {
-    const params = limit != null ? { limit } : {}
-    const response = await client.get('/api/items/stats/by-customer', { params })
+    const q: Record<string, number> = {}
+    if (limit != null) q.limit = limit
+    if (params && params.year != null && params.month != null) {
+      q.year = params.year
+      q.month = params.month
+    }
+    const response = await client.get('/api/items/stats/by-customer', { params: q })
     return response.data
   },
 
@@ -638,10 +686,18 @@ export const searchApi = {
   },
 
   /**
-   * 로그인 사용자 담당 거래처(슈퍼) 목록 (super_import.csv 기준)
+   * 로그인 사용자 담당 거래처(슈퍼) 목록 (retail_user.csv 기준)
    */
   getMySupers: async (): Promise<{ super_names: string[] }> => {
     const response = await client.get<{ super_names: string[] }>('/api/search/my-supers')
+    return response.data
+  },
+
+  /**
+   * retail_user.csv 대표슈퍼명 전체. 거래처↔담당 매핑 시 notepad와 동일하게 전체 풀에서 최적 매칭용.
+   */
+  getAllSuperNames: async (): Promise<{ super_names: string[] }> => {
+    const response = await client.get<{ super_names: string[] }>('/api/search/all-super-names')
     return response.data
   },
 
@@ -666,6 +722,20 @@ export const searchApi = {
       '/api/search/my-super-pages',
       { params }
     )
+    return response.data
+  },
+
+  /**
+   * 거래처(왼쪽) vs 담당(오른쪽) 유사도 매핑. notepad와 동일한 difflib 기준.
+   */
+  getCustomerSimilarityMapping: async (
+    customerNames: string[],
+    superNames: string[]
+  ): Promise<{ mapped: Array<{ left: string; right: string; score: number }>; unmapped_rights: string[] }> => {
+    const response = await client.post('/api/search/customer-similarity-mapping', {
+      customer_names: customerNames,
+      super_names: superNames,
+    })
     return response.data
   },
 
@@ -792,6 +862,9 @@ export type UpdateUserPayload = {
   role?: string
   category?: string
   is_active?: boolean
+  is_admin?: boolean
+  /** 관리자 설정용. 전달 시 해당 비밀번호로 설정, 빈 문자열이면 로그인ID로 초기화 */
+  password?: string
 }
 
 export const authApi = {
@@ -875,9 +948,9 @@ export const authApi = {
   },
 
   /**
-   * 사용자 비활성화 (관리자용)
+   * 사용자 삭제 (관리자용 - DB 행 삭제)
    */
-  deactivateUser: async (userId: number) => {
+  deleteUser: async (userId: number) => {
     const response = await client.delete(`/api/auth/users/${userId}`)
     return response.data
   },
@@ -945,6 +1018,9 @@ export const ragAdminApi = {
   getStatus: async (): Promise<{
     total_vectors: number
     per_form_type: Array<{ form_type: string | null; vector_count: number }>
+    answer_key_pages_total: number
+    answer_key_pages_this_month: number
+    answer_key_pages_last_month: number
   }> => {
     const response = await client.get('/api/rag-admin/status')
     return response.data
@@ -998,9 +1074,9 @@ export const ragAdminApi = {
   },
 
   /**
-   * super_import.csv をそのまま取得（管理マスタタブで CSV 内容を表示）
+   * retail_user.csv をそのまま取得（管理マスタタブで CSV 内容を表示）
    */
-  getSuperImportCsv: async (): Promise<{
+  getRetailUserCsv: async (): Promise<{
     rows: Array<{
       super_code: string
       super_name: string
@@ -1009,19 +1085,47 @@ export const ragAdminApi = {
       username: string
     }>
   }> => {
-    const response = await client.get('/api/rag-admin/super-import-csv')
+    const response = await client.get('/api/rag-admin/retail-user-csv')
     return response.data
   },
 
-  /** super_import.csv を全体上書き保存 */
-  putSuperImportCsv: async (rows: Array<{
+  /** retail_user.csv を全体上書き保存 */
+  putRetailUserCsv: async (rows: Array<{
     super_code: string
     super_name: string
     person_id: string
     person_name: string
     username: string
   }>): Promise<{ message: string; rows_count: number }> => {
-    const response = await client.put('/api/rag-admin/super-import-csv', { rows })
+    const response = await client.put('/api/rag-admin/retail-user-csv', { rows })
+    return response.data
+  },
+
+  /** dist_retail.csv をそのまま取得（管理マスタタブで CSV 内容を表示） */
+  getDistRetailCsv: async (): Promise<{
+    rows: Array<{
+      dist_code: string
+      dist_name: string
+      super_code: string
+      super_name: string
+      person_id: string
+      person_name: string
+    }>
+  }> => {
+    const response = await client.get('/api/rag-admin/dist-retail-csv')
+    return response.data
+  },
+
+  /** dist_retail.csv を全体上書き保存 */
+  putDistRetailCsv: async (rows: Array<{
+    dist_code: string
+    dist_name: string
+    super_code: string
+    super_name: string
+    person_id: string
+    person_name: string
+  }>): Promise<{ message: string; rows_count: number }> => {
+    const response = await client.put('/api/rag-admin/dist-retail-csv', { rows })
     return response.data
   },
 
