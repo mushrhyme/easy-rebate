@@ -15,15 +15,15 @@ ALLOWED_PROVIDERS = ("gemini", "gpt5.2")
 
 
 def _read_rag_provider() -> str:
-    """설정 파일에서 rag_provider 값을 읽음. 없으면 'gemini'."""
+    """설정 파일에서 rag_provider 값을 읽음. 없으면 'gpt5.2' (업로드·분석은 무조건 GPT)."""
     if not _RAG_PROVIDER_FILE.exists():
-        return "gemini"
+        return "gpt5.2"
     try:
         data = json.loads(_RAG_PROVIDER_FILE.read_text(encoding="utf-8"))
-        p = (data.get("provider") or "gemini").strip().lower()
-        return p if p in ALLOWED_PROVIDERS else "gemini"
+        p = (data.get("provider") or "gpt5.2").strip().lower()
+        return p if p in ALLOWED_PROVIDERS else "gpt5.2"
     except Exception:
-        return "gemini"
+        return "gpt5.2"
 
 
 def _write_rag_provider(provider: str) -> None:
