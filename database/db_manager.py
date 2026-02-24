@@ -7,10 +7,46 @@ JSON 파싱 결과를 PostgreSQL에 저장하고 조회하는 기능을 제공�
 
 import psycopg2
 import time
+from difflib import SequenceMatcher
 from psycopg2.extras import execute_values, RealDictCursor, Json
 from psycopg2.pool import SimpleConnectionPool
 from typing import Dict, Any, List, Optional
 import json
+
+
+def _similarity_difflib(a: str, b: str) -> float:
+    """notepad.ipynb와 동일: 두 문자열 유사도 0~1 (SequenceMatcher.ratio)."""
+    a, b = (a or "").strip(), (b or "").strip()
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _get_customer_from_item(item: Dict[str, Any]) -> str:
+    """item에서 거래처 문자열 추출 (DB cust_expr과 동일: 得意先 → customer)."""
+    item_data = item.get("item_data") or {}
+    if isinstance(item_data, dict):
+        cust = (item_data.get("得意先") or "").strip()
+    else:
+        cust = ""
+    if not cust:
+        cust = (item.get("customer") or "").strip()
+    return cust or ""
+
+
+def _customer_matches_super_names(
+    customer_str: str, super_names: List[str], min_similarity: float
+) -> bool:
+    """담당 슈퍼명 중 하나라도 customer_str과 유사도 >= min_similarity이면 True (notepad 동일 로직)."""
+    customer_str = (customer_str or "").strip()
+    if not customer_str:
+        return False
+    for sn in ((s or "").strip() for s in super_names if s):
+        if not sn:
+            continue
+        if _similarity_difflib(customer_str, sn) >= min_similarity:
+            return True
+    return False
 from contextlib import contextmanager
 from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
@@ -236,7 +272,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
             pdf_filename: PDF 파일명 (None이면 전체 DB에서 검색)
             exact_match: True면 정확히 일치, False면 부분 일치 (ILIKE 검색)
             form_type: 양식지 번호 (01, 02, 03, 04, 05). None이면 모든 양식지
-            super_names: 로그인 사용자 담당 슈퍼명 목록. 있으면 유사도(min_similarity) 이상만 반환
+            super_names: 로그인 사용자 담당 슈퍼명 목록. 있으면 유사도(min_similarity) 이상만 반환 (difflib, notepad 동일)
             min_similarity: 슈퍼명 유사도 최소 기준 (0~1, 기본 0.9)
             
         Returns:
@@ -265,14 +301,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 if form_type:
                     conditions.append("d.form_type = %s")
                     params.append(form_type)
-                # 내 담당만: 슈퍼명 유사도 90% 이상 (pg_trgm). detail 得意先와 동일한 값으로 비교
-                if super_names and len(super_names) > 0:
-                    cust_expr = self._item_customer_expr()
-                    conditions.append(
-                        f"({cust_expr}) <> '' "
-                        f"AND EXISTS (SELECT 1 FROM unnest(%s::text[]) AS sn WHERE similarity({cust_expr}, sn) >= %s))"
-                    )
-                    params.extend([super_names, min_similarity])
+                # 내 담당만: 슈퍼명 유사도는 fetch 후 Python에서 difflib으로 필터 (notepad.ipynb와 동일 결과)
                 where_clause = " AND ".join(conditions)
                 
                 # SQL 쿼리 구성 (items_current와 items_archive 모두 조회)
@@ -359,7 +388,16 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                 
                 cursor.execute(sql, execute_params)
                 fetched_rows = cursor.fetchall()
-                
+
+                # 내 담당만: 슈퍼명 유사도 필터 (notepad와 동일한 difflib 기준)
+                if super_names and len(super_names) > 0:
+                    fetched_rows = [
+                        r for r in fetched_rows
+                        if _customer_matches_super_names(
+                            _get_customer_from_item(dict(r)), super_names, min_similarity
+                        )
+                    ]
+
                 # 키 순서 조회 (form_type별)
                 item_key_order = None
                 result_form_type = form_type
@@ -485,7 +523,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
     ) -> List[Dict[str, Any]]:
         """
         담당 슈퍼명 목록과 유사도 이상인 거래처가 있는 페이지 목록 반환.
-        super_import.csv 기반 목록을 인자로 받음 (DB 테이블 미사용).
+        retail_user.csv 기반 목록을 인자로 받음. 유사도는 difflib(notepad.ipynb와 동일).
 
         Args:
             super_names: 슈퍼명 목록 (CSV에서 username별로 조회한 값)
@@ -498,36 +536,51 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
         names_trimmed = [n.strip() for n in super_names if n and n.strip()]
         if not names_trimmed:
             return []
+        cust_expr = self._item_customer_expr()
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
-                cust_expr = self._item_customer_expr()
-                base_cond = (
-                    f"({cust_expr}) <> '' "
-                    f"AND EXISTS (SELECT 1 FROM unnest(%s::text[]) AS sn "
-                    f"WHERE similarity({cust_expr}, sn) >= %s)"
-                )
+                base_cond = f"({cust_expr}) <> ''"
                 conditions = [base_cond]
-                params: List[Any] = [names_trimmed, min_similarity]
+                params: List[Any] = []
                 if form_type:
                     conditions.append("d.form_type = %s")
                     params.append(form_type)
                 where_clause = " AND ".join(conditions)
+                # 거래처만 가져온 뒤 Python에서 difflib 유사도 필터 (notepad와 동일)
                 sql = """
-                    SELECT DISTINCT i.pdf_filename, i.page_number, d.form_type
+                    SELECT i.pdf_filename, i.page_number, d.form_type,
+                           """ + cust_expr.replace("\n", " ").strip() + """ AS cust
                     FROM items_current i
                     INNER JOIN documents_current d ON i.pdf_filename = d.pdf_filename
                     WHERE """ + where_clause + """
-                    UNION
-                    SELECT DISTINCT i.pdf_filename, i.page_number, d.form_type
+                    UNION ALL
+                    SELECT i.pdf_filename, i.page_number, d.form_type,
+                           """ + cust_expr.replace("\n", " ").strip() + """ AS cust
                     FROM items_archive i
                     INNER JOIN documents_archive d ON i.pdf_filename = d.pdf_filename
                     WHERE """ + where_clause + """
-                    ORDER BY pdf_filename, page_number
                 """
                 cursor.execute(sql, params * 2)
                 rows = cursor.fetchall()
-                return [dict(r) for r in rows]
+                seen: set = set()
+                out: List[Dict[str, Any]] = []
+                for r in rows:
+                    row = dict(r)
+                    if not _customer_matches_super_names(
+                        (row.get("cust") or "").strip(), names_trimmed, min_similarity
+                    ):
+                        continue
+                    key = (row["pdf_filename"], row["page_number"], row["form_type"])
+                    if key not in seen:
+                        seen.add(key)
+                        out.append({
+                            "pdf_filename": row["pdf_filename"],
+                            "page_number": row["page_number"],
+                            "form_type": row["form_type"],
+                        })
+                out.sort(key=lambda x: (x["pdf_filename"], x["page_number"]))
+                return out
         except Exception as e:
             print(f"⚠️ get_page_keys_by_super_names 실패: {e}")
             return []

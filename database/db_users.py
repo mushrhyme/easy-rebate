@@ -24,13 +24,13 @@ class UsersMixin:
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 try:
-                    # 新スキーマ: display_name_ja, password_hash, force_password_change
                     cursor.execute("""
                         SELECT user_id,
                                username,
                                display_name,
                                display_name_ja,
                                is_active,
+                               COALESCE(is_admin, (username = 'admin')) AS is_admin,
                                password_hash,
                                force_password_change,
                                created_at,
@@ -41,13 +41,13 @@ class UsersMixin:
                         WHERE username = %s AND is_active = TRUE
                     """, (username,))
                 except Exception:
-                    # 旧スキーマ互換
                     cursor.execute("""
                         SELECT user_id,
                                username,
                                display_name,
                                NULL::VARCHAR(200) AS display_name_ja,
                                is_active,
+                               (username = 'admin') AS is_admin,
                                NULL::VARCHAR(255) AS password_hash,
                                COALESCE(force_password_change, TRUE) AS force_password_change,
                                created_at,
@@ -84,6 +84,7 @@ class UsersMixin:
                                display_name,
                                display_name_ja,
                                is_active,
+                               COALESCE(is_admin, (username = 'admin')) AS is_admin,
                                password_hash,
                                force_password_change,
                                created_at,
@@ -100,6 +101,7 @@ class UsersMixin:
                                display_name,
                                NULL::VARCHAR(200) AS display_name_ja,
                                is_active,
+                               (username = 'admin') AS is_admin,
                                NULL::VARCHAR(255) AS password_hash,
                                COALESCE(force_password_change, TRUE) AS force_password_change,
                                created_at,
@@ -229,6 +231,7 @@ class UsersMixin:
                                u.display_name,
                                u.display_name_ja,
                                u.is_active,
+                               COALESCE(u.is_admin, (u.username = 'admin')) AS is_admin,
                                u.password_hash,
                                COALESCE(u.force_password_change, TRUE) AS force_password_change,
                                s.session_id,
@@ -247,7 +250,8 @@ class UsersMixin:
                                u.display_name,
                                NULL::VARCHAR(200) AS display_name_ja,
                                u.is_active,
-                               NULL::VARCHAR(255) AS password_hash,
+                               (u.username = 'admin') AS is_admin,
+                               u.password_hash,
                                COALESCE(u.force_password_change, TRUE) AS force_password_change,
                                s.session_id,
                                s.created_at as session_created_at,
@@ -260,7 +264,12 @@ class UsersMixin:
                     """, (session_id,))
 
                 result = cursor.fetchone()
-                return dict(result) if result else None
+                if result:
+                    d = dict(result)
+                    if 'is_admin' not in d:
+                        d['is_admin'] = (d.get('username') == 'admin')
+                    return d
+                return None
         except Exception as e:
             print(f"⚠️ 세션 사용자 조회 실패: {e}")
             import traceback
@@ -311,6 +320,7 @@ class UsersMixin:
                                role,
                                category,
                                is_active,
+                               COALESCE(is_admin, (username = 'admin')) AS is_admin,
                                created_at,
                                last_login_at
                         FROM users
@@ -327,6 +337,7 @@ class UsersMixin:
                                NULL::VARCHAR(100) AS role,
                                NULL::VARCHAR(100) AS category,
                                is_active,
+                               (username = 'admin') AS is_admin,
                                created_at,
                                last_login_at
                         FROM users
@@ -384,6 +395,7 @@ class UsersMixin:
         role: str | None = None,
         category: str | None = None,
         is_active: bool | None = None,
+        is_admin: bool | None = None,
     ) -> bool:
         """사용자 정보 업데이트"""
         try:
@@ -410,6 +422,9 @@ class UsersMixin:
                 if role is not None:
                     update_fields.append("role = %s")
                     params.append(role or None)
+                if is_admin is not None:
+                    update_fields.append("is_admin = %s")
+                    params.append(is_admin)
                 if category is not None:
                     update_fields.append("category = %s")
                     params.append(category or None)
@@ -428,13 +443,19 @@ class UsersMixin:
                         WHERE user_id = %s
                     """, params)
                 except Exception:
+                    # is_admin 등 컬럼이 없으면 fallback 하지 않고 실패 반환 (마이그레이션 필요)
+                    if any(f == "is_admin = %s" for f in update_fields):
+                        raise
+                    # 구 스키마: display_name, is_active만 업데이트. params 순서에 맞게 서브셋만 전달
                     fields_wo_extra = [f for f in update_fields if f.startswith(("display_name", "is_active"))]
                     if not fields_wo_extra:
-                        return True
+                        return False
+                    order_params = params[:-1]  # user_id 제외
+                    fallback_params = [order_params[i] for i, f in enumerate(update_fields) if f in fields_wo_extra] + [params[-1]]
                     cursor.execute(f"""
                         UPDATE users SET {', '.join(fields_wo_extra)}
                         WHERE user_id = %s
-                    """, params)
+                    """, fallback_params)
 
                 conn.commit()
                 return True
@@ -442,23 +463,37 @@ class UsersMixin:
             print(f"⚠️ 사용자 업데이트 실패: {e}")
             return False
 
-    def update_password(self, user_id: int, password_hash: str) -> bool:
-        """비밀번호 변경 (해시 저장 후 강제 변경 플래그 해제)"""
+    def delete_user(self, user_id: int) -> bool:
+        """사용자 DB 행 삭제"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"⚠️ 사용자 삭제 실패: {e}")
+            return False
+
+    def update_password(
+        self, user_id: int, password_hash: str, force_password_change: bool = False
+    ) -> bool:
+        """비밀번호 변경. force_password_change=True면 다음 로그인 시 비번 변경 유도(관리자 초기화용)."""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 try:
                     cursor.execute("""
                         UPDATE users
-                        SET password_hash = %s, force_password_change = FALSE
+                        SET password_hash = %s, force_password_change = %s
                         WHERE user_id = %s
-                    """, (password_hash, user_id))
+                    """, (password_hash, force_password_change, user_id))
                 except Exception:
                     cursor.execute("""
                         UPDATE users
-                        SET force_password_change = FALSE
+                        SET force_password_change = %s
                         WHERE user_id = %s
-                    """, (user_id,))
+                    """, (force_password_change, user_id))
                 conn.commit()
                 return True
         except Exception as e:
