@@ -64,7 +64,7 @@ def extract_pages_with_rag(
     top_k = top_k if top_k is not None else config.top_k
     similarity_threshold = similarity_threshold if similarity_threshold is not None else config.similarity_threshold
     rag_llm_workers = config.rag_llm_parallel_workers  # RAG+LLM 병렬 워커 수
-    ocr_delay = config.ocr_request_delay  # OCR 요청 간 딜레이
+    ocr_parallel_workers = getattr(config, "max_parallel_workers", 1)  # Azure OCR 병렬 수 (1=순차)
     
     pdf_name = Path(pdf_path).stem
     pdf_filename = f"{pdf_name}.pdf"
@@ -171,7 +171,7 @@ def extract_pages_with_rag(
     # 1단계: PDF에서 텍스트 추출. mail → Azure(표 복원), finet → PdfTextExtractor(excel)
     print(f"📝 1단계: PDF 텍스트 추출 시작 ({len(images)}개 페이지)")
     pdf_path_obj = Path(pdf_path)
-    ocr_texts = []
+    ocr_texts = [None] * len(images)
     ocr_words_list = [None] * len(images)
 
     use_azure_for_mail = upload_channel == "mail"
@@ -182,49 +182,78 @@ def extract_pages_with_rag(
     else:
         text_extractor = PdfTextExtractor(upload_channel=upload_channel, form_number=form_type)
 
-    try:
-        for idx, image in enumerate(images):
-            page_num = idx + 1
-            total_pages = len(images)
-
-            if progress_callback:
-                progress_callback(page_num, total_pages, f"🔍 페이지 {page_num}/{total_pages}: 텍스트 추출 중...")
-
-            print(f"페이지 {page_num}/{total_pages} 텍스트 추출 중...", end="", flush=True)
-
+    def _azure_ocr_one_page(idx: int) -> tuple:
+        """한 페이지 Azure OCR (병렬 워커용). 반환: (idx, ocr_text|None, words_data|None)"""
+        page_num = idx + 1
+        image = images[idx]
+        try:
+            os.makedirs(debug_dir, exist_ok=True)
             try:
-                os.makedirs(debug_dir, exist_ok=True)
-                try:
-                    debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
-                    image.save(debug_image_path, "PNG")
-                except Exception as debug_error:
-                    print(f"  ⚠️ 원본 이미지 저장 실패: {debug_error}")
+                debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
+                image.save(debug_image_path, "PNG")
+            except Exception:
+                pass
+            raw = azure_extractor.extract_from_pdf_page_raw(pdf_path_obj, page_num)
+            if not raw:
+                return (idx, None, None)
+            ocr_text = raw_to_table_restored_text(raw)
+            ocr_text = normalize_ocr_text(ocr_text or "", use_fullwidth=True)
+            words = (raw.get("pages") or [{}])[0].get("words") or []
+            words_data = {"words": words, "width": 1, "height": 1} if words else None
+            return (idx, ocr_text if ocr_text.strip() else None, words_data)
+        except Exception:
+            return (idx, None, None)
 
-                if use_azure_for_mail:
-                    raw = azure_extractor.extract_from_pdf_page_raw(pdf_path_obj, page_num)
-                    if not raw:
-                        print(f"  ⚠️ Azure raw 결과 없음")
-                        ocr_texts.append(None)
+    use_parallel_azure = use_azure_for_mail and ocr_parallel_workers > 1 and len(images) > 1
+    try:
+        if use_parallel_azure:
+            max_workers = min(ocr_parallel_workers, len(images))
+            print(f"🚀 1단계: Azure OCR 병렬 처리 (최대 {max_workers}개 스레드, {len(images)}개 페이지)")
+            completed = 0
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_idx = {executor.submit(_azure_ocr_one_page, idx): idx for idx in range(len(images))}
+                for future in as_completed(future_to_idx):
+                    idx, ocr_text, words_data = future.result()
+                    ocr_texts[idx] = ocr_text
+                    ocr_words_list[idx] = words_data
+                    completed += 1
+                    if progress_callback:
+                        progress_callback(idx + 1, len(images), f"🔍 페이지 {idx + 1}/{len(images)}: 텍스트 추출 완료")
+                    n_items = len(ocr_text or "") if ocr_text else 0
+                    w_count = len(words_data.get("words", [])) if words_data else 0
+                    print(f"✅ 페이지 {idx + 1}/{len(images)} 완료 (길이: {n_items} 문자, 단어 {w_count}개) - 진행: {completed}/{len(images)}")
+        else:
+            for idx, image in enumerate(images):
+                page_num = idx + 1
+                total_pages = len(images)
+                if progress_callback:
+                    progress_callback(page_num, total_pages, f"🔍 페이지 {page_num}/{total_pages}: 텍스트 추출 중...")
+                print(f"페이지 {page_num}/{total_pages} 텍스트 추출 중...", end="", flush=True)
+                try:
+                    if use_azure_for_mail:
+                        idx, ocr_text, words_data = _azure_ocr_one_page(idx)
+                        ocr_texts[idx] = ocr_text
+                        ocr_words_list[idx] = words_data
+                        w_count = len(words_data.get("words", [])) if words_data else 0
+                        print(f" 완료 (길이: {len(ocr_text or '')} 문자, 단어 {w_count}개)")
                     else:
-                        ocr_text = raw_to_table_restored_text(raw)
-                        ocr_text = normalize_ocr_text(ocr_text or "", use_fullwidth=True)
-                        ocr_texts.append(ocr_text if ocr_text.strip() else None)
-                        words = (raw.get("pages") or [{}])[0].get("words") or []
-                        ocr_words_list[idx] = {"words": words, "width": 1, "height": 1} if words else None
-                        print(f" 완료 (길이: {len(ocr_text or '')} 문자, 단어 {len(words)}개)")
-                else:
-                    ocr_text = text_extractor.extract_text(pdf_path_obj, page_num)
-                    if not ocr_text or len(ocr_text.strip()) == 0:
-                        print(f"  ⚠️ 텍스트가 비어있습니다")
-                        ocr_texts.append(None)
-                    else:
-                        ocr_text = normalize_ocr_text(ocr_text, use_fullwidth=True)
-                        ocr_texts.append(ocr_text)
-                        print(f" 완료 (길이: {len(ocr_text)} 문자)")
-            except Exception as e:
-                error_msg = str(e)
-                print(f" 실패 - {error_msg}")
-                ocr_texts.append(None)
+                        os.makedirs(debug_dir, exist_ok=True)
+                        try:
+                            debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
+                            image.save(debug_image_path, "PNG")
+                        except Exception as debug_error:
+                            print(f"  ⚠️ 원본 이미지 저장 실패: {debug_error}")
+                        ocr_text = text_extractor.extract_text(pdf_path_obj, page_num)
+                        if not ocr_text or len(ocr_text.strip()) == 0:
+                            print(f"  ⚠️ 텍스트가 비어있습니다")
+                            ocr_texts[idx] = None
+                        else:
+                            ocr_text = normalize_ocr_text(ocr_text, use_fullwidth=True)
+                            ocr_texts[idx] = ocr_text
+                            print(f" 완료 (길이: {len(ocr_text)} 문자)")
+                except Exception as e:
+                    print(f" 실패 - {e}")
+                    ocr_texts[idx] = None
     finally:
         if not use_azure_for_mail:
             text_extractor.close_all()

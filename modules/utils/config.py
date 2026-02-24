@@ -66,9 +66,9 @@ class RAGConfig:
     # openai_model: str = "gpt-4o-2024-08-06"
     gemini_extractor_model: str = "gemini-2.5-flash-lite"  # rag_llm_provider="gemini" 일 때 사용
     question: str = "이 페이지의 상품명, 수량, 금액 등 항목 정보를 모두 추출해줘"
-    max_parallel_workers: int = 1
-    rag_llm_parallel_workers: int = 5  # LLM 병렬 워커 수 (3 → 5로 증가)
-    ocr_request_delay: float = 2.0
+    max_parallel_workers: int = 3  # Azure OCR 1단계 병렬 수 (1=순차, 3~5 권장. 업스테이지와 달리 동시 호출 가능)
+    rag_llm_parallel_workers: int = 5  # RAG+LLM 2단계 병렬 워커 수
+    ocr_request_delay: float = 2.0  # (미사용) Upstage 등 호출 간격용 예비
     rag_prompt_file: str = "rag_with_example_v4.txt"
     gemini_prompt_file: str = "prompt_v3.txt"
     # PDF 분석 완료 후 img 폴더에 복사할지 여부. False면 DB만 사용(중복 저장 없음).
