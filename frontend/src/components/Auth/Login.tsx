@@ -16,7 +16,7 @@ const Login: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!username.trim()) {
-      setError('ユーザー名を入力してください')
+      setError('ログインIDを入力してください')
       return
     }
     if (!password) {
@@ -56,36 +56,33 @@ const Login: React.FC = () => {
         </div>
 
         <form className="login-form" onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="username" className="form-label">
-              ユーザー名
-            </label>
-            <input
-              type="text"
-              id="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="form-input"
-              placeholder="ユーザー名を入力してください"
-              disabled={isLoading}
-              autoComplete="username"
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password" className="form-label">
-              パスワード
-            </label>
-            <div className="password-input-wrap">
+          <div className="login-id-password-group">
+            <p className="login-group-label">ユーザーID／パスワード</p>
+            <div className="form-group">
+              <input
+                type="text"
+                id="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="form-input"
+                placeholder="イントラネットIDを入力してください"
+                disabled={isLoading}
+                autoComplete="username"
+                aria-label="ログインID"
+              />
+            </div>
+            <div className="form-group">
+              <div className="password-input-wrap">
               <input
                 type={showPassword ? 'text' : 'password'}
                 id="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="form-input"
-                placeholder="初期パスワードはユーザー名と同じです"
+                placeholder="初期パスワードはIDと同一です"
                 disabled={isLoading}
                 autoComplete="current-password"
+                aria-label="パスワード"
               />
               <button
                 type="button"
@@ -109,11 +106,13 @@ const Login: React.FC = () => {
                 )}
               </button>
             </div>
+            </div>
           </div>
 
           {error && (
-            <div className="error-message">
-              {error}
+            <div className="login-error-wrap">
+              <div className="error-message">{error}</div>
+              <p className="login-error-hint">パスワードを忘れた場合は管理者にご連絡ください。</p>
             </div>
           )}
 

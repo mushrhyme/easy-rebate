@@ -10,6 +10,7 @@ export interface User {
   display_name: string
   display_name_ja?: string
   is_active: boolean
+  is_admin?: boolean
   last_login_at?: string
   login_count: number
   must_change_password?: boolean
@@ -70,6 +71,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         setUser({
           ...data.user,
           is_active: true,
+          is_admin: (data.user as { is_admin?: boolean }).is_admin ?? false,
           login_count: 0,
           must_change_password: (data as { must_change_password?: boolean }).must_change_password ?? false,
         })
@@ -95,7 +97,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const login = async (username: string, password: string): Promise<{ success: boolean; message: string }> => {
     try {
-      setIsLoading(true)
+      // 전역 isLoading은 세션 체크용만 사용. 로그인 시도 시 바꾸지 않아 로그인 화면이 유지되고 에러 메시지가 보이도록 함.
       console.log('🔵 [로그인] 로그인 시도:', username)
 
       const data = await authApi.login(username, password)
@@ -135,8 +137,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       })
       const errorMessage = error?.response?.data?.detail || error?.message || '로그인 중 오류가 발생했습니다'
       return { success: false, message: errorMessage }
-    } finally {
-      setIsLoading(false)
     }
   }
 
