@@ -88,7 +88,9 @@ class RAGManager:
         self._bm25_index = None
         self._bm25_texts = None
         self._bm25_example_map = None
-    
+        # 동시 분석(다른 탭) 시 RAG 검색 직렬화: 임베딩/BM25/FAISS 공유로 인한 경합·지연 방지
+        self._search_lock = Lock()
+
     def _get_embedding_model(self):
         if self._embedding_model is None:
             with RAGManager._model_lock:
@@ -1232,14 +1234,15 @@ class RAGManager:
         Returns:
             검색 결과 리스트
         """
-        if search_method == "hybrid":
-            return self.search_hybrid(
-                query_text, top_k, similarity_threshold, hybrid_alpha, form_type
-            )
-        else:  # "vector" 또는 기본값
-            return self.search_vector_only(
-                query_text, top_k, similarity_threshold, form_type
-            )
+        with self._search_lock:
+            if search_method == "hybrid":
+                return self.search_hybrid(
+                    query_text, top_k, similarity_threshold, hybrid_alpha, form_type
+                )
+            else:  # "vector" 또는 기본값
+                return self.search_vector_only(
+                    query_text, top_k, similarity_threshold, form_type
+                )
 
 
 # 전역 RAG Manager 인스턴스 (싱글톤 패턴)
