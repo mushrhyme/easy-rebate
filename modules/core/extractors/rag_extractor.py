@@ -6,6 +6,7 @@ OCR 텍스트를 입력받아 벡터 DB에서 유사한 예제를 검색하고,
 """
 
 import os
+import re
 import json
 import time
 from pathlib import Path
@@ -15,6 +16,13 @@ import numpy as np
 
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.config import get_project_root, load_rag_prompt
+
+
+def _normalize_amount_colon(value: Any) -> Any:
+    """OCR 회계 점선이 콜론으로 읽힌 금액 문자열을 숫자만 이어 붙인 형태로 정규화. 예: '1:500' -> '1500'"""
+    if isinstance(value, str) and re.fullmatch(r"\d+:\d+", value):
+        return value.replace(":", "")
+    return value
 
 
 def _reorder_json_by_key_order(json_data: Dict[str, Any], key_order: Dict[str, Any]) -> Dict[str, Any]:
@@ -573,7 +581,13 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                             if key in item and isinstance(item[key], float) and (math.isnan(item[key]) or math.isinf(item[key])):
                                 item[key] = None
                                 print(f"  ⚠️ {key}가 NaN이어서 null로 변환했습니다.")
-            
+            # 金額 등 금액 필드: OCR 점선이 "1:500"처럼 읽힌 경우 콜론 제거 후처리 ("1500")
+            if isinstance(result_json.get("items"), list):
+                for item in result_json["items"]:
+                    if isinstance(item, dict):
+                        for key, val in list(item.items()):
+                            item[key] = _normalize_amount_colon(val)
+
             # 키 순서 재정렬 (REFERENCE_JSON이 있는 경우)
             if similar_examples and len(similar_examples) > 0:
                 example = similar_examples[0]
