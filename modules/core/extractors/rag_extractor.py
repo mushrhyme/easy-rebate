@@ -25,6 +25,49 @@ def _normalize_amount_colon(value: Any) -> Any:
     return value
 
 
+# RAG 예제를 프롬프트에 넣을 때 제거할 필드 (DB/앱 식별용, LLM 추출 대상 아님)
+_EXAMPLE_STRIP_KEYS = frozenset({"item_id", "pdf_filename", "page_number", "item_order", "version", "review_status"})
+
+
+def _sanitize_example_answer_for_prompt(answer_json: Dict[str, Any], key_order: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    RAG 예제 answer_json을 프롬프트용으로 정리: DB 전용 필드 제거 + key_order대로 키 순서 복원.
+    answer.json 원본에 있던 필드만 남기고 순서를 맞춤.
+    """
+    if not answer_json or not isinstance(answer_json, dict):
+        return answer_json
+    page_keys = (key_order or {}).get("page_keys", [])
+    item_keys = (key_order or {}).get("item_keys", [])
+    out = {}
+    for key in page_keys if page_keys else answer_json.keys():
+        if key not in answer_json:
+            continue
+        if key == "items" and isinstance(answer_json[key], list) and answer_json[key]:
+            clean_items = []
+            for item in answer_json[key]:
+                if not isinstance(item, dict):
+                    clean_items.append(item)
+                    continue
+                # DB 전용 필드 제거
+                stripped = {k: v for k, v in item.items() if k not in _EXAMPLE_STRIP_KEYS}
+                # item_keys 순서대로 정렬 (원본 answer.json 순서)
+                ordered = {}
+                for ik in (item_keys if item_keys else stripped.keys()):
+                    if ik in stripped:
+                        ordered[ik] = stripped[ik]
+                for ik in stripped:
+                    if ik not in ordered:
+                        ordered[ik] = stripped[ik]
+                clean_items.append(ordered)
+            out[key] = clean_items
+        else:
+            out[key] = answer_json[key]
+    for key in answer_json:
+        if key not in out:
+            out[key] = answer_json[key]
+    return out
+
+
 def _reorder_json_by_key_order(json_data: Dict[str, Any], key_order: Dict[str, Any]) -> Dict[str, Any]:
     """
     메타데이터의 키 순서를 사용하여 JSON 재정렬
@@ -231,7 +274,7 @@ def extract_json_with_rag(
         else:
             progress_callback("벡터 DB에서 유사한 예제 검색 중...")
 
-    # 전체 통합 검색 (form_type=None으로 모든 양식에서 검색)
+    # 전체 통합 검색 (form_type=None으로 모든 양식에서 검색, 최상위 유사 예제의 양식지를 따름)
     effective_form_type = None
     
     # 하이브리드 검색 사용 (전체 DB 통합 검색)
@@ -356,7 +399,11 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
     if similar_examples:
         example = similar_examples[0]
         example_ocr = example["ocr_text"]
-        example_answer = example["answer_json"]
+        # DB 전용 필드 제거 + key_order로 원본 answer.json 순서 복원 후 프롬프트에 삽입
+        example_answer = _sanitize_example_answer_for_prompt(
+            example["answer_json"],
+            example.get("key_order"),
+        )
         example_answer_str = json.dumps(example_answer, ensure_ascii=False, indent=2)
         prompt = prompt_template.format(
             example_ocr=example_ocr,

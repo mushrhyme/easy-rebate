@@ -11,6 +11,7 @@ img 폴더의 모든 하위 폴더에서:
 import os
 import io
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import fitz  # PyMuPDF
@@ -22,9 +23,39 @@ from modules.utils.db_manifest_manager import DBManifestManager
 from modules.utils.pdf_utils import PdfTextExtractor
 
 
+# OCR 캐시 파일명 접미사 (Azure 등 API 호출 결과를 저장·재사용)
+OCR_CACHE_SUFFIX = "_ocr_text.json"
+
+
 def _log(msg: str) -> None:
     """再構築がAPI経由でスレッド実行される場合でもターミナルに即表示するため flush する"""
     print(msg, flush=True)
+
+
+def get_ocr_cache_path(answer_json_path: Path, page_num: int) -> Path:
+    """answer.json과 같은 폴더에 두는 OCR 텍스트 캐시 경로. 예: .../Page2_ocr_text.json"""
+    return answer_json_path.parent / f"Page{page_num}{OCR_CACHE_SUFFIX}"
+
+
+def load_ocr_cache(cache_path: Path) -> Optional[str]:
+    """캐시가 있으면 저장된 OCR 텍스트 반환, 없으면 None."""
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("text") or None
+    except Exception:
+        return None
+
+
+def save_ocr_cache(cache_path: Path, text: str) -> None:
+    """OCR 결과 텍스트를 JSON으로 저장. 예: {"text": "..."}"""
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"text": text}, f, ensure_ascii=False)
+    except Exception as e:
+        print(f"⚠️ OCR 캐시 저장 실패 ({cache_path}): {e}")
 
 
 def find_pdf_pages(
@@ -138,7 +169,6 @@ def find_pdf_pages(
                 for answer_file in answer_files:
                     try:
                         stem = answer_file.stem
-                        import re
                         match = re.match(r'Page(\d+)_answer', stem)
                         if not match:
                             if verbose:
@@ -372,9 +402,13 @@ def diff_pages_with_manifest(
             continue
 
         # 2단계: 실제 텍스트 추출 및 hash 계산
-        # text_extractor.extract_text()가 method에 따라 자동으로 처리
-        # "excel" 방법은 pdfplumber로 전체 텍스트를 추출함 (테이블만이 아님)
-        ocr_text = text_extractor.extract_text(pdf_path, page_num)
+        # 캐시 있으면 API 호출 없이 로드, 없으면 추출 후 JSON 저장 (Azure 등 비용 절감)
+        cache_path = get_ocr_cache_path(answer_path, page_num)
+        ocr_text = load_ocr_cache(cache_path)
+        if not ocr_text:
+            ocr_text = text_extractor.extract_text(pdf_path, page_num)
+            if ocr_text:
+                save_ocr_cache(cache_path, ocr_text)
 
         if not ocr_text:
             continue
