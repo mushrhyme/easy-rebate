@@ -249,6 +249,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
                 <option value="CF8%">CF8%</option>
                 <option value="CF10%">CF10%</option>
                 <option value="非課税">非課税</option>
+                <option value="消費税">消費税</option>
               </select>
             )
           }
