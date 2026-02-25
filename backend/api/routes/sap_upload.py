@@ -14,6 +14,8 @@ from openpyxl.styles import Font, Alignment
 import json
 
 from database.registry import get_db
+from backend.core.auth import get_current_user
+from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
 
@@ -391,6 +393,7 @@ async def preview_sap_excel(
 
 @router.get("/download")
 async def download_sap_excel(
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -418,7 +421,7 @@ async def download_sap_excel(
         # 파일명 생성 (현재 날짜 포함)
         from datetime import datetime
         filename = f"SAP_Upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
+        activity_log(current_user.get("username"), "SAP 엑셀 다운로드")
         return StreamingResponse(
             excel_file,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
