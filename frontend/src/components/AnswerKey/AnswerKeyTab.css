@@ -1,4 +1,4 @@
-/* 正解表作成タブ: OCRタブと同様の左/右分割レイアウト */
+/* 解答作成タブ: OCRタブと同様の左/右分割レイアウト */
 .answer-key-tab {
   display: flex;
   flex-direction: column;
@@ -888,7 +888,7 @@
   color: #dc2626;
 }
 
-/* 正解表指定解除モーダル (AnswerKeyTab用) */
+/* 解答指定解除モーダル (AnswerKeyTab用) */
 .answer-key-tab .answer-key-modal-overlay {
   position: fixed;
   inset: 0;
@@ -943,7 +943,7 @@
   background: #b91c1c;
 }
 
-/* 既存正解表参照ボタン（正解表作成タブ） */
+/* 既存解答参照ボタン（解答作成タブ） */
 .answer-key-existing-btn {
   color: #1d4ed8;
   background: #eff6ff;
@@ -955,7 +955,7 @@
   color: #1e40af;
 }
 
-/* 既存正解表参照モーダル */
+/* 既存解答参照モーダル */
 .answer-key-tab .answer-key-existing-modal {
   max-width: 720px;
   width: 90%;

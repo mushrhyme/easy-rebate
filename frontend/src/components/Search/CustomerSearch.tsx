@@ -746,7 +746,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
               </button>
             </span>
           )}
-          {/* 保存 + 正解帳作成（管理者のみ）：同じトーンで並べる */}
+          {/* 保存 + 解答作成（管理者のみ）：同じトーンで並べる */}
           <div className="nav-action-buttons">
             <button
               type="button"
@@ -761,9 +761,9 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
                 type="button"
                 className="nav-action-btn answer-key-designate-btn"
                 onClick={() => setShowAnswerKeyModal(true)}
-                title="この文書を正解帳作成対象に指定（検索タブでは非表示）"
+                title="この文書を解答作成対象に指定（検索タブでは非表示）"
               >
-                正解帳作成
+                解答作成
               </button>
             )}
           </div>
@@ -860,16 +860,16 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
         </div>
       ) : null}
 
-      {/* 正解表作成確認モーダル */}
+      {/* 解答作成確認モーダル */}
       {showAnswerKeyModal && currentPage && (
         <div className="answer-key-modal-overlay" onClick={() => setShowAnswerKeyModal(false)}>
           <div className="answer-key-modal answer-key-modal-wide" onClick={(e) => e.stopPropagation()}>
-            <h3 className="answer-key-modal-title">正解表作成対象の指定</h3>
+            <h3 className="answer-key-modal-title">解答作成対象の指定</h3>
             <p className="answer-key-modal-body">
-              この文書を正解表作成対象に指定しますか？
+              この文書を解答作成対象に指定しますか？
               <br />
               <span className="answer-key-modal-hint">
-                指定すると検索タブでは非表示になり、正解表作成タブでのみ表示されます。
+                指定すると検索タブでは非表示になり、解答作成タブでのみ表示されます。
               </span>
             </p>
             <p className="answer-key-modal-current-form">
@@ -1005,7 +1005,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
                   (answerKeyFormChoice === 'new' && !answerKeyNewFormDisplayName.trim())
                 }
               >
-                {setAnswerKeyDocumentMutation.isPending ? '処理中…' : 'はい（正解帳作成タブへ移動）'}
+                {setAnswerKeyDocumentMutation.isPending ? '処理中…' : 'はい（解答作成タブへ移動）'}
               </button>
             </div>
           </div>
