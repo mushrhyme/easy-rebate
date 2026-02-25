@@ -15,7 +15,7 @@ export const UPLOAD_CHANNEL_CONFIGS: Record<UploadChannel, UploadChannelConfig> 
   },
   mail: {
     name: '郵便物',
-    label: 'Upstage OCR',
+    label: 'OCR',
     color: '#a78bfa',
     imagePath: '/images/form_04.png',
   },
