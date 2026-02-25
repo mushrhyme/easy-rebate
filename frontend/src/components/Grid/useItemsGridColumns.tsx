@@ -16,6 +16,9 @@ interface ApiItem {
   item_data?: Record<string, unknown>
 }
 
+/** 단가 관련 컬럼: 호버 시 "단가 후보" 버튼 표시 → 클릭 시 모달 */
+const UNIT_PRICE_HOVER_KEYS = new Set(['商品名', '仕切', '本部長'])
+
 export interface UseItemsGridColumnsParams {
   items: ApiItem[]
   itemDataKeysFromApi: string[] | null
@@ -34,6 +37,11 @@ export interface UseItemsGridColumnsParams {
   getKuLabel: (value: unknown) => string | null
   createItemPending: boolean
   deleteItemPending: boolean
+  /** 단가 셀 호버 시 표시할 셀: { itemId, columnKey } */
+  hoveredUnitPriceCell: { itemId: number; columnKey: string } | null
+  setHoveredUnitPriceCell: (v: { itemId: number; columnKey: string } | null) => void
+  /** "단가 후보" 클릭 시 모달 열기 */
+  onOpenUnitPriceModal: (row: GridRow) => void
 }
 
 const CHAR_PX = 11
@@ -70,6 +78,9 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     getKuLabel,
     createItemPending,
     deleteItemPending,
+    hoveredUnitPriceCell,
+    setHoveredUnitPriceCell,
+    onOpenUnitPriceModal,
   } = params
 
   const hasItems = items.length > 0
@@ -268,6 +279,9 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         if (isComplexType) continue
         const dataBasedWidth = calculateColumnWidth(key, key)
         const isKuCol = key === '区'
+        const isUnitPriceCol = UNIT_PRICE_HOVER_KEYS.has(key)
+        const isHovered = isUnitPriceCol && hoveredUnitPriceCell != null &&
+          hoveredUnitPriceCell.itemId === row.item_id && hoveredUnitPriceCell.columnKey === key
         cols.push({
           key,
           name: key,
@@ -291,7 +305,33 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             const strVal = String(value ?? '').trim()
             const label = isKuCol ? getKuLabel(value) : null
             const displayText = label ? `${strVal} (${label})` : strVal || ''
-            return <span>{displayText}</span>
+            const cellContent = <span>{displayText}</span>
+            if (isUnitPriceCol) {
+              return (
+                <div
+                  className="rdg-cell-unit-price-hover"
+                  onMouseEnter={() => setHoveredUnitPriceCell({ itemId: row.item_id, columnKey: key })}
+                  onMouseLeave={() => setHoveredUnitPriceCell(null)}
+                  style={{ width: '100%', height: '100%', position: 'relative' }}
+                >
+                  {cellContent}
+                  {isHovered && (
+                    <button
+                      type="button"
+                      className="unit-price-cell-btn"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenUnitPriceModal(row)
+                        setHoveredUnitPriceCell(null)
+                      }}
+                    >
+                      단가 후보
+                    </button>
+                  )}
+                </div>
+              )
+            }
+            return cellContent
           },
         })
       }
@@ -385,5 +425,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     getKuLabel,
     createItemPending,
     deleteItemPending,
+    hoveredUnitPriceCell,
+    setHoveredUnitPriceCell,
+    onOpenUnitPriceModal,
   ])
 }

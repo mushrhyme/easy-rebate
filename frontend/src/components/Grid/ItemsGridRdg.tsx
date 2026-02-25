@@ -21,6 +21,7 @@ import {
 } from './types'
 import { parseCellNum } from './utils'
 import { ComplexFieldDetail } from './ComplexFieldDetail'
+import { UnitPriceMatchModal } from './UnitPriceMatchModal'
 import { useItemsGridColumns } from './useItemsGridColumns'
 import './ItemsGridRdg.css'
 
@@ -60,6 +61,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const [selectedComplexField, setSelectedComplexField] = useState<{ key: string; value: unknown; itemId: number } | null>(null) // 모달에 표시할 복잡한 필드
   const [hoveredRowId, setHoveredRowId] = useState<number | null>(null) // 호버된 행 ID
   const [reviewTooltip, setReviewTooltip] = useState<{ text: string; x: number; y: number } | null>(null) // 1次/2次 증빙 툴팁
+  const [unitPriceModalRow, setUnitPriceModalRow] = useState<GridRow | null>(null) // 단가 후보 모달
+  const [hoveredUnitPriceCell, setHoveredUnitPriceCell] = useState<{ itemId: number; columnKey: string } | null>(null) // 단가 셀 호버
   
   // 컨테이너 너비 측정
   useEffect(() => {
@@ -565,6 +568,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     getKuLabel,
     createItemPending: createItem.isPending,
     deleteItemPending: deleteItem.isPending,
+    hoveredUnitPriceCell,
+    setHoveredUnitPriceCell,
+    onOpenUnitPriceModal: setUnitPriceModalRow,
   })
 
   // 행 편집 시작 (락 획득)
@@ -933,6 +939,22 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     },
   }), [handleSaveAndUnlock, handleCheckboxUpdate])
 
+  const handleUnitPriceSelect = useCallback(
+    (match: { 시키리?: number; 본부장?: number }) => {
+      if (!unitPriceModalRow) return
+      const itemId = unitPriceModalRow.item_id
+      setRows((prev) =>
+        prev.map((r) =>
+          r.item_id === itemId
+            ? { ...r, 仕切: match.시키리 ?? r['仕切'], 本部長: match.본부장 ?? r['本部長'] }
+            : r
+        )
+      )
+      setUnitPriceModalRow(null)
+    },
+    [unitPriceModalRow]
+  )
+
   if (isLoading || pageMetaLoading) {
     return <div className="grid-loading">読み込み中...</div>
   }
@@ -948,6 +970,13 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
   return (
     <div className="items-grid-rdg">
+      {/* 단가 후보 모달 (셀 우클릭) */}
+      <UnitPriceMatchModal
+        open={!!unitPriceModalRow}
+        onClose={() => setUnitPriceModalRow(null)}
+        productName={unitPriceModalRow ? String(unitPriceModalRow['商品名'] ?? '').trim() : ''}
+        onSelect={handleUnitPriceSelect}
+      />
       {/* 복잡한 구조 필드 배지 영역 (좌측) */}
       {/* cover/summary 페이지인 경우 page_meta의 최상위 키들을 배지로 표시 (totals, recipient 등) */}
       {showPageMetaBadges && pageMetaFields.length > 0 && (

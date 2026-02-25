@@ -120,15 +120,16 @@ export const documentsApi = {
   /**
    * 文書一覧取得
    * @param uploadChannel チャネルで絞り込み（省略可）
-   * @param options is_answer_key_document: 解答対象のみ / form_type: 様式で絞り込み（既存解答参照モーダル用）
+   * @param options is_answer_key_document: 解答対象のみ / exclude_answer_key: 検討タブ用に正解表対象を除外 / form_type: 様式で絞り込み
    */
   getList: async (
     uploadChannel?: string,
-    options?: { is_answer_key_document?: boolean; form_type?: string }
+    options?: { is_answer_key_document?: boolean; exclude_answer_key?: boolean; form_type?: string }
   ): Promise<DocumentListResponse> => {
     const params: Record<string, string | boolean> = {}
     if (uploadChannel) params.upload_channel = uploadChannel
     if (options?.is_answer_key_document === true) params.is_answer_key_document = true
+    if (options?.exclude_answer_key === true) params.exclude_answer_key = true
     if (options?.form_type) params.form_type = options.form_type
     const response = await client.get<DocumentListResponse>('/api/documents', { params })
     return response.data
