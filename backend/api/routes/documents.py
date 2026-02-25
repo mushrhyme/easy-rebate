@@ -817,10 +817,24 @@ def _extract_pdf_filenames_from_index_metadata(meta) -> list:
 @router.get("/in-vector-index")
 async def get_documents_in_vector_index(db=Depends(get_db)):
     """
-    현재 RAG 벡터 인덱스에 포함된 문서(pdf_filename) 목록 반환.
-    업로드 탭에서 벡터 DB 사용 여부 표시용.
+    벡터 DB 등록 문서(pdf_filename) 목록 반환.
+    - rag_learning_status_current(status='merged') 와
+    - rag_vector_index 메타데이터에 있는 목록을 합쳐서 반환.
+    (한쪽에만 있어도 초록 표시되도록)
     """
     try:
+        names = set()
+        # 1) rag_learning_status_current 에서 merged 문서
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT pdf_filename FROM rag_learning_status_current
+                WHERE status = 'merged'
+            """)
+            for r in cursor.fetchall():
+                if r and r[0]:
+                    names.add(r[0])
+        # 2) rag_vector_index 메타에서 추출 (벡터에만 있고 status 미등록 문서 포함)
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -829,10 +843,11 @@ async def get_documents_in_vector_index(db=Depends(get_db)):
                 ORDER BY updated_at DESC LIMIT 1
             """)
             row = cursor.fetchone()
-        if not row:
-            return {"pdf_filenames": []}
-        pdf_filenames = _extract_pdf_filenames_from_index_metadata(row[0])
-        return {"pdf_filenames": pdf_filenames}
+        if row and row[0]:
+            for p in _extract_pdf_filenames_from_index_metadata(row[0]):
+                if p:
+                    names.add(p)
+        return {"pdf_filenames": sorted(names)}
     except Exception:
         return {"pdf_filenames": []}
 
@@ -1365,7 +1380,7 @@ async def get_document_answer_json(
             key=lambda x: int(x.get("item_order", 0)) if isinstance(x, dict) else 0,
         )
         items_plain = [_to_item_data_only(it) for it in items_sorted]
-        page_obj = {k: v for k, v in pr.items() if k != "items"}
+        page_obj = {k: v for k, v in pr.items() if k != "items" and k != "_ocr_text"}
         page_obj["items"] = items_plain
         pages.append(page_obj)
     pages.sort(key=lambda p: p.get("page_number") or 0)
@@ -1409,8 +1424,12 @@ async def save_document_answer_json(
                 page_role = (page_obj.get("page_role") or "detail").strip() or "detail"
                 if page_role not in ("cover", "detail", "summary", "reply"):
                     page_role = "detail"
-                page_meta = page_obj.get("page_meta")
-                page_meta_json = json.dumps(page_meta, ensure_ascii=False) if isinstance(page_meta, dict) else "{}"
+                page_meta = dict(page_obj.get("page_meta")) if isinstance(page_obj.get("page_meta"), dict) else {}
+                # 画面で表示済みのOCRを保存（ベクター登録時に再抽出しない）
+                ocr_text = page_obj.get("ocr_text")
+                if isinstance(ocr_text, str) and ocr_text.strip():
+                    page_meta["_ocr_text"] = ocr_text.strip()
+                page_meta_json = json.dumps(page_meta, ensure_ascii=False)
                 items = page_obj.get("items") if isinstance(page_obj.get("items"), list) else []
 
                 cursor.execute("""
