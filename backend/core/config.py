@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # 데이터베이스 설정 (기존 설정 재사용)
     DB_HOST: str = os.getenv("DB_HOST", "localhost")
     DB_PORT: int = int(os.getenv("DB_PORT", "5432"))
-    DB_NAME: str = os.getenv("DB_NAME", "rebate_db")
+    DB_NAME: str = os.getenv("DB_NAME", "rebate")
     DB_USER: str = os.getenv("DB_USER", "postgres")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
     

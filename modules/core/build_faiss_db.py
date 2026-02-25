@@ -30,6 +30,7 @@ def _log(msg: str) -> None:
 def find_pdf_pages(
     img_dir: Path,
     form_folder: Optional[str] = None,
+    verbose: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     img 폴더의 하위 폴더(finet, mail, 01, 02 등) 안에서 PDF 페이지 데이터를 찾습니다.
@@ -37,6 +38,7 @@ def find_pdf_pages(
     Args:
         img_dir: img 폴더 경로
         form_folder: 하위 폴더명 (예: "finet", "mail"). None이면 img 하위 모든 폴더를 순회
+        verbose: True면 스캔 진행 로그 출력 (CLI용). API 호출 시 False 권장.
 
     Returns:
         [page_data, ...] 리스트
@@ -63,7 +65,8 @@ def find_pdf_pages(
         if not form_dir.exists():
             continue
 
-        _log(f"📁 폴더: {form_dir.name}")
+        if verbose:
+            _log(f"📁 폴더: {form_dir.name}")
 
         # 상위 폴더 기준 form_type 후보 (과거 구조: img/01/...)
         parent_form_type: Optional[str] = form_dir.name if form_dir.name.isdigit() else None
@@ -91,7 +94,8 @@ def find_pdf_pages(
             current_form_type: Optional[str] = None
             if search_dir.name.isdigit():
                 current_form_type = search_dir.name
-                _log(f"  ▶ 양식 {search_dir.name} 스캔 중...")
+                if verbose:
+                    _log(f"  ▶ 양식 {search_dir.name} 스캔 중...")
             elif parent_form_type:
                 # search_dir가 base/년-월/ 등의 하위일 때 상위 폴더명을 form_type으로 사용
                 current_form_type = parent_form_type
@@ -107,14 +111,16 @@ def find_pdf_pages(
                     pdf_file = search_dir / f"{pdf_name}.pdf"
 
                 if not pdf_file.exists():
-                    print(f"  ⚠️ PDF 파일 없음: {pdf_name}")
+                    if verbose:
+                        print(f"  ⚠️ PDF 파일 없음: {pdf_name}")
                     continue
 
                 # 버전 구분 없이 모든 Page*_answer*.json 대상으로 처리
                 answer_files = sorted(pdf_folder.glob("Page*_answer*.json"))
 
                 if not answer_files:
-                    print(f"  ⚠️ {pdf_name}: answer.json 파일이 없습니다")
+                    if verbose:
+                        print(f"  ⚠️ {pdf_name}: answer.json 파일이 없습니다")
                     continue
 
                 try:
@@ -122,10 +128,12 @@ def find_pdf_pages(
                     page_count = len(doc)
                     doc.close()
                 except Exception as e:
-                    print(f"  ⚠️ PDF 파일 열기 실패 ({pdf_name}): {e}")
+                    if verbose:
+                        print(f"  ⚠️ PDF 파일 열기 실패 ({pdf_name}): {e}")
                     continue
 
-                _log(f"  - {pdf_name}: {len(answer_files)}개 answer.json 파일, {page_count}페이지")
+                if verbose:
+                    _log(f"  - {pdf_name}: {len(answer_files)}개 answer.json 파일, {page_count}페이지")
 
                 for answer_file in answer_files:
                     try:
@@ -133,12 +141,14 @@ def find_pdf_pages(
                         import re
                         match = re.match(r'Page(\d+)_answer', stem)
                         if not match:
-                            print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
+                            if verbose:
+                                print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
                             continue
                         page_num = int(match.group(1))
 
                         if page_num < 1 or page_num > page_count:
-                            print(f"  ⚠️ 페이지 번호 범위 초과: {pdf_name} Page{page_num} (최대: {page_count})")
+                            if verbose:
+                                print(f"  ⚠️ 페이지 번호 범위 초과: {pdf_name} Page{page_num} (최대: {page_count})")
                             continue
 
                         pages.append({
@@ -149,7 +159,8 @@ def find_pdf_pages(
                             'form_type': current_form_type,
                         })
                     except ValueError:
-                        print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
+                        if verbose:
+                            print(f"  ⚠️ 페이지 번호 파싱 실패: {answer_file}")
                         continue
 
     return pages

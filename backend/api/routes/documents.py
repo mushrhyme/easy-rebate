@@ -3,6 +3,7 @@
 """
 import asyncio
 import base64
+import logging
 import re
 import json
 import time
@@ -113,8 +114,9 @@ def _get_ocr_text_azure_sync(db, pdf_filename: str, page_number: int) -> str:
     return (ocr_text or "").strip()
 
 
-# 업로드 탭 목록에서 제외: img 동기화(벡터 DB 시드) 문서는 data_year/data_month 가 NULL
-UPLOAD_LIST_EXCLUDE_SEED = " AND data_year IS NOT NULL AND data_month IS NOT NULL"
+# 업로드/검토 탭 목록: data_year/data_month NULL인 문서도 포함 (과거 데이터·마이그레이션 호환)
+# 벡터 시드 문서는 upload_channel 이 'finet'/'mail' 이 아니면 구분 가능하나, 현재는 NULL도 목록에 포함
+UPLOAD_LIST_EXCLUDE_SEED = ""
 
 
 def query_documents_table(
@@ -775,9 +777,14 @@ async def get_documents(
             is_answer_key_document=is_answer_key_document,
         )
         documents = _build_document_list_from_rows(db, rows, year=year, month=month)
+        logging.info(
+            "get_documents: query rows=%s, documents=%s (params: year=%s, month=%s)",
+            len(rows), len(documents), year, month,
+        )
         return DocumentListResponse(documents=documents, total=len(documents))
     
     except Exception as e:
+        logging.exception("get_documents failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1091,7 +1098,7 @@ def _list_answer_keys_from_img():
     )
     seen = {}
     for form_folder in form_folders:
-        pages = find_pdf_pages(img_dir, form_folder)
+        pages = find_pdf_pages(img_dir, form_folder, verbose=False)
         for p in pages:
             ft = p.get("form_type") or ""
             pdf_name = p.get("pdf_name") or ""

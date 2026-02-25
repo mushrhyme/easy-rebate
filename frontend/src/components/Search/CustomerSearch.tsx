@@ -100,7 +100,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   }, [isResizing])
 
   // 모든 문서 가져오기 (기본 표시용)
-  const { data: documentsData, isLoading: documentsLoading } = useQuery({
+  const { data: documentsData, isLoading: documentsLoading, error: documentsError } = useQuery({
     queryKey: ['documents', 'all'],
     queryFn: () => documentsApi.getList(),
   })
@@ -605,9 +605,11 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
       ? '検索中...'
       : searchQuery.trim()
         ? '検索結果がありません。'
-        : documentsData?.documents?.length
-          ? '選択した期間にデータがありません。対象期間を変更してください。'
-          : 'アップロードされたファイルがありません。'
+        : documentsError
+          ? '文書一覧を取得できません。バックエンドの接続を確認してください。（API接続エラー）'
+          : documentsData?.documents?.length
+            ? '選択した期間にデータがありません。対象期間を変更してください。'
+            : 'アップロードされたファイルがありません。'
 
   return (
     <div className="customer-search">

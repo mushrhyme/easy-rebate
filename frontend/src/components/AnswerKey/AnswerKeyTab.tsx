@@ -104,7 +104,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   }, [])
 
   useFormTypes()
-  const { data: documentsData } = useQuery({
+  const { data: documentsData, isError: documentsListError } = useQuery({
     queryKey: ['documents', 'for-answer-key-tab'],
     queryFn: () => documentsApi.getListForAnswerKeyTab(),
   })
@@ -1585,7 +1585,12 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       )}
 
       {/* RAG에서 문서 클릭해 넘어온 경우 selectedDoc 있으므로 이 안내 숨김 */}
-      {documents.length === 0 && !selectedDoc && (
+      {documents.length === 0 && !selectedDoc && documentsListError && (
+        <div className="answer-key-placeholder">
+          <p>文書一覧の取得に失敗しました。ログインし直すか、ネットワーク・API接続を確認してください。（IPでアクセスする場合はCORS設定も確認）</p>
+        </div>
+      )}
+      {documents.length === 0 && !selectedDoc && !documentsListError && (
         <div className="answer-key-placeholder">
           <p>解答作成対象に指定した文書がありません。検索タブで文書を開き、「解答作成」ボタンで指定してから、このタブで確認してください。</p>
         </div>

@@ -62,7 +62,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
         self,
         host: str = "localhost",
         port: int = 5432,
-        database: str = "rebate_db",
+        database: str = "rebate",
         user: str = "postgres",
         password: str = "",
         min_conn: int = 1,

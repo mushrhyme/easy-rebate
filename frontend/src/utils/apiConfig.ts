@@ -6,8 +6,8 @@
 /**
  * API 기본 URL을 가져옵니다
  * - VITE_API_BASE_URL 있으면 사용
- * - 개발 서버(3002/5173)에서는 빈 문자열 → 같은 origin으로 요청, Vite proxy가 /api → 8000 전달
- * - 그 외: 같은 호스트:8000
+ * - localhost/127.0.0.1 + 포트 3002|5173 → 빈 문자열 (같은 origin, Vite proxy 사용)
+ * - 그 외(192.168.x.x 등 IP 접속) → http://현재호스트:8000 (백엔드 직접 호출, CORS에 LOCAL_IP 필요)
  */
 export const getApiBaseUrl = (): string => {
   if (import.meta.env.VITE_API_BASE_URL) {
@@ -15,15 +15,18 @@ export const getApiBaseUrl = (): string => {
     return import.meta.env.VITE_API_BASE_URL
   }
 
+  const host = window.location.hostname
   const port = window.location.port
-  if (port === '3002' || port === '5173') {
-    console.log('🔵 [API Config] 개발 서버 - 프록시 사용 (baseURL: "")')
-    return '' // same origin → Vite proxy /api → localhost:8000
+  const isLocalhost = host === 'localhost' || host === '127.0.0.1'
+  if (isLocalhost && (port === '3002' || port === '5173')) {
+    console.log('🔵 [API Config] localhost 개발 서버 - 프록시 사용 (baseURL: "")')
+    return '' // same origin → Vite proxy /api → 127.0.0.1:8000
   }
 
-  const host = window.location.hostname
-  const url = `http://${host}:8000`
-  console.log('🔵 [API Config] API URL:', url)
+  // IP(192.168.0.10 등)로 접속 시 프록시를 타지 않고 백엔드(8000) 직접 호출
+  const apiHost = host === 'localhost' ? '127.0.0.1' : host
+  const url = `http://${apiHost}:8000`
+  console.log('🔵 [API Config] API URL (직접 호출):', url)
   return url
 }
 
