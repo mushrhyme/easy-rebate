@@ -234,7 +234,9 @@ async def processing_status(websocket: WebSocket, task_id: str):
                 await websocket.send_json({"type": "ping"})
     
     except WebSocketDisconnect:
-        print(f"🔌 WebSocket 연결 종료: task_id={task_id}")
+        # 정상 종료(업로드 완료·탭 닫기 등). DEBUG일 때만 로그
+        if settings.DEBUG:
+            print(f"🔌 WebSocket 연결 종료: task_id={task_id}")
         manager.disconnect(websocket, task_id)
     except Exception as e:
         print(f"⚠️ WebSocket 오류: task_id={task_id}, error={e}")
