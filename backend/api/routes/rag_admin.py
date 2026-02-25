@@ -69,10 +69,26 @@ def _ensure_admin(user: Dict[str, Any]) -> None:
 def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     """
     페이지 이미지에서 실제 OCR 텍스트 추출 (임베딩용).
-    우선순위: debug2 → 이미지 Azure(표 복원) → PDF Azure(표 복원) → result
+    우선순위: DB 저장분(_ocr_text) → debug2 → 이미지 Azure(표 복원) → PDF → result
     """
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
     ocr_text = ""
+
+    # 0) 保存時に画面から送ったOCR（再抽出しない）
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT page_meta FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
+                (pdf_filename, page_number),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if isinstance(row[0], str) else None)
+                if isinstance(meta, dict) and meta.get("_ocr_text"):
+                    return (meta["_ocr_text"] or "").strip()
+    except Exception:
+        pass
 
     # 1) debug2 파일
     try:
@@ -455,21 +471,7 @@ async def build_vector_from_learning_pages(
                     continue
 
                 item_data = row.get("item_data") or {}
-                item_id = row["item_id"]
-
-                merged_item: Dict[str, Any] = {}
-                if isinstance(item_data, dict):
-                    merged_item.update(item_data)
-
-                # 得意先는 item_data 내부 표준 키를 우선 사용하고,
-                customer = item_data.get("得意先") if isinstance(item_data, dict) else None
-                if customer and "得意先" not in merged_item:
-                    merged_item["得意先"] = customer
-
-                merged_item["pdf_filename"] = pdf_filename
-                merged_item["page_number"] = page_number
-                merged_item["item_id"] = item_id
-
+                merged_item = dict(item_data) if isinstance(item_data, dict) else {}
                 merged_items.append(merged_item)
 
         # 실제 OCR 텍스트 추출 (페이지 이미지에서, 임베딩용)
@@ -535,6 +537,32 @@ async def build_vector_from_learning_pages(
     total_vectors = rag_manager.count_examples()
 
     db = get_db()
+    # 登録済みを rag_learning_status_current に反映（管理画面で一覧できるように）
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        for sp in shard_pages:
+            pdf_name = (sp.get("metadata") or {}).get("pdf_name") or ""
+            page_num = (sp.get("metadata") or {}).get("page_num")
+            page_hash_val = sp.get("page_hash") or ""
+            if not pdf_name or page_num is None:
+                continue
+            pdf_filename = pdf_name if pdf_name.lower().endswith(".pdf") else f"{pdf_name}.pdf"
+            cursor.execute(
+                """
+                INSERT INTO rag_learning_status_current (
+                    pdf_filename, page_number, status, page_hash, shard_id
+                ) VALUES (%s, %s, 'merged', %s, %s)
+                ON CONFLICT (pdf_filename, page_number)
+                DO UPDATE SET
+                    status = 'merged',
+                    page_hash = EXCLUDED.page_hash,
+                    shard_id = EXCLUDED.shard_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (pdf_filename, page_num, page_hash_val, shard_identifier),
+            )
+        conn.commit()
+
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
