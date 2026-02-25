@@ -1,11 +1,8 @@
 {
   "page_role": "cover",
-
   "document_name": "請求書",
   "document_number": "0001909632",
   "issue_date": "2025-02-07",
-  "billing_year_month": null,
-
   "recipient": {
     "registration_number": "T7010001143872",
     "company_name": "株式会社 農心ジャパン",
@@ -81,5 +78,6 @@
       }
     },
     "ご請求額合計": "9,647,285"
-  }
+  },
+  "items": []
 }
