@@ -21,6 +21,14 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+
+class SuppressConnectionClosedFilter(logging.Filter):
+    """WebSocket 정상 종료 시 나오는 'connection closed' 로그 숨김 (노이즈 감소)"""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "connection closed" not in (record.getMessage() or "")
+
+
+
 # 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -183,6 +191,8 @@ async def global_exception_handler(request, exc):
 def run():
     """진입점: DEBUG=true면 reload(기본). UV_RELOAD=0 이면 reload 끔 → 로그가 같은 창에 보임."""
     import uvicorn
+    for _name in ("uvicorn", "uvicorn.error"):
+        logging.getLogger(_name).addFilter(SuppressConnectionClosedFilter())
     use_reload = settings.DEBUG and os.getenv("UV_RELOAD", "1") == "1"
     print(f"[backend] Starting Uvicorn on {settings.HOST}:{settings.PORT} (reload={use_reload}) ...", flush=True)
     uvicorn.run(
