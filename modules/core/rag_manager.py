@@ -561,8 +561,10 @@ class RAGManager:
             faiss_idx = shard_index.ntotal
             shard_index.add(embedding)
             
-            # doc_id 생성 (page_key 사용)
-            doc_id = page_key if page_key else str(uuid.uuid4())
+            # doc_id: form_type을 포함해 동일 (pdf_name, page_num)이 다른 양식에서 덮어쓰이지 않도록 함
+            # (병합 시 메타데이터가 한쪽으로 몰리는 문제 방지)
+            ft = (metadata or {}).get("form_type")
+            doc_id = f"{ft}_{page_key}" if (ft and page_key) else (page_key or str(uuid.uuid4()))
             
             # 메타데이터 저장
             key_order = self._extract_key_order(answer_json)
