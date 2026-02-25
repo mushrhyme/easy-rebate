@@ -202,7 +202,7 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
       </div>
       {rightView === 'json' && (
         <div className="answer-key-json-view">
-          <label className="answer-key-ocr-label">正解表JSON（編集後に適用）</label>
+          <label className="answer-key-ocr-label">解答JSON（編集後に適用）</label>
           <textarea
             className="answer-key-json-textarea"
             value={jsonEditText}
@@ -603,7 +603,7 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
           disabled={saveStatus === 'saving' || saveStatus === 'building'}
           title="DB反映のあと、学習フラグを立ててベクターDBを再構築します。時間がかかります。"
         >
-          {saveStatus === 'building' ? '登録中…' : '正解表として保存（ベクターDBに登録）'}
+          {saveStatus === 'building' ? '登録中…' : '解答として保存（ベクターDBに登録）'}
         </button>
       </div>
       {saveMessage && (

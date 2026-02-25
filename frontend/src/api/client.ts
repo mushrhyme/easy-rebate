@@ -120,7 +120,7 @@ export const documentsApi = {
   /**
    * 文書一覧取得
    * @param uploadChannel チャネルで絞り込み（省略可）
-   * @param options is_answer_key_document: 正解表対象のみ / form_type: 様式で絞り込み（既存正解表参照モーダル用）
+   * @param options is_answer_key_document: 解答対象のみ / form_type: 様式で絞り込み（既存解答参照モーダル用）
    */
   getList: async (
     uploadChannel?: string,
@@ -135,7 +135,7 @@ export const documentsApi = {
   },
 
   /**
-   * 正解表作成タブ用の文書一覧（管理者は全件、一般は自分が指定した文書のみ）
+   * 解答作成タブ用の文書一覧（管理者は全件、一般は自分が指定した文書のみ）
    */
   getListForAnswerKeyTab: async (): Promise<DocumentListResponse> => {
     const response = await client.get<DocumentListResponse>('/api/documents/for-answer-key-tab')
@@ -143,7 +143,7 @@ export const documentsApi = {
   },
 
   /**
-   * 文書の正解表 answer.json 一式取得（様式別「既存正解表」参照用・DB由来）
+   * 文書の解答 answer.json 一式取得（様式別「既存解答」参照用・DB由来）
    */
   getDocumentAnswerJson: async (
     pdfFilename: string
@@ -173,7 +173,7 @@ export const documentsApi = {
   },
 
   /**
-   * RAG DB ソース: img フォルダ内の正解表一覧（form_type 別）
+   * RAG DB ソース: img フォルダ内の解答一覧（form_type 別）
    * 戻り: { by_form_type: { "01": [ { pdf_name, relative_path, total_pages }, ... ], ... } }
    */
   getAnswerKeysFromImg: async (): Promise<{
@@ -184,7 +184,7 @@ export const documentsApi = {
   },
 
   /**
-   * img フォルダ内の正解表フォルダ（relative_path）の answer.json 一式取得
+   * img フォルダ内の解答フォルダ（relative_path）の answer.json 一式取得
    */
   getAnswerJsonFromImg: async (
     relativePath: string

@@ -506,11 +506,11 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-img">
                 <div className="dashboard-card-value">{imgFolderPagesTotal.toLocaleString()}</div>
-                <div className="dashboard-card-label">正解表ページ数（base DB）</div>
+                <div className="dashboard-card-label">解答ページ数（base DB）</div>
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
                 <div className="dashboard-card-value">{(ragData.answer_key_pages_total ?? 0).toLocaleString()}</div>
-                <div className="dashboard-card-label">正解表ページ数（upload DB）</div>
+                <div className="dashboard-card-label">解答ページ数（upload DB）</div>
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
                 <div className="dashboard-card-value">{(ragData.answer_key_pages_this_month ?? 0).toLocaleString()}</div>
@@ -585,7 +585,7 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
                                 type="button"
                                 className="dashboard-button dashboard-button-small dashboard-button-list"
                                 onClick={() => setFormTypeListModalFormType(opt.value)}
-                                title="該当様式の文書一覧を開き、クリックで正解表タブへ"
+                                title="該当様式の文書一覧を開き、クリックで解答作成タブへ"
                               >
                                 一覧
                               </button>
@@ -667,7 +667,7 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
                   様式 {formTypeLabel(formTypeListModalFormType)} の文書一覧
                 </h3>
                 <p className="dashboard-modal-note">
-                  ベクターDB（RAG）に嵌入された文書一覧です。クリックで正解表タブでその文書の正解を表示します。
+                  ベクターDB（RAG）に嵌入された文書一覧です。クリックで解答作成タブでその文書の正解を表示します。
                 </p>
                 <div className="dashboard-modal-list-wrap">
                   {(() => {

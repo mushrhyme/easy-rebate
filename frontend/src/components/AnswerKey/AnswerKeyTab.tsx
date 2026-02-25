@@ -130,7 +130,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       setShowRevokeModal(false)
       setSelectedDoc(null)
       setRows([])
-      setSaveMessage('正解表の指定を解除しました。検索タブで再度確認できます。')
+      setSaveMessage('解答の指定を解除しました。検索タブで再度確認できます。')
       onRevokeSuccess?.()
     },
     onError: (e: any) => {
@@ -1472,10 +1472,10 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       await ragAdminApi.buildFromLearningPages(undefined)
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
-      setSaveMessage('正解表として保存し、ベクターDBに登録しました。')
+      setSaveMessage('解答として保存し、ベクターDBに登録しました。')
       setSaveStatus('done')
     } catch (e: any) {
-      setSaveMessage(e?.response?.data?.detail || e?.message || '正解表の保存に失敗しました。')
+      setSaveMessage(e?.response?.data?.detail || e?.message || '解答の保存に失敗しました。')
       setSaveStatus('error')
     }
   }, [selectedDoc, selectedDocRelativePath, isRagMode, answerJsonFromImg, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
@@ -1497,14 +1497,14 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   return (
     <div className="answer-key-tab">
       <div className="answer-key-header">
-        <h2 className="answer-key-title">正解表作成</h2>
+        <h2 className="answer-key-title">解答作成</h2>
         <p className="answer-key-desc">
-          検索タブで「正解表作成」を押して指定した文書のみここに表示されます。文書を選択し、左のPDFを見ながら右のキー・値で正解を編集して保存すると、ベクターDBの学習例として登録されます。
+          検索タブで「解答作成」を押して指定した文書のみここに表示されます。文書を選択し、左のPDFを見ながら右のキー・値で正解を編集して保存すると、ベクターDBの学習例として登録されます。
         </p>
       </div>
 
       <div className="answer-key-select-row">
-        <label className="answer-key-label">文書選択（正解表作成指定文書のみ）</label>
+        <label className="answer-key-label">文書選択（解答作成指定文書のみ）</label>
         <select
           className="answer-key-select"
           value={selectedDoc ? selectedDoc.pdf_filename : ''}
@@ -1541,9 +1541,9 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             type="button"
             className="answer-key-revoke-btn"
             onClick={() => setShowRevokeModal(true)}
-            title="正解表指定の解除（検索タブで再表示）"
+            title="解答指定の解除（検索タブで再表示）"
           >
-            正解表指定を解除
+            解答指定を解除
           </button>
         )}
       </div>
@@ -1554,13 +1554,13 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         </div>
       )}
 
-      {/* 正解表指定解除確認モーダル */}
+      {/* 解答指定解除確認モーダル */}
       {showRevokeModal && selectedDoc && (
         <div className="answer-key-modal-overlay" onClick={() => !revokeAnswerKeyMutation.isPending && setShowRevokeModal(false)}>
           <div className="answer-key-modal" onClick={(e) => e.stopPropagation()}>
-            <h3 className="answer-key-modal-title">正解表指定の解除</h3>
+            <h3 className="answer-key-modal-title">解答指定の解除</h3>
             <p className="answer-key-modal-desc">
-              この文書の正解表作成対象指定を解除しますか？<br />
+              この文書の解答作成対象指定を解除しますか？<br />
               解除すると検索タブで再表示されます。
             </p>
             <p className="answer-key-modal-filename">{selectedDoc.pdf_filename}</p>
@@ -1589,7 +1589,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       {/* RAG에서 문서 클릭해 넘어온 경우 selectedDoc 있으므로 이 안내 숨김 */}
       {documents.length === 0 && !selectedDoc && (
         <div className="answer-key-placeholder">
-          <p>正解表作成対象に指定した文書がありません。検索タブで文書を開き、「正解表作成」ボタンで指定してから、このタブで確認してください。</p>
+          <p>解答作成対象に指定した文書がありません。検索タブで文書を開き、「解答作成」ボタンで指定してから、このタブで確認してください。</p>
         </div>
       )}
 

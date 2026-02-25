@@ -360,7 +360,7 @@
   color: #6b7280;
 }
 
-/* 保存・正解帳作成：検索ボタンと同じトーンで統一 */
+/* 保存・解答作成：検索ボタンと同じトーンで統一 */
 .page-navigation-section .nav-action-buttons {
   display: flex;
   align-items: center;
@@ -989,9 +989,9 @@
   box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
 }
 
-/* 正解帳作成は .nav-action-btn で検索ボタンと統一（上記 .nav-action-buttons 内） */
+/* 解答作成は .nav-action-btn で検索ボタンと統一（上記 .nav-action-buttons 内） */
 
-/* 正解表作成確認モーダル */
+/* 解答作成確認モーダル */
 .answer-key-modal-overlay {
   position: fixed;
   inset: 0;

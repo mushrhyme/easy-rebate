@@ -195,7 +195,7 @@ function AppContent() {
               className={`sidebar-button ${activeTab === 'ocr_test' ? 'active' : ''}`}
               onClick={() => setActiveTab('ocr_test')}
             >
-              正解表作成
+              解答作成
             </button>
             {isAdmin && (
               <button
