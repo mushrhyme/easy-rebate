@@ -11,21 +11,21 @@ export default defineConfig({
     },
   },
   server: {
-    host: '0.0.0.0', // 외부 접속 허용
-    port: 3002, // 프론트엔드 포트
-    allowedHosts: [
-      'dlab.nongshim.com', // 도메인 접속 허용
-      'localhost',
-      '.localhost',
-    ],
+    host: '0.0.0.0', // 외부 접속 허용 (다른 PC에서 IP:3002 접속 가능)
+    port: 3002,
+    allowedHosts: true, // 모든 Host 허용 (127.0.0.1, 192.168.x.x, dlab 등)
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://127.0.0.1:8000',
         ws: true,
+      },
+      '/static': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
       },
     },
   },
