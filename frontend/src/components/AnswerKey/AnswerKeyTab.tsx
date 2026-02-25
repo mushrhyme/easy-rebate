@@ -1340,6 +1340,19 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         }
         pages.push({ page_number: p, page_role, page_meta, items: item_data_list })
       }
+      // 画面表示済みOCRをキャッシュから付与（ベクター登録で再抽出しない）
+      if (selectedDoc && !isRagMode && pages.length > 0) {
+        for (const page of pages) {
+          const cached = queryClient.getQueryData<{ ocr_text?: string }>([
+            'page-ocr-text',
+            selectedDoc.pdf_filename,
+            page.page_number,
+          ])
+          if (cached?.ocr_text && String(cached.ocr_text).trim()) {
+            (page as Record<string, unknown>).ocr_text = String(cached.ocr_text).trim()
+          }
+        }
+      }
       if (isRagMode && selectedDocRelativePath) {
         await documentsApi.saveAnswerJsonFromImg(selectedDocRelativePath, { pages })
         queryClient.invalidateQueries({ queryKey: ['answer-json-from-img', selectedDocRelativePath] })
@@ -1373,9 +1386,11 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     try {
       const latestRows = rowsRef.current
       const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
-      if (hasDirty) {
-        const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version', '_displayIndex']
-        const pages: Array<{ page_number: number; page_role: string; page_meta: Record<string, unknown>; items: Array<Record<string, unknown>> }> = []
+      // ベクターDB登録は page_data_current を参照するため、DB文書の場合は必ず先にDBへ保存する
+      const needBuildPages = hasDirty || !isRagMode
+      const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version', '_displayIndex']
+      const pages: Array<{ page_number: number; page_role: string; page_meta: Record<string, unknown>; items: Array<Record<string, unknown>> }> = []
+      if (needBuildPages) {
         for (let p = 1; p <= selectedDoc.total_pages; p++) {
           const pageRows = latestRows.filter((r) => r.page_number === p)
           let item_data_list = pageRows
@@ -1406,42 +1421,57 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
                 ? (answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
                 : undefined) ??
             'detail'
-        const page_role = ['cover', 'detail', 'summary', 'reply'].includes(page_roleRaw) ? page_roleRaw : 'detail'
-        let page_meta: Record<string, unknown>
-        if (isRagMode && answerJsonFromImg?.pages) {
-          const basePage = answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
-          page_meta = {}
-          if (basePage) {
-            Object.keys(basePage).forEach((k) => {
-              if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
+          const page_role = ['cover', 'detail', 'summary', 'reply'].includes(page_roleRaw) ? page_roleRaw : 'detail'
+          let page_meta: Record<string, unknown>
+          if (isRagMode && answerJsonFromImg?.pages) {
+            const basePage = answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
+            page_meta = {}
+            if (basePage) {
+              Object.keys(basePage).forEach((k) => {
+                if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
+              })
+            }
+            const editsForMeta = pageMetaFlatEdits[p] ?? {}
+            Object.entries(editsForMeta).forEach(([path, value]) => {
+              if (value === PAGE_META_DELETE_SENTINEL) return
+              if (/^items\[\d+\]\./.test(path)) return
+              setNestedByPath(page_meta, path, value)
             })
-          }
-          const editsForMeta = pageMetaFlatEdits[p] ?? {}
-          Object.entries(editsForMeta).forEach(([path, value]) => {
-            if (value === PAGE_META_DELETE_SENTINEL) return
-            if (/^items\[\d+\]\./.test(path)) return
-            setNestedByPath(page_meta, path, value)
-          })
-        } else if (answerJsonFromDb?.pages) {
-          const basePage = answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
-          page_meta = {}
-          if (basePage) {
-            Object.keys(basePage).forEach((k) => {
-              if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
+          } else if (answerJsonFromDb?.pages) {
+            const basePage = answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
+            page_meta = {}
+            if (basePage) {
+              Object.keys(basePage).forEach((k) => {
+                if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
+              })
+            }
+            const editsForMeta = pageMetaFlatEdits[p] ?? {}
+            Object.entries(editsForMeta).forEach(([path, value]) => {
+              if (value === PAGE_META_DELETE_SENTINEL) return
+              if (/^items\[\d+\]\./.test(path)) return
+              setNestedByPath(page_meta, path, value)
             })
+          } else {
+            page_meta = buildPageMetaFromEdits(p) as Record<string, unknown>
           }
-          const editsForMeta = pageMetaFlatEdits[p] ?? {}
-          Object.entries(editsForMeta).forEach(([path, value]) => {
-            if (value === PAGE_META_DELETE_SENTINEL) return
-            if (/^items\[\d+\]\./.test(path)) return
-            setNestedByPath(page_meta, path, value)
-          })
-        } else {
-          page_meta = buildPageMetaFromEdits(p) as Record<string, unknown>
+          pages.push({ page_number: p, page_role, page_meta, items: item_data_list })
         }
-        pages.push({ page_number: p, page_role, page_meta, items: item_data_list })
       }
-      if (isRagMode && selectedDocRelativePath) {
+      // 画面表示済みOCRをキャッシュから付与（ベクター登録で再抽出しない）
+      if (selectedDoc && !isRagMode && pages.length > 0) {
+        for (const page of pages) {
+          const cached = queryClient.getQueryData<{ ocr_text?: string }>([
+            'page-ocr-text',
+            selectedDoc.pdf_filename,
+            page.page_number,
+          ])
+          if (cached?.ocr_text && String(cached.ocr_text).trim()) {
+            (page as Record<string, unknown>).ocr_text = String(cached.ocr_text).trim()
+          }
+        }
+      }
+      if (hasDirty) {
+        if (isRagMode && selectedDocRelativePath) {
           await documentsApi.saveAnswerJsonFromImg(selectedDocRelativePath, { pages })
           queryClient.invalidateQueries({ queryKey: ['answer-json-from-img', selectedDocRelativePath] })
         } else {
@@ -1459,6 +1489,18 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           pageMetaDirtyPages.forEach((pn) => delete next[pn])
           return next
         })
+      } else if (!isRagMode && pages.length > 0) {
+        // 変更なしでもDB文書は先に保存（page_data_current に存在させてから学習フラグを付与）
+        await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
+        skipNextSyncFromServerRef.current = true
+        queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
+        queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
+        queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
+      }
+      if (isRagMode) {
+        setSaveMessage(hasDirty ? 'JSONファイルを保存しました。ベクターDB登録はDB登録文書のみ対象です。' : '変更がありません。')
+        setSaveStatus('done')
+        return
       }
       setSaveStatus('building')
       setSaveMessage('学習フラグを設定し、ベクターDBに登録しています…')
@@ -1475,7 +1517,15 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       setSaveMessage('解答として保存し、ベクターDBに登録しました。')
       setSaveStatus('done')
     } catch (e: any) {
-      setSaveMessage(e?.response?.data?.detail || e?.message || '解答の保存に失敗しました。')
+      const status = e?.response?.status
+      const detail = e?.response?.data?.detail
+      const msg =
+        status === 404 && (detail === 'Page not found' || detail === 'ページが見つかりません')
+          ? 'ページがDBにありません。先に「保存(DBのみ)」で保存してください。'
+          : typeof detail === 'string'
+            ? detail
+            : e?.message || '解答の保存に失敗しました。'
+      setSaveMessage(msg)
       setSaveStatus('error')
     }
   }, [selectedDoc, selectedDocRelativePath, isRagMode, answerJsonFromImg, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
