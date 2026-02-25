@@ -126,6 +126,7 @@ def query_documents_table(
     year: Optional[int] = None,
     month: Optional[int] = None,
     is_answer_key_document: Optional[bool] = None,
+    exclude_answer_key: Optional[bool] = None,
     answer_key_designated_by_user_id: Optional[int] = None,
 ) -> List[Tuple]:
     """
@@ -134,11 +135,17 @@ def query_documents_table(
 
     Args:
         is_answer_key_document: True のとき正解表対象文書のみ返す。
+        exclude_answer_key: True のとき正解表対象文書を除外（検討タブ用）。
         answer_key_designated_by_user_id: 指定時は正解表対象のうち、この user_id が指定した文書のみ返す（管理者は指定せず全件）。
     """
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        answer_key_filter = " AND is_answer_key_document = TRUE" if is_answer_key_document else ""
+        if is_answer_key_document:
+            answer_key_filter = " AND is_answer_key_document = TRUE"
+        elif exclude_answer_key:
+            answer_key_filter = " AND (COALESCE(is_answer_key_document, FALSE) = FALSE)"
+        else:
+            answer_key_filter = ""
         designated_filter = " AND answer_key_designated_by_user_id = %s" if (is_answer_key_document and answer_key_designated_by_user_id is not None) else ""
 
         if year is not None and month is not None:
@@ -759,6 +766,7 @@ async def get_documents(
     year: Optional[int] = None,
     month: Optional[int] = None,
     is_answer_key_document: Optional[bool] = None,
+    exclude_answer_key: Optional[bool] = None,
     db=Depends(get_db)
 ):
     """
@@ -766,6 +774,7 @@ async def get_documents(
 
     Args:
         is_answer_key_document: True のとき正解表対象文書のみ返す。
+        exclude_answer_key: True のとき正解表対象文書を除外（検討タブ用）。
     """
     try:
         rows = query_documents_table(
@@ -775,6 +784,7 @@ async def get_documents(
             year=year,
             month=month,
             is_answer_key_document=is_answer_key_document,
+            exclude_answer_key=exclude_answer_key,
         )
         documents = _build_document_list_from_rows(db, rows, year=year, month=month)
         logging.info(
