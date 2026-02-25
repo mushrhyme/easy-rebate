@@ -5,13 +5,20 @@
 
 /**
  * API 기본 URL을 가져옵니다
- * - localhost/127.0.0.1: 백엔드 8000으로 직접 연결 (CORS 허용됨, 프록시 의존 제거)
- * - 외부 접속: 같은 호스트:8000
+ * - VITE_API_BASE_URL 있으면 사용
+ * - 개발 서버(3002/5173)에서는 빈 문자열 → 같은 origin으로 요청, Vite proxy가 /api → 8000 전달
+ * - 그 외: 같은 호스트:8000
  */
 export const getApiBaseUrl = (): string => {
   if (import.meta.env.VITE_API_BASE_URL) {
     console.log('🔵 [API Config] 환경 변수에서 API URL 사용:', import.meta.env.VITE_API_BASE_URL)
     return import.meta.env.VITE_API_BASE_URL
+  }
+
+  const port = window.location.port
+  if (port === '3002' || port === '5173') {
+    console.log('🔵 [API Config] 개발 서버 - 프록시 사용 (baseURL: "")')
+    return '' // same origin → Vite proxy /api → localhost:8000
   }
 
   const host = window.location.hostname

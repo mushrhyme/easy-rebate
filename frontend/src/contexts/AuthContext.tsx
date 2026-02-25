@@ -135,7 +135,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         response: error?.response?.data,
         status: error?.response?.status
       })
-      const errorMessage = error?.response?.data?.detail || error?.message || '로그인 중 오류가 발생했습니다'
+      const isNetworkError = error?.code === 'ERR_NETWORK' || error?.message === 'Network Error'
+      const errorMessage = isNetworkError
+        ? 'サーバーに接続できません。バックエンド(ポート8000)が起動しているか確認してください。'
+        : (error?.response?.data?.detail || error?.message || 'ログイン中にエラーが発生しました')
       return { success: false, message: errorMessage }
     }
   }
