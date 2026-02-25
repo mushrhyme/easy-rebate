@@ -9,7 +9,7 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import { documentsApi, itemsApi, searchApi, ragAdminApi } from '@/api/client'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import { useAuth } from '@/contexts/AuthContext'
-import { getApiBaseUrl } from '@/utils/apiConfig'
+import { getApiBaseUrl, getPageImageAbsoluteUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
 import {
   type GridRow,
@@ -1488,9 +1488,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     }
     return pageImageQueries.map((q) => {
       const data = q.data as { image_url?: string } | undefined
-      if (!data?.image_url) return null
-      const url = data.image_url.startsWith('http') ? data.image_url : `${getApiBaseUrl()}${data.image_url}`
-      return url
+      return getPageImageAbsoluteUrl(data?.image_url) ?? null
     })
   }, [isRagMode, selectedDocRelativePath, selectedDoc?.total_pages, pageImageQueries])
 

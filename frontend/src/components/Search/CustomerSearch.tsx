@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, searchApi, itemsApi, formTypesApi } from '@/api/client'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import { ItemsGridRdg, type ItemsGridRdgHandle } from '../Grid/ItemsGridRdg'
-import { getApiBaseUrl } from '@/utils/apiConfig'
+import { getApiBaseUrl, getPageImageAbsoluteUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
 import { getDocumentYearMonth } from '@/utils/documentDate'
 import './CustomerSearch.css'
@@ -1454,10 +1454,7 @@ const PageImageViewer = ({
         <div className="image-empty">{noImageMessage}</div>
       )}
       {data && data.image_url && (() => {
-        // 상대 경로인 경우 백엔드 URL을 앞에 붙여서 절대 URL로 변환
-        const imageUrl = data.image_url.startsWith('http')
-          ? data.image_url
-          : `${getApiBaseUrl()}${data.image_url}`
+        const imageUrl = getPageImageAbsoluteUrl(data.image_url) ?? data.image_url
 
         return (
           <div

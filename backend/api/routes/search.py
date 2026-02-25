@@ -346,23 +346,22 @@ async def get_page_image_url(
                 **({"page_role": page_role} if page_role else {}),
             }
 
-        # 파일 시스템 경로를 URL 경로로 변환
-        # "static/images/..." -> "/static/images/..."
+        # Windows 등에서 DB에 백슬래시로 저장된 경로를 URL용 슬래시로 정규화
+        image_path = image_path.replace("\\", "/")
+
+        # 파일 시스템 경로를 URL 경로로 변환 ("static/images/..." -> "/static/images/...")
         if image_path.startswith("static/"):
-            # 경로의 각 세그먼트를 개별적으로 인코딩 (슬래시는 유지)
-            path_parts = image_path.split('/')
-            encoded_parts = [quote(part, safe='') for part in path_parts]
-            image_url = '/' + '/'.join(encoded_parts)
+            path_parts = image_path.split("/")
+            encoded_parts = [quote(part, safe="") for part in path_parts]
+            image_url = "/" + "/".join(encoded_parts)
+        elif image_path.startswith("/"):
+            path_parts = image_path[1:].split("/")
+            encoded_parts = [quote(part, safe="") for part in path_parts]
+            image_url = "/" + "/".join(encoded_parts)
         else:
-            # 이미 URL 경로인 경우 각 세그먼트를 인코딩
-            if image_path.startswith('/'):
-                path_parts = image_path[1:].split('/')
-                encoded_parts = [quote(part, safe='') for part in path_parts]
-                image_url = '/' + '/'.join(encoded_parts)
-            else:
-                path_parts = image_path.split('/')
-                encoded_parts = [quote(part, safe='') for part in path_parts]
-                image_url = '/'.join(encoded_parts)
+            path_parts = image_path.split("/")
+            encoded_parts = [quote(part, safe="") for part in path_parts]
+            image_url = "/" + "/".join(encoded_parts)
 
         print(f"🖼️ 이미지 URL 생성: {image_path} -> {image_url}")
 
