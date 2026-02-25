@@ -646,10 +646,10 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
     def _get_image_path(self, pdf_filename: str, page_number: int) -> str:
         """
         이미지 파일 경로 반환 (프로젝트 루트 기준 상대 경로).
-        실행 디렉터리(cwd)에 무관하게 동일한 상대 경로를 반환합니다.
+        URL/DB 일관성을 위해 항상 슬래시(/)로 반환 (Windows에서도 동일).
         """
         image_dir = Path("static/images") / pdf_filename
-        return str(image_dir / f"page_{page_number}.jpg")
+        return str(image_dir / f"page_{page_number}.jpg").replace("\\", "/")
 
     def save_image_to_file(
         self,

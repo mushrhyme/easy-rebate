@@ -3,7 +3,7 @@
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { searchApi, documentsApi } from '@/api/client'
-import { getApiBaseUrl } from '@/utils/apiConfig'
+import { getPageImageAbsoluteUrl } from '@/utils/apiConfig'
 import './UploadPagePreview.css'
 
 interface UploadPagePreviewProps {
@@ -51,15 +51,18 @@ export function UploadPagePreview({ pdfFilename, pageNumber = 1 }: UploadPagePre
           画像の読み込みに失敗しました
         </div>
       )}
-      {data && data.image_url && (
+      {data && data.image_url && (() => {
+        const src = getPageImageAbsoluteUrl(data.image_url)
+        return src ? (
         <div className="upload-page-preview-image-wrap">
           <img
-            src={data.image_url.startsWith('http') ? data.image_url : `${getApiBaseUrl()}${data.image_url}`}
+            src={src}
             alt={`Page ${pageNumber}`}
             className="upload-page-preview-image"
           />
         </div>
-      )}
+        ) : null
+      })()}
       {noImage && (
         <div className="upload-page-preview-no-image">
           <p className="upload-page-preview-no-image-message">画像がまだ生成されていません</p>

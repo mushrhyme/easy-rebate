@@ -3,6 +3,7 @@
 -- 프로젝트 이관 시 최초 DB 생성용
 -- current/archive 테이블만 생성 (원본 테이블 없음)
 -- ============================================
+SET client_encoding = 'UTF8';
 
 -- ============================================
 -- 1. 사용자 관리 테이블 (필수)
@@ -310,104 +311,104 @@ CREATE TABLE form_type_labels (
 );
 
 -- ============================================
--- 10. 인덱스 생성
+-- 10. 인덱스 생성 (IF NOT EXISTS 로 재실행 시 에러 방지)
 -- ============================================
 
 -- documents_current 인덱스
-CREATE INDEX idx_documents_current_pdf_filename ON documents_current(pdf_filename);
-CREATE INDEX idx_documents_current_timestamp ON documents_current(parsing_timestamp DESC);
-CREATE INDEX idx_documents_current_form_type ON documents_current(form_type);
-CREATE INDEX idx_documents_current_upload_channel ON documents_current(upload_channel);
-CREATE INDEX idx_documents_current_year_month ON documents_current(data_year, data_month);
-CREATE INDEX idx_documents_current_created_by_user ON documents_current(created_by_user_id);
-CREATE INDEX idx_documents_current_updated_by_user ON documents_current(updated_by_user_id);
-CREATE INDEX idx_documents_current_is_answer_key ON documents_current(is_answer_key_document) WHERE is_answer_key_document = TRUE;
+CREATE INDEX IF NOT EXISTS idx_documents_current_pdf_filename ON documents_current(pdf_filename);
+CREATE INDEX IF NOT EXISTS idx_documents_current_timestamp ON documents_current(parsing_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_current_form_type ON documents_current(form_type);
+CREATE INDEX IF NOT EXISTS idx_documents_current_upload_channel ON documents_current(upload_channel);
+CREATE INDEX IF NOT EXISTS idx_documents_current_year_month ON documents_current(data_year, data_month);
+CREATE INDEX IF NOT EXISTS idx_documents_current_created_by_user ON documents_current(created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_current_updated_by_user ON documents_current(updated_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_current_is_answer_key ON documents_current(is_answer_key_document) WHERE is_answer_key_document = TRUE;
 
 -- documents_archive 인덱스
-CREATE INDEX idx_documents_archive_pdf_filename ON documents_archive(pdf_filename);
-CREATE INDEX idx_documents_archive_timestamp ON documents_archive(parsing_timestamp DESC);
-CREATE INDEX idx_documents_archive_form_type ON documents_archive(form_type);
-CREATE INDEX idx_documents_archive_upload_channel ON documents_archive(upload_channel);
-CREATE INDEX idx_documents_archive_year_month ON documents_archive(data_year, data_month);
-CREATE INDEX idx_documents_archive_created_by_user ON documents_archive(created_by_user_id);
-CREATE INDEX idx_documents_archive_updated_by_user ON documents_archive(updated_by_user_id);
-CREATE INDEX idx_documents_archive_is_answer_key ON documents_archive(is_answer_key_document) WHERE is_answer_key_document = TRUE;
+CREATE INDEX IF NOT EXISTS idx_documents_archive_pdf_filename ON documents_archive(pdf_filename);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_timestamp ON documents_archive(parsing_timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_form_type ON documents_archive(form_type);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_upload_channel ON documents_archive(upload_channel);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_year_month ON documents_archive(data_year, data_month);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_created_by_user ON documents_archive(created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_updated_by_user ON documents_archive(updated_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_documents_archive_is_answer_key ON documents_archive(is_answer_key_document) WHERE is_answer_key_document = TRUE;
 
 -- page_data_current 인덱스
-CREATE INDEX idx_page_data_current_pdf_filename ON page_data_current(pdf_filename);
-CREATE INDEX idx_page_data_current_pdf_page ON page_data_current(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_page_data_current_pdf_filename ON page_data_current(pdf_filename);
+CREATE INDEX IF NOT EXISTS idx_page_data_current_pdf_page ON page_data_current(pdf_filename, page_number);
 
 -- page_data_archive 인덱스
-CREATE INDEX idx_page_data_archive_pdf_filename ON page_data_archive(pdf_filename);
-CREATE INDEX idx_page_data_archive_pdf_page ON page_data_archive(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_page_data_archive_pdf_filename ON page_data_archive(pdf_filename);
+CREATE INDEX IF NOT EXISTS idx_page_data_archive_pdf_page ON page_data_archive(pdf_filename, page_number);
 
 -- items_current 인덱스
-CREATE INDEX idx_items_current_pdf_page ON items_current(pdf_filename, page_number);
-CREATE INDEX idx_items_current_pdf_page_order ON items_current(pdf_filename, page_number, item_order);
-CREATE INDEX idx_items_current_customer ON items_current(customer);
-CREATE INDEX idx_items_current_first_review ON items_current(first_review_checked);
-CREATE INDEX idx_items_current_second_review ON items_current(second_review_checked);
-CREATE INDEX idx_items_current_data_gin ON items_current USING GIN (item_data);
-CREATE INDEX idx_items_current_created_by_user ON items_current(created_by_user_id);
-CREATE INDEX idx_items_current_updated_by_user ON items_current(updated_by_user_id);
-CREATE INDEX idx_items_current_first_reviewed_by_user ON items_current(first_reviewed_by_user_id);
-CREATE INDEX idx_items_current_second_reviewed_by_user ON items_current(second_reviewed_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_current_pdf_page ON items_current(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_items_current_pdf_page_order ON items_current(pdf_filename, page_number, item_order);
+CREATE INDEX IF NOT EXISTS idx_items_current_customer ON items_current(customer);
+CREATE INDEX IF NOT EXISTS idx_items_current_first_review ON items_current(first_review_checked);
+CREATE INDEX IF NOT EXISTS idx_items_current_second_review ON items_current(second_review_checked);
+CREATE INDEX IF NOT EXISTS idx_items_current_data_gin ON items_current USING GIN (item_data);
+CREATE INDEX IF NOT EXISTS idx_items_current_created_by_user ON items_current(created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_current_updated_by_user ON items_current(updated_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_current_first_reviewed_by_user ON items_current(first_reviewed_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_current_second_reviewed_by_user ON items_current(second_reviewed_by_user_id);
 
 -- items_archive 인덱스
-CREATE INDEX idx_items_archive_pdf_page ON items_archive(pdf_filename, page_number);
-CREATE INDEX idx_items_archive_pdf_page_order ON items_archive(pdf_filename, page_number, item_order);
-CREATE INDEX idx_items_archive_customer ON items_archive(customer);
-CREATE INDEX idx_items_archive_first_review ON items_archive(first_review_checked);
-CREATE INDEX idx_items_archive_second_review ON items_archive(second_review_checked);
-CREATE INDEX idx_items_archive_data_gin ON items_archive USING GIN (item_data);
-CREATE INDEX idx_items_archive_created_by_user ON items_archive(created_by_user_id);
-CREATE INDEX idx_items_archive_updated_by_user ON items_archive(updated_by_user_id);
-CREATE INDEX idx_items_archive_first_reviewed_by_user ON items_archive(first_reviewed_by_user_id);
-CREATE INDEX idx_items_archive_second_reviewed_by_user ON items_archive(second_reviewed_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_archive_pdf_page ON items_archive(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_items_archive_pdf_page_order ON items_archive(pdf_filename, page_number, item_order);
+CREATE INDEX IF NOT EXISTS idx_items_archive_customer ON items_archive(customer);
+CREATE INDEX IF NOT EXISTS idx_items_archive_first_review ON items_archive(first_review_checked);
+CREATE INDEX IF NOT EXISTS idx_items_archive_second_review ON items_archive(second_review_checked);
+CREATE INDEX IF NOT EXISTS idx_items_archive_data_gin ON items_archive USING GIN (item_data);
+CREATE INDEX IF NOT EXISTS idx_items_archive_created_by_user ON items_archive(created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_archive_updated_by_user ON items_archive(updated_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_archive_first_reviewed_by_user ON items_archive(first_reviewed_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_items_archive_second_reviewed_by_user ON items_archive(second_reviewed_by_user_id);
 
 -- item_locks_current 인덱스
-CREATE INDEX idx_item_locks_current_expires_at ON item_locks_current(expires_at);
-CREATE INDEX idx_item_locks_current_locked_by_user ON item_locks_current(locked_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_item_locks_current_expires_at ON item_locks_current(expires_at);
+CREATE INDEX IF NOT EXISTS idx_item_locks_current_locked_by_user ON item_locks_current(locked_by_user_id);
 
 -- item_locks_archive 인덱스
-CREATE INDEX idx_item_locks_archive_expires_at ON item_locks_archive(expires_at);
-CREATE INDEX idx_item_locks_archive_locked_by_user ON item_locks_archive(locked_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_item_locks_archive_expires_at ON item_locks_archive(expires_at);
+CREATE INDEX IF NOT EXISTS idx_item_locks_archive_locked_by_user ON item_locks_archive(locked_by_user_id);
 
 -- page_images_current 인덱스
-CREATE INDEX idx_page_images_current_pdf_filename ON page_images_current(pdf_filename);
-CREATE INDEX idx_page_images_current_pdf_page ON page_images_current(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_page_images_current_pdf_filename ON page_images_current(pdf_filename);
+CREATE INDEX IF NOT EXISTS idx_page_images_current_pdf_page ON page_images_current(pdf_filename, page_number);
 
 -- page_images_archive 인덱스
-CREATE INDEX idx_page_images_archive_pdf_filename ON page_images_archive(pdf_filename);
-CREATE INDEX idx_page_images_archive_pdf_page ON page_images_archive(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_page_images_archive_pdf_filename ON page_images_archive(pdf_filename);
+CREATE INDEX IF NOT EXISTS idx_page_images_archive_pdf_page ON page_images_archive(pdf_filename, page_number);
 
 -- rag_learning_status_current 인덱스
-CREATE INDEX idx_rag_learning_status_current_pdf_page ON rag_learning_status_current(pdf_filename, page_number);
-CREATE INDEX idx_rag_learning_status_current_status ON rag_learning_status_current(status);
-CREATE INDEX idx_rag_learning_status_current_hash ON rag_learning_status_current(page_hash);
+CREATE INDEX IF NOT EXISTS idx_rag_learning_status_current_pdf_page ON rag_learning_status_current(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_rag_learning_status_current_status ON rag_learning_status_current(status);
+CREATE INDEX IF NOT EXISTS idx_rag_learning_status_current_hash ON rag_learning_status_current(page_hash);
 
 -- rag_learning_status_archive 인덱스
-CREATE INDEX idx_rag_learning_status_archive_pdf_page ON rag_learning_status_archive(pdf_filename, page_number);
-CREATE INDEX idx_rag_learning_status_archive_status ON rag_learning_status_archive(status);
-CREATE INDEX idx_rag_learning_status_archive_hash ON rag_learning_status_archive(page_hash);
+CREATE INDEX IF NOT EXISTS idx_rag_learning_status_archive_pdf_page ON rag_learning_status_archive(pdf_filename, page_number);
+CREATE INDEX IF NOT EXISTS idx_rag_learning_status_archive_status ON rag_learning_status_archive(status);
+CREATE INDEX IF NOT EXISTS idx_rag_learning_status_archive_hash ON rag_learning_status_archive(page_hash);
 
 -- rag_vector_index 인덱스
-CREATE INDEX idx_rag_vector_index_name ON rag_vector_index(index_name);
-CREATE INDEX idx_rag_vector_index_form_type ON rag_vector_index(form_type);
-CREATE INDEX idx_rag_vector_index_name_form ON rag_vector_index(index_name, form_type);
+CREATE INDEX IF NOT EXISTS idx_rag_vector_index_name ON rag_vector_index(index_name);
+CREATE INDEX IF NOT EXISTS idx_rag_vector_index_form_type ON rag_vector_index(form_type);
+CREATE INDEX IF NOT EXISTS idx_rag_vector_index_name_form ON rag_vector_index(index_name, form_type);
 
 -- form_field_mappings 인덱스
-CREATE INDEX idx_form_field_mappings_form_code ON form_field_mappings(form_code);
-CREATE INDEX idx_form_field_mappings_logical_key ON form_field_mappings(logical_key);
-CREATE INDEX idx_form_field_mappings_is_active ON form_field_mappings(is_active);
+CREATE INDEX IF NOT EXISTS idx_form_field_mappings_form_code ON form_field_mappings(form_code);
+CREATE INDEX IF NOT EXISTS idx_form_field_mappings_logical_key ON form_field_mappings(logical_key);
+CREATE INDEX IF NOT EXISTS idx_form_field_mappings_is_active ON form_field_mappings(is_active);
 
 -- users 인덱스
-CREATE INDEX idx_users_username ON users(username);
-CREATE INDEX idx_users_is_active ON users(is_active);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_is_active ON users(is_active);
 
 -- user_sessions 인덱스
-CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id);
-CREATE INDEX idx_user_sessions_expires_at ON user_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
 
 -- ============================================
 -- 11. 함수 생성
@@ -447,9 +448,8 @@ $$ LANGUAGE plpgsql;
 -- ============================================
 -- 로그인ID.xlsx → users 반영 (CSV 있으면 실행)
 -- ============================================
--- 먼저: python -m database.export_users_csv 로 database/csv/users_import.csv 생성 (해당 스크립트 있을 경우)
--- 프로젝트 루트에서 실행: psql -U postgres -d rebate_db -f database/init_database.sql
 -- CSV 8열: 빈열, ID, 이름(한글), 名前, 부서명(한글), 部署, 권한, 분류
+-- 기본 경로는 프로젝트 루트 기준. 경로 오류 시: psql ... -v csvfile="C:/Rebate/easy-rebate/database/csv/users_import.csv" (절대경로로 지정)
 
 CREATE TEMP TABLE _users_csv (
     col_1 TEXT,
@@ -462,7 +462,12 @@ CREATE TEMP TABLE _users_csv (
     col_8 TEXT
 );
 
+-- \copy에서 변수(:'csvfile') 치환이 Windows/일부 psql에서 실패하므로, 기본은 고정 경로 사용
+\if :{?csvfile}
+\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8) FROM :'csvfile' WITH (FORMAT csv, HEADER true);
+\else
 \copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8) FROM 'database/csv/users_import.csv' WITH (FORMAT csv, HEADER true);
+\endif
 
 INSERT INTO users (username, display_name, display_name_ja, department_ko, department_ja, role, category, is_active)
 SELECT

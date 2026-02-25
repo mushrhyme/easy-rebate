@@ -7,6 +7,12 @@ from typing import Dict, Any, List, Optional
 from psycopg2.extras import RealDictCursor
 
 
+def _safe_log(msg: str, e: Exception = None) -> None:
+    """cp932 console-safe: ASCII-only print (no Korean/emoji)."""
+    part = f": {type(e).__name__}" if e else ""
+    print(f"[db_users] {msg}{part}", flush=True)
+
+
 class UsersMixin:
     """사용자 관리 Mixin"""
     
@@ -61,7 +67,7 @@ class UsersMixin:
                 result = cursor.fetchone()
                 return dict(result) if result else None
         except Exception as e:
-            print(f"⚠️ 사용자 조회 실패: {e}")
+            _safe_log("get_user_by_username failed", e)
             return None
 
     def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
@@ -115,7 +121,7 @@ class UsersMixin:
                 result = cursor.fetchone()
                 return dict(result) if result else None
         except Exception as e:
-            print(f"⚠️ 사용자 조회 실패: {e}")
+            _safe_log("get_user_by_id failed", e)
             return None
 
     def update_user_login_info(self, user_id: int) -> bool:
@@ -140,7 +146,7 @@ class UsersMixin:
                 conn.commit()
                 return True
         except Exception as e:
-            print(f"⚠️ 사용자 로그인 정보 업데이트 실패: {e}")
+            _safe_log("update_user_login_info failed", e)
             return False
 
     def create_user_session(self, user_id: int, session_id: str, ip_address: str = None, user_agent: str = None) -> bool:
@@ -157,7 +163,6 @@ class UsersMixin:
             세션 생성 성공 여부
         """
         try:
-            print(f"🔵 [create_user_session] 시작: user_id={user_id}, session_id={session_id[:20] if session_id else 'None'}...")
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 
@@ -191,9 +196,7 @@ class UsersMixin:
                     return True
                 return False
         except Exception as e:
-            print(f"⚠️ 세션 생성 실패: {e}")
-            import traceback
-            traceback.print_exc()
+            _safe_log("create_user_session failed", e)
             return False
 
     def get_session_user(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -271,9 +274,7 @@ class UsersMixin:
                     return d
                 return None
         except Exception as e:
-            print(f"⚠️ 세션 사용자 조회 실패: {e}")
-            import traceback
-            traceback.print_exc()
+            _safe_log("get_session_user failed", e)
             return None
 
     def delete_user_session(self, session_id: str) -> bool:
@@ -296,7 +297,7 @@ class UsersMixin:
                 conn.commit()
                 return True
         except Exception as e:
-            print(f"⚠️ 세션 삭제 실패: {e}")
+            _safe_log("delete_user_session failed", e)
             return False
 
     def get_all_users(self) -> List[Dict[str, Any]]:
@@ -346,7 +347,7 @@ class UsersMixin:
 
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
-            print(f"⚠️ 사용자 목록 조회 실패: {e}")
+            _safe_log("get_all_users failed", e)
             return []
 
     def create_user(
@@ -382,7 +383,7 @@ class UsersMixin:
                 conn.commit()
                 return result[0] if result else None
         except Exception as e:
-            print(f"⚠️ 사용자 생성 실패: {e}")
+            _safe_log("create_user failed", e)
             return None
 
     def update_user(
@@ -460,7 +461,7 @@ class UsersMixin:
                 conn.commit()
                 return True
         except Exception as e:
-            print(f"⚠️ 사용자 업데이트 실패: {e}")
+            _safe_log("update_user failed", e)
             return False
 
     def delete_user(self, user_id: int) -> bool:
@@ -472,7 +473,7 @@ class UsersMixin:
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
-            print(f"⚠️ 사용자 삭제 실패: {e}")
+            _safe_log("delete_user failed", e)
             return False
 
     def update_password(
@@ -497,7 +498,7 @@ class UsersMixin:
                 conn.commit()
                 return True
         except Exception as e:
-            print(f"⚠️ 비밀번호 업데이트 실패: {e}")
+            _safe_log("update_password failed", e)
             return False
 
 

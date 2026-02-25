@@ -19,23 +19,12 @@ def get_current_user(session_id: Optional[str] = Header(None, alias="X-Session-I
     Raises:
         HTTPException: 세션이 유효하지 않거나 사용자가 인증되지 않은 경우
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    logger.info(f"🔐 [인증] 세션 ID 확인: {session_id is not None}, 값: {session_id[:20] + '...' if session_id and len(session_id) > 20 else session_id}")
-    
     if not session_id:
-        logger.warning("❌ [인증] 세션 ID가 없습니다")
         raise HTTPException(status_code=401, detail="세션 ID가 필요합니다")
-
     db = get_db()
     user_info = db.get_session_user(session_id)
-
     if not user_info:
-        logger.warning(f"❌ [인증] 유효하지 않은 세션 ID: {session_id[:20] + '...' if len(session_id) > 20 else session_id}")
         raise HTTPException(status_code=401, detail="유효하지 않은 세션입니다")
-
-    logger.info(f"✅ [인증] 인증 성공: user_id={user_info.get('user_id')}")
     return user_info
 
 

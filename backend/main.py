@@ -3,7 +3,23 @@ FastAPI 메인 애플리케이션
 """
 import os
 import sys
+import logging
 from pathlib import Path
+
+# Windows cp932 콘솔에서 한글/이모지 출력 시 UnicodeEncodeError 방지
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# 로그인 등 API 요청 확인용: INFO 레벨 출력 (기본 WARNING이라 로그가 안 보이던 문제 해결)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent.parent
@@ -15,8 +31,9 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
-from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test, settings as settings_routes, form_types as form_types_routes
+# .env 로드 후 DB 연결되도록 config를 routes보다 먼저 import
 from backend.core.config import settings
+from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test, settings as settings_routes, form_types as form_types_routes
 from backend.core.scheduler import setup_archive_scheduler
 from database.registry import close_db
 
@@ -164,13 +181,18 @@ async def global_exception_handler(request, exc):
 
 
 def run():
-    """진입점: 개발 시에는 DEBUG=true로 reload, 운영 시에는 reload 없이 실행."""
+    """진입점: DEBUG=true면 reload(기본). UV_RELOAD=0 이면 reload 끔 → 로그가 같은 창에 보임."""
     import uvicorn
+    use_reload = settings.DEBUG and os.getenv("UV_RELOAD", "1") == "1"
+    print(f"[backend] Starting Uvicorn on {settings.HOST}:{settings.PORT} (reload={use_reload}) ...", flush=True)
     uvicorn.run(
         "backend.main:app",
         host=settings.HOST,
         port=settings.PORT,
-        reload=settings.DEBUG,
+        reload=use_reload,
+        reload_excludes=[".venv", "**/.venv/**", "**/node_modules/**"] if use_reload else None,
+        log_level="info",
+        access_log=False,  # GET/POST/OPTIONS 한 줄씩 로그 제거 → 터미널 정리
     )
 
 
