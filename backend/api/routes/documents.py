@@ -1136,8 +1136,74 @@ async def get_answer_keys_from_img():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# answer.json 스타일로 DB items 반환 시 사용 (get_document_answer_json / img 폴백 공통)
+_ITEM_SYSTEM_KEYS = {"pdf_filename", "page_number", "item_order", "item_id", "version", "review_status"}
+
+
+def _to_item_data_only(it: dict) -> dict:
+    """merged item 또는 { item_data } 형태에서 item_data만 추출."""
+    if not isinstance(it, dict):
+        return it if it is not None else {}
+    if "item_data" in it:
+        return it.get("item_data") or {}
+    return {k: v for k, v in it.items() if k not in _ITEM_SYSTEM_KEYS}
+
+
+def _get_answer_pages_from_db(pdf_filename: str):
+    """DB에서 문서의 페이지별 정답지(items는 item_data만) 반환. 문서 없으면 None."""
+    db = get_db()
+    doc = db.get_document(pdf_filename)
+    if not doc:
+        return None
+    page_results = db.get_page_results(pdf_filename)
+    pages = []
+    for pr in page_results:
+        items = pr.get("items") or []
+        items_sorted = sorted(
+            items,
+            key=lambda x: int(x.get("item_order", 0)) if isinstance(x, dict) else 0,
+        )
+        items_plain = [_to_item_data_only(it) for it in items_sorted]
+        page_obj = {k: v for k, v in pr.items() if k != "items"}
+    # 페이지 번호 숫자 순 (1, 2, ... 10) — 문자열 정렬 시 Page10이 Page2보다 앞섬
+        page_obj["items"] = items_plain
+        pages.append(page_obj)
+    pages.sort(key=lambda p: p.get("page_number") or 0)
+    return pages
+
+
+def _find_img_relative_path_by_pdf_name(pdf_filename: str) -> Optional[str]:
+    """img 폴더 하위에서 폴더명이 pdf_filename(확장자 제외)과 같은 경로를 찾아 relative_path 반환. 없으면 None."""
+    root = get_project_root()
+    img_dir = root / "img"
+            # 숫자 키 순(0,1,2,...,10,11) — 문자열 정렬 시 0,1,10,11,2 가 되므로 반드시 int 정렬
+    if not img_dir.exists():
+        return None
+            # 인덱스 순서 그대로 새 리스트로 반환 (배열 순서 보장)
+    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    for path in img_dir.rglob("*"):
+        if path.is_dir() and path.name == pdf_name:
+            try:
+                rel = path.relative_to(img_dir)
+                return str(rel).replace("\\", "/")
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def _get_answer_pages_from_img_by_pdf_filename(pdf_filename: str):
+    """img 폴더에서 pdf_filename과 매칭되는 폴더의 정답지 페이지 목록 반환. 없으면 None."""
+    rel = _find_img_relative_path_by_pdf_name(pdf_filename)
+    if not rel:
+        return None
+    result = _load_answer_json_from_img_folder(rel)
+    if not result or not result.get("pages"):
+        return None
+    return result["pages"]
+
+
 def _load_answer_json_from_img_folder(relative_path: str):
-    """img 폴더 내 relative_path 에서 Page*_answer*.json 읽어 합쳐 반환."""
+    """img 폴더 내 relative_path 에서 Page*_answer*.json 읽어 합쳐 반환. items 전부 비면 DB 폴백."""
     from modules.core.build_faiss_db import load_answer_json
     import re
     root = get_project_root()
@@ -1150,7 +1216,6 @@ def _load_answer_json_from_img_folder(relative_path: str):
         return None
     if not folder.is_dir():
         return None
-    # 페이지 번호 숫자 순 (1, 2, ... 10) — 문자열 정렬 시 Page10이 Page2보다 앞섬
     all_files = list(folder.glob("Page*_answer*.json"))
     files = sorted(all_files, key=lambda f: int(m.group(1)) if (m := re.search(r"Page(\d+)", f.name, re.IGNORECASE)) else 0)
     pages = []
@@ -1162,10 +1227,8 @@ def _load_answer_json_from_img_folder(relative_path: str):
             data = {k: v for k, v in data.items() if v is not None}
         raw_items = data.get("items")
         if isinstance(raw_items, dict):
-            # 숫자 키 순(0,1,2,...,10,11) — 문자열 정렬 시 0,1,10,11,2 가 되므로 반드시 int 정렬
             data["items"] = [raw_items[k] for k in sorted(raw_items.keys(), key=lambda k: (int(k) if str(k).isdigit() else 0))]
         elif isinstance(raw_items, list):
-            # 인덱스 순서 그대로 새 리스트로 반환 (배열 순서 보장)
             data["items"] = [raw_items[i] for i in range(len(raw_items))]
         else:
             data["items"] = []
@@ -1173,11 +1236,28 @@ def _load_answer_json_from_img_folder(relative_path: str):
         pages.append(data)
     pages.sort(key=lambda p: p.get("page_number") or 0)
     pdf_name = folder.name
+    pdf_filename = f"{pdf_name}.pdf"
     form_type = folder.parent.name if folder.parent != img_dir and folder.parent.name.isdigit() else None
     if not form_type and folder.parent != img_dir:
         form_type = folder.parent.name
+
+    # img에서 items가 전부 빈 객체면 DB에서 같은 문서로 채우기 (sync 후 DB에만 있는 경우 대비)
+    need_db_fallback = any(
+        (p.get("items") and len(p["items"]) > 0 and all(isinstance(it, dict) and len(it) == 0 for it in p["items"]))
+        for p in pages
+    )
+    if need_db_fallback:
+        db_pages = _get_answer_pages_from_db(pdf_filename)
+        if db_pages:
+            by_page = {p.get("page_number"): p for p in db_pages}
+            for p in pages:
+                pn = p.get("page_number")
+                db_page = by_page.get(pn)
+                if db_page and db_page.get("items") and any(len(it) > 0 for it in db_page["items"] if isinstance(it, dict)):
+                    p["items"] = db_page["items"]
+
     return {
-        "pdf_filename": f"{pdf_name}.pdf",
+        "pdf_filename": pdf_filename,
         "form_type": form_type,
         "total_pages": len(pages),
         "pages": pages,
@@ -1206,6 +1286,7 @@ async def save_answer_json_from_img(body: SaveAnswerJsonFromImgRequest):
     """
     정답지 탭에서 편집한 내용을 img 폴더의 JSON 파일에만 반영 (DB는 건드리지 않음).
     RAG 문서는 여기서 읽어오므로, 여기 저장해야 null로 덮어쓰이지 않음.
+        # 1, 2, 3, ... 10, 11 순서 보장 (문자열 정렬 방지)
     """
     if not body.relative_path or ".." in body.relative_path:
         raise HTTPException(status_code=400, detail="Invalid relative_path")
@@ -1241,8 +1322,10 @@ async def get_img_page_image(relative_path: str, page_number: int = 1):
     if not relative_path or ".." in relative_path or page_number < 1:
         raise HTTPException(status_code=400, detail="Invalid parameters")
     root = get_project_root()
+    # get_page_results: page_data가 있는 페이지만 반환. 빈 페이지는 page_number 기준으로 채움.
     img_dir = root / "img"
     safe = relative_path.replace("..", "").strip("/\\").replace("\\", "/")
+    # answer.json 스타일: items는 item_data만 포함한 리스트
     folder = (img_dir / safe).resolve()
     try:
         folder.relative_to(img_dir.resolve())
@@ -1253,6 +1336,7 @@ async def get_img_page_image(relative_path: str, page_number: int = 1):
     for ext in ("png", "jpg", "jpeg"):
         path = folder / f"Page{page_number}.{ext}"
         if path.is_file():
+    # 페이지 번호 순 정렬
             return FileResponse(path, media_type=f"image/{ext}" if ext != "jpg" else "image/jpeg")
     raise HTTPException(status_code=404, detail="Image not found")
 
@@ -1272,22 +1356,18 @@ async def get_document_answer_json(
         raise HTTPException(status_code=404, detail="Document not found")
     total_pages = doc.get("total_pages") or 0
     form_type = doc.get("form_type")
-    # get_page_results: page_data가 있는 페이지만 반환. 빈 페이지는 page_number 기준으로 채움.
     page_results = db.get_page_results(pdf_filename)
-    # answer.json 스타일: items는 item_data만 포함한 리스트
     pages = []
     for pr in page_results:
         items = pr.get("items") or []
-        # 1, 2, 3, ... 10, 11 순서 보장 (문자열 정렬 방지)
         items_sorted = sorted(
             items,
-            key=lambda it: int(it.get("item_order", 0)) if isinstance(it, dict) else 0,
+            key=lambda x: int(x.get("item_order", 0)) if isinstance(x, dict) else 0,
         )
-        items_plain = [it.get("item_data") if isinstance(it, dict) else it for it in items_sorted]
+        items_plain = [_to_item_data_only(it) for it in items_sorted]
         page_obj = {k: v for k, v in pr.items() if k != "items"}
         page_obj["items"] = items_plain
         pages.append(page_obj)
-    # 페이지 번호 순 정렬
     pages.sort(key=lambda p: p.get("page_number") or 0)
     return {
         "pdf_filename": pdf_filename,
