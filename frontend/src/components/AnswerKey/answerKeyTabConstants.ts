@@ -29,6 +29,7 @@ export const TYPE_OPTIONS_BASE = [
   { value: 'CF8%', label: 'CF8%' },
   { value: 'CF10%', label: 'CF10%' },
   { value: '非課税', label: '非課税' },
+  { value: '消費税', label: '消費税' },
 ]
 
 export interface InitialDocumentForAnswerKey {
