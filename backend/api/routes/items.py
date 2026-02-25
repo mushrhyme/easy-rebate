@@ -9,7 +9,9 @@ from pydantic import BaseModel
 
 from database.registry import get_db
 from backend.api.routes.websocket import manager
+from backend.core.auth import get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
+from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
 
@@ -812,6 +814,7 @@ async def get_page_items(
 @router.post("/")
 async def create_item(
     item_data: ItemCreateRequest,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -863,6 +866,7 @@ async def create_item(
                 error_detail = f"Failed to create item: after_item_id={item_data.after_item_id} not found"
             raise HTTPException(status_code=500, detail=error_detail)
 
+        activity_log(current_user.get("username"), f"아이템 생성: {item_data.pdf_filename} p.{item_data.page_number}")
         # 생성된 아이템 조회 (응답용)
         items = None
         created_item = None
@@ -1172,7 +1176,18 @@ async def update_item(
                 pass
             
             conn.commit()
-            
+
+            # 검토 체크/해제 활동 로그
+            if update_data.review_status:
+                first_review = update_data.review_status.get("first_review") or {}
+                second_review = update_data.review_status.get("second_review") or {}
+                if "checked" in first_review:
+                    action = "1차 검토 체크" if first_review["checked"] else "1차 검토 해제"
+                    activity_log(user_info.get("username") if user_info else None, f"{action}: {item[1]} p.{item[2]}")
+                if "checked" in second_review:
+                    action = "2차 검토 체크" if second_review["checked"] else "2차 검토 해제"
+                    activity_log(user_info.get("username") if user_info else None, f"{action}: {item[1]} p.{item[2]}")
+
             # review_status 업데이트 시 WebSocket으로 브로드캐스트
             if update_data.review_status:
                 await manager.broadcast_lock_update(
@@ -1330,6 +1345,7 @@ async def acquire_item_lock(
 @router.delete("/{item_id}")
 async def delete_item(
     item_id: int,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -1413,6 +1429,7 @@ async def delete_item(
         except Exception as ws_error:
             print(f"⚠️ [delete_item] WebSocket 브로드캐스트 실패 (무시): {ws_error}")
 
+        activity_log(current_user.get("username"), f"아이템 삭제: {pdf_filename} p.{page_number} (item_id={item_id})")
         return {"message": "Item deleted successfully", "item_id": item_id}
 
     except HTTPException:

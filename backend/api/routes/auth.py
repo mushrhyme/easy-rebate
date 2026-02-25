@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from database.registry import get_db
 from backend.core.auth import get_current_user_id, get_current_user as get_current_user_dep
 from backend.core.password import hash_password, verify_password
+from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
 
@@ -78,16 +79,9 @@ async def login(
     logger = logging.getLogger(__name__)
     
     try:
-        logger.info(f"🔐 [로그인] 로그인 시도: username={request.username}")
-        
-        # ユーザー検索
         user = db.get_user_by_username(request.username)
-        
-        logger.info(f"🔐 [로그인] 사용자 조회 결과: {user is not None}")
-
         if not user:
-            # ユーザーが存在しない
-            logger.warning(f"❌ [로그인] 사용자를 찾을 수 없음: {request.username}")
+            logger.warning("[auth] user not found username=%s", request.username)
             return LoginResponse(
                 success=False,
                 message="管理者承認が必要です",
@@ -110,7 +104,7 @@ async def login(
             password_ok = request.password == request.username
 
         if not password_ok:
-            logger.warning(f"❌ [로그인] 비밀번호 불일치: username={request.username}")
+            logger.warning("[auth] password mismatch username=%s", request.username)
             return LoginResponse(
                 success=False,
                 message="비밀번호가 올바르지 않습니다",
@@ -121,17 +115,9 @@ async def login(
                 must_change_password=False,
             )
 
-        # 세션 ID 생성
         session_id = str(uuid.uuid4())
-        logger.info(f"🔐 [로그인] 세션 ID 생성: {session_id[:20]}...")
-
-        # IP 주소 추출
         ip_address = req.client.host if req.client else None
         user_agent = req.headers.get("user-agent")
-        logger.info(f"🔐 [로그인] IP 주소: {ip_address}, User-Agent: {user_agent[:50] if user_agent else None}...")
-
-        # 세션 생성
-        logger.info(f"🔵 [로그인] 세션 생성 시도: user_id={user['user_id']}, session_id={session_id[:20]}...")
         session_created = db.create_user_session(
             user_id=user['user_id'],
             session_id=session_id,
@@ -140,22 +126,15 @@ async def login(
         )
 
         if not session_created:
-            logger.error(f"❌ [로그인] 세션 생성 실패: user_id={user['user_id']}, session_id={session_id[:20]}...")
+            logger.error("[auth] create_user_session failed user_id=%s", user['user_id'])
             raise HTTPException(status_code=500, detail="세션 생성에 실패했습니다")
-
-        # 세션이 실제로 데이터베이스에 저장되었는지 확인
         verify_user_info = db.get_session_user(session_id)
         if not verify_user_info:
-            logger.error(f"❌ [로그인] 세션 생성 후 검증 실패: session_id={session_id[:20]}... (데이터베이스에 세션이 없음)")
+            logger.error("[auth] session verify failed")
             raise HTTPException(status_code=500, detail="세션 생성 후 검증에 실패했습니다")
-        
-        logger.info(f"✅ [로그인] 세션 생성 및 검증 성공: user_id={user['user_id']}, session_id={session_id[:20]}..., verified_user_id={verify_user_info.get('user_id')}")
-
-        # 로그인 정보 업데이트
         db.update_user_login_info(user['user_id'])
+        activity_log(user['username'], "로그인")
 
-        logger.info(f"✅ [로그인] 로그인 성공: user_id={user['user_id']}, username={user['username']}")
-        
         return LoginResponse(
             success=True,
             message="로그인 성공",
@@ -170,8 +149,8 @@ async def login(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ [로그인] 예외 발생: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"로그인 처리 중 오류가 발생했습니다: {str(e)}")
+        logger.error("[auth] exception: %s", type(e).__name__, exc_info=True)
+        raise HTTPException(status_code=500, detail="로그인 처리 중 오류가 발생했습니다.")
 
 
 @router.post("/logout")
@@ -192,9 +171,12 @@ async def logout(
     if not x_session_id:
         return {"success": False, "message": "세션 ID가 필요합니다"}
     try:
+        user_info = db.get_session_user(x_session_id)
+        username = user_info.get("username") if user_info else None
         success = db.delete_user_session(x_session_id)
 
         if success:
+            activity_log(username, "로그아웃")
             return {"success": True, "message": "로그아웃되었습니다"}
         else:
             return {"success": False, "message": "로그아웃 처리 중 오류가 발생했습니다"}
@@ -463,6 +445,7 @@ async def change_password(
         success = db.update_password(user_id, new_hash, force_password_change=False)
         if not success:
             raise HTTPException(status_code=500, detail="비밀번호 변경에 실패했습니다")
+        activity_log(username, "비밀번호 변경")
         return {"success": True, "message": "비밀번호가 변경되었습니다"}
     except HTTPException:
         raise

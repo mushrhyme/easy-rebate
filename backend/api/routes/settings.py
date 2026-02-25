@@ -3,7 +3,10 @@
 """
 import json
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+
+from backend.core.auth import get_current_user
+from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
 
@@ -44,7 +47,7 @@ async def get_rag_provider():
 
 
 @router.put("/rag-provider")
-async def set_rag_provider(body: dict):
+async def set_rag_provider(body: dict, current_user: dict = Depends(get_current_user)):
     """분석 LLM 설정 변경. body: { "provider": "gemini" | "gpt5.2" }"""
     provider = (body.get("provider") or "").strip().lower()
     if provider not in ALLOWED_PROVIDERS:
@@ -53,4 +56,5 @@ async def set_rag_provider(body: dict):
             detail=f"provider must be one of {list(ALLOWED_PROVIDERS)}",
         )
     _write_rag_provider(provider)
+    activity_log(current_user.get("username"), f"설정 변경: RAG 프로바이더={provider}")
     return {"provider": provider}

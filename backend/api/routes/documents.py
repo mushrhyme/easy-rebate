@@ -30,6 +30,7 @@ def _delete_static_images_for_document(pdf_filename: str) -> None:
         shutil.rmtree(img_dir, ignore_errors=True)
 from backend.core.config import settings
 from backend.core.auth import get_current_user, get_current_user_id
+from backend.core.activity_log import log as activity_log
 from backend.api.routes.websocket import manager
 
 router = APIRouter()
@@ -398,7 +399,7 @@ async def upload_documents(
     year: Optional[int] = Form(None),
     month: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = None,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -489,7 +490,7 @@ async def upload_documents(
                         upload_channel=upload_channel,
                         form_type=form_type,
                         session_id=session_id,
-                        user_id=current_user_id,
+                        user_id=current_user["user_id"],
                         data_year=year,
                         data_month=month
                     )
@@ -501,6 +502,8 @@ async def upload_documents(
                 "error": str(e)
             })
     
+    filenames = [r.get("filename", "") for r in results]
+    activity_log(current_user.get("username"), f"업로드: {', '.join(filenames)}")
     return {
         "message": "Files uploaded",
         "results": results,
@@ -516,7 +519,7 @@ async def upload_documents_with_bbox(
     year: Optional[int] = Form(None),
     month: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = None,
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -568,7 +571,7 @@ async def upload_documents_with_bbox(
                         upload_channel=upload_channel,
                         form_type=None,
                         session_id=session_id,
-                        user_id=current_user_id,
+                        user_id=current_user["user_id"],
                         data_year=year,
                         data_month=month,
                         include_bbox=True,
@@ -579,6 +582,8 @@ async def upload_documents_with_bbox(
                 "status": "error",
                 "error": str(e)
             })
+    filenames_bbox = [r.get("filename", "") for r in results]
+    activity_log(current_user.get("username"), f"업로드(bbox): {', '.join(filenames_bbox)}")
     return {
         "message": "Files uploaded (with bbox)",
         "results": results,
@@ -1517,6 +1522,7 @@ async def revoke_document_answer_key(
 async def generate_answer_with_gemini(
     pdf_filename: str,
     page_number: int,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -1566,7 +1572,7 @@ async def generate_answer_with_gemini(
             k: v for k, v in result.items()
             if k not in ("items", "page_role") and v is not None
         }
-
+        activity_log(current_user.get("username"), f"분석(Gemini): {pdf_filename} p.{page_number}")
         return {
             "success": True,
             "page_number": page_number,
@@ -1588,6 +1594,7 @@ async def generate_answer_with_gemini(
 async def generate_answer_with_rag(
     pdf_filename: str,
     page_number: int,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
@@ -1624,6 +1631,7 @@ async def generate_answer_with_rag(
             k: v for k, v in result.items()
             if k not in exclude_from_page_meta and v is not None
         }
+        activity_log(current_user.get("username"), f"분석(RAG): {pdf_filename} p.{page_number}")
         return {
             "success": True,
             "page_number": page_number,
@@ -1642,6 +1650,7 @@ async def generate_answer_with_rag(
 async def generate_answer_with_gpt(
     pdf_filename: str,
     page_number: int,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db),
     model: str = "gpt-5.2-2025-12-11",
 ):
@@ -1736,6 +1745,7 @@ async def generate_answer_with_gpt(
             k: v for k, v in result.items()
             if k not in ("items", "page_role") and v is not None
         }
+        activity_log(current_user.get("username"), f"분석(GPT): {pdf_filename} p.{page_number}")
         return {
             "success": True,
             "page_number": page_number,
@@ -2055,11 +2065,12 @@ async def update_document_form_type(
 @router.delete("/{pdf_filename}")
 async def delete_document(
     pdf_filename: str,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db)
 ):
     """
     문서 삭제
-    
+
     Args:
         pdf_filename: PDF 파일명
         db: 데이터베이스 인스턴스
@@ -2087,7 +2098,8 @@ async def delete_document(
         
         # DB 삭제 후 해당 문서의 분석 완료 이미지(static)도 삭제
         _delete_static_images_for_document(pdf_filename)
-        
+
+        activity_log(current_user.get("username"), f"문서 삭제: {pdf_filename}")
         return {"message": "Document deleted successfully"}
     
     except HTTPException:
@@ -2137,8 +2149,8 @@ def purge_old_documents_impl(db, retention_years: float = 1.0):
 @router.post("/purge-old", response_model=dict)
 async def purge_old_documents(
     retention_years: Optional[float] = 1,
+    current_user: dict = Depends(get_current_user),
     db=Depends(get_db),
-    _: int = Depends(get_current_user_id),
 ):
     """
     보관 기간(retention_years)을 초과한 문서를 DB와 static 이미지에서 삭제합니다.
@@ -2146,7 +2158,9 @@ async def purge_old_documents(
     """
     try:
         years = retention_years if retention_years and retention_years > 0 else RETENTION_YEARS
-        return purge_old_documents_impl(db, years)
+        result = purge_old_documents_impl(db, years)
+        activity_log(current_user.get("username"), f"구 문서 정리: {result.get('deleted_count', 0)}건")
+        return result
     except HTTPException:
         raise
     except Exception as e:
