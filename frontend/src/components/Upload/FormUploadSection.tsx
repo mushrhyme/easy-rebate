@@ -3,6 +3,7 @@
  */
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { documentsApi } from '@/api/client'
 import { useUploadStore } from '@/stores/uploadStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -52,9 +53,17 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
   const setSelectedMonth = isControlled ? (m: number | null) => onYearMonthChange?.(selectedYear, m) : setLocalMonth
   const fileInputRef = useRef<HTMLInputElement>(null)
   const hoverInfoRef = useRef<HTMLDivElement>(null) // 정보 아이콘 컨테이너 참조
+  const queryClient = useQueryClient()
   const { sessionId, updateProgress } = useUploadStore()
 
   const config = UPLOAD_CHANNEL_CONFIGS[uploadChannel]
+
+  /** 업로드/분석 완료 시 검토 탭·업로드 탭 문서 목록 동기화 */
+  const invalidateDocumentLists = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+    queryClient.invalidateQueries({ queryKey: ['documents', 'upload_channel', uploadChannel] })
+    queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
+  }, [queryClient, uploadChannel])
 
   // 파일별 진행 상태 관리 { 파일명: 진행상태 }
   const [fileProgresses, setFileProgresses] = useState<Record<string, FileProgress>>({})
@@ -139,23 +148,26 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
           break
         case 'complete':
           // 파일 처리 완료
-          if (message.file_name) {
-            setFileProgresses((prev) => ({
-              ...prev,
-              [message.file_name!]: {
-                status: 'completed',
-                message: `完了: ${message.pages}ページを${message.elapsed_time?.toFixed(1)}秒で処理しました`,
-              },
-            }))
-          }
-          // 모든 파일이 완료되었는지 확인
-          const allCompleted = Object.values(fileProgresses).every(
-            (p) => p.status === 'completed' || p.status === 'error'
-          )
-          if (allCompleted) {
-            setIsUploading(false)
-            setTaskId(null)
-          }
+          invalidateDocumentLists() // 파일별 완료 시마다 검토·업로드 탭 목록 동기화
+          setFileProgresses((prev) => {
+            const next = message.file_name
+              ? {
+                  ...prev,
+                  [message.file_name!]: {
+                    status: 'completed' as const,
+                    message: `完了: ${message.pages}ページを${message.elapsed_time?.toFixed(1)}秒で処理しました`,
+                  },
+                }
+              : prev
+            const allCompleted =
+              Object.keys(next).length === files.length &&
+              Object.values(next).every((p) => p.status === 'completed' || p.status === 'error')
+            if (allCompleted) {
+              setIsUploading(false)
+              setTaskId(null)
+            }
+            return next
+          })
           break
         case 'error':
           // 파일 처리 오류
@@ -168,6 +180,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
               },
             }))
           }
+          invalidateDocumentLists()
           setIsUploading(false)
           setTaskId(null)
           break
@@ -223,6 +236,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
       localStorage.setItem(`lastSelectedMonth_${uploadChannel}`, selectedMonth.toString())
 
       setTaskId(response.session_id)
+      invalidateDocumentLists() // 검토·업로드 탭 목록 즉시 갱신
 
       // 결과 확인
       const hasNewFiles = response.results.some((r) => r.status === 'pending')

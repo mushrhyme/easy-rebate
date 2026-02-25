@@ -105,17 +105,6 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     queryFn: () => documentsApi.getList(),
   })
 
-  // 벡터DB 등록 문서 목록 (검토 탭에서는 제외)
-  const { data: inVectorData } = useQuery({
-    queryKey: ['documents', 'in-vector-index'],
-    queryFn: () => documentsApi.getInVectorIndex(),
-    refetchInterval: 60000,
-  })
-  const pdfInVectorSet = useMemo(
-    () => new Set((inVectorData?.pdf_filenames ?? []).map((f) => (f ?? '').trim().toLowerCase())),
-    [inVectorData?.pdf_filenames]
-  )
-
   // 검토 상태 통계 조회 (성능 최적화: 10초마다 갱신)
   const { data: reviewStats } = useQuery({
     queryKey: ['review-stats'],
@@ -148,16 +137,11 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     }
   }, [])
 
-  // 정답지 생성 대상・벡터DB 등록 문서는 검토 탭에서 제외
+  // 정답지 생성 대상만 제외 (벡터DB 등록 여부와 무관하게 업로드 탭과 동일한 분석 완료 목록 표시)
   const documentsForReview = useMemo(() => {
     const list = documentsData?.documents ?? []
-    return list.filter((d: Document) => {
-      if (d.is_answer_key_document) return false
-      const key = (d.pdf_filename ?? '').trim().toLowerCase()
-      if (pdfInVectorSet.has(key)) return false
-      return true
-    })
-  }, [documentsData?.documents, pdfInVectorSet])
+    return list.filter((d: Document) => !d.is_answer_key_document)
+  }, [documentsData?.documents])
 
   // 문서 목록에서 선택 가능한 연월 목록 생성 (최신순)
   const availableYearMonths = useMemo(() => {
