@@ -3,7 +3,7 @@
  */
 
 /** 조건금액 컬럼 후보 (양식지별로 単価|条件|対象数量又は金額 중 하나 사용) */
-export const CONDITION_AMOUNT_KEYS = ['単価', '条件', '対象数量又は金額'] as const
+export const CONDITION_AMOUNT_KEYS = ['条件', '対象数量又は金額'] as const
 
 export interface ItemsGridRdgProps {
   pdfFilename: string
