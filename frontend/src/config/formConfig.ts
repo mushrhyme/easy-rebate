@@ -14,7 +14,7 @@ export const UPLOAD_CHANNEL_CONFIGS: Record<UploadChannel, UploadChannelConfig> 
     imagePath: '/images/form_01.png',
   },
   mail: {
-    name: '郵便物',
+    name: 'その他',
     label: 'OCR',
     color: '#a78bfa',
     imagePath: '/images/form_04.png',

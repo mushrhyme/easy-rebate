@@ -74,16 +74,23 @@ client.interceptors.response.use(
     return response
   },
   (error) => {
-    const errorInfo = {
-      url: error.config?.url,
-      method: error.config?.method,
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
-      message: error.message,
-      code: error.code,
+    const status = error.response?.status
+    const url = error.config?.url ?? ''
+    const method = (error.config?.method ?? '').toLowerCase()
+    // 문서 존재 여부 확인용 GET 404는 정상 동작 → 에러 로그 생략
+    const isDocumentCheck404 = status === 404 && method === 'get' && typeof url === 'string' && url.includes('/documents/')
+    if (!isDocumentCheck404) {
+      const errorInfo = {
+        url,
+        method: error.config?.method,
+        status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message,
+        code: error.code,
+      }
+      console.error('❌ [API Response Error]', errorInfo)
     }
-    console.error('❌ [API Response Error]', errorInfo)
 
     // 세션 만료 에러 처리
     const errorDetail = error.response?.data?.detail || error.response?.data?.message || ''

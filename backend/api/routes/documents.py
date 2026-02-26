@@ -20,6 +20,8 @@ from database.registry import get_db
 from database.table_selector import get_table_name, get_table_suffix
 from modules.core.processor import PdfProcessor
 from modules.utils.config import rag_config, get_project_root
+from modules.utils.retail_resolve import resolve_retail_dist
+from backend.unit_price_lookup import resolve_product_and_prices
 from backend.core.session import SessionManager
 
 # 분석 완료 이미지: static/images/{pdf_filename}/ 하위에 저장됨. DB 삭제 시 함께 삭제.
@@ -696,6 +698,9 @@ async def process_pdf_background(
                             WHERE pdf_filename = %s
                         """, (upload_channel, user_id, pdf_filename))
                     conn.commit()
+                    cursor.execute("SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
+                    row = cursor.fetchone()
+                    print(f"[form_type] 업로드 완료 핸들러: form_type 미변경 유지, 현재 DB form_type={repr(row[0]) if row else None}")
             except Exception:
                 pass
             
@@ -1198,175 +1203,6 @@ def _get_answer_pages_from_db(pdf_filename: str):
     return pages
 
 
-def _find_img_relative_path_by_pdf_name(pdf_filename: str) -> Optional[str]:
-    """img 폴더 하위에서 폴더명이 pdf_filename(확장자 제외)과 같은 경로를 찾아 relative_path 반환. 없으면 None."""
-    root = get_project_root()
-    img_dir = root / "img"
-            # 숫자 키 순(0,1,2,...,10,11) — 문자열 정렬 시 0,1,10,11,2 가 되므로 반드시 int 정렬
-    if not img_dir.exists():
-        return None
-            # 인덱스 순서 그대로 새 리스트로 반환 (배열 순서 보장)
-    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
-    for path in img_dir.rglob("*"):
-        if path.is_dir() and path.name == pdf_name:
-            try:
-                rel = path.relative_to(img_dir)
-                return str(rel).replace("\\", "/")
-            except (ValueError, TypeError):
-                pass
-    return None
-
-
-def _get_answer_pages_from_img_by_pdf_filename(pdf_filename: str):
-    """img 폴더에서 pdf_filename과 매칭되는 폴더의 정답지 페이지 목록 반환. 없으면 None."""
-    rel = _find_img_relative_path_by_pdf_name(pdf_filename)
-    if not rel:
-        return None
-    result = _load_answer_json_from_img_folder(rel)
-    if not result or not result.get("pages"):
-        return None
-    return result["pages"]
-
-
-def _load_answer_json_from_img_folder(relative_path: str):
-    """img 폴더 내 relative_path 에서 Page*_answer*.json 읽어 합쳐 반환. items 전부 비면 DB 폴백."""
-    from modules.core.build_faiss_db import load_answer_json
-    import re
-    root = get_project_root()
-    img_dir = root / "img"
-    safe = relative_path.replace("..", "").strip("/\\").replace("\\", "/")
-    folder = (img_dir / safe).resolve()
-    try:
-        folder.relative_to(img_dir.resolve())
-    except (ValueError, TypeError):
-        return None
-    if not folder.is_dir():
-        return None
-    all_files = list(folder.glob("Page*_answer*.json"))
-    files = sorted(all_files, key=lambda f: int(m.group(1)) if (m := re.search(r"Page(\d+)", f.name, re.IGNORECASE)) else 0)
-    pages = []
-    for f in files:
-        m = re.search(r"Page(\d+)", f.name, re.IGNORECASE)
-        page_num = int(m.group(1)) if m else 0
-        data = load_answer_json(f)
-        if data:
-            data = {k: v for k, v in data.items() if v is not None}
-        raw_items = data.get("items")
-        if isinstance(raw_items, dict):
-            data["items"] = [raw_items[k] for k in sorted(raw_items.keys(), key=lambda k: (int(k) if str(k).isdigit() else 0))]
-        elif isinstance(raw_items, list):
-            data["items"] = [raw_items[i] for i in range(len(raw_items))]
-        else:
-            data["items"] = []
-        data["page_number"] = page_num
-        pages.append(data)
-    pages.sort(key=lambda p: p.get("page_number") or 0)
-    pdf_name = folder.name
-    pdf_filename = f"{pdf_name}.pdf"
-    form_type = folder.parent.name if folder.parent != img_dir and folder.parent.name.isdigit() else None
-    if not form_type and folder.parent != img_dir:
-        form_type = folder.parent.name
-
-    # img에서 items가 전부 빈 객체면 DB에서 같은 문서로 채우기 (sync 후 DB에만 있는 경우 대비)
-    need_db_fallback = any(
-        (p.get("items") and len(p["items"]) > 0 and all(isinstance(it, dict) and len(it) == 0 for it in p["items"]))
-        for p in pages
-    )
-    if need_db_fallback:
-        db_pages = _get_answer_pages_from_db(pdf_filename)
-        if db_pages:
-            by_page = {p.get("page_number"): p for p in db_pages}
-            for p in pages:
-                pn = p.get("page_number")
-                db_page = by_page.get(pn)
-                if db_page and db_page.get("items") and any(len(it) > 0 for it in db_page["items"] if isinstance(it, dict)):
-                    p["items"] = db_page["items"]
-
-    return {
-        "pdf_filename": pdf_filename,
-        "form_type": form_type,
-        "total_pages": len(pages),
-        "pages": pages,
-    }
-
-
-@router.get("/answer-json-from-img")
-async def get_answer_json_from_img(relative_path: str):
-    """img 폴더 내 정답지 폴더(relative_path)의 Page*_answer.json 전체 반환."""
-    if not relative_path or ".." in relative_path:
-        raise HTTPException(status_code=400, detail="Invalid relative_path")
-    result = _load_answer_json_from_img_folder(relative_path)
-    if result is None:
-        raise HTTPException(status_code=404, detail="Folder not found or no answer files")
-    return result
-
-
-class SaveAnswerJsonFromImgRequest(BaseModel):
-    """img 폴더의 Page*_answer.json에 편집 내용을 그대로 쓸 때 (DB 미사용)."""
-    relative_path: str
-    pages: List[dict]  # [ { page_number, page_role?, page_meta?, items }, ... ]
-
-
-@router.put("/answer-json-from-img")
-async def save_answer_json_from_img(body: SaveAnswerJsonFromImgRequest):
-    """
-    정답지 탭에서 편집한 내용을 img 폴더의 JSON 파일에만 반영 (DB는 건드리지 않음).
-    RAG 문서는 여기서 읽어오므로, 여기 저장해야 null로 덮어쓰이지 않음.
-        # 1, 2, 3, ... 10, 11 순서 보장 (문자열 정렬 방지)
-    """
-    if not body.relative_path or ".." in body.relative_path:
-        raise HTTPException(status_code=400, detail="Invalid relative_path")
-    root = get_project_root()
-    img_dir = root / "img"
-    safe = body.relative_path.replace("..", "").strip("/\\").replace("\\", "/")
-    folder = (img_dir / safe).resolve()
-    try:
-        folder.relative_to(img_dir.resolve())
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid relative_path")
-    if not folder.is_dir():
-        raise HTTPException(status_code=404, detail="Folder not found")
-    pages = body.pages if isinstance(body.pages, list) else []
-    for page_obj in pages:
-        page_number = page_obj.get("page_number")
-        if page_number is None:
-            continue
-        page_number = int(page_number)
-        page_role = (page_obj.get("page_role") or "detail").strip() or "detail"
-        page_meta = page_obj.get("page_meta") if isinstance(page_obj.get("page_meta"), dict) else {}
-        items = page_obj.get("items") if isinstance(page_obj.get("items"), list) else []
-        out = {"page_role": page_role, **page_meta, "items": items}
-        path = folder / f"Page{page_number}_answer.json"
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
-    return {"success": True, "message": "JSON files updated", "pages_count": len(pages)}
-
-
-@router.get("/img-page-image")
-async def get_img_page_image(relative_path: str, page_number: int = 1):
-    """img 폴더 내 정답지 폴더의 Page{N}.png 이미지 서빙 (참조 뷰용)."""
-    if not relative_path or ".." in relative_path or page_number < 1:
-        raise HTTPException(status_code=400, detail="Invalid parameters")
-    root = get_project_root()
-    # get_page_results: page_data가 있는 페이지만 반환. 빈 페이지는 page_number 기준으로 채움.
-    img_dir = root / "img"
-    safe = relative_path.replace("..", "").strip("/\\").replace("\\", "/")
-    # answer.json 스타일: items는 item_data만 포함한 리스트
-    folder = (img_dir / safe).resolve()
-    try:
-        folder.relative_to(img_dir.resolve())
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=404, detail="Not found")
-    if not folder.is_dir():
-        raise HTTPException(status_code=404, detail="Not found")
-    for ext in ("png", "jpg", "jpeg"):
-        path = folder / f"Page{page_number}.{ext}"
-        if path.is_file():
-    # 페이지 번호 순 정렬
-            return FileResponse(path, media_type=f"image/{ext}" if ext != "jpg" else "image/jpeg")
-    raise HTTPException(status_code=404, detail="Image not found")
-
-
 @router.get("/{pdf_filename}/answer-json")
 async def get_document_answer_json(
     pdf_filename: str,
@@ -1454,9 +1290,26 @@ async def save_document_answer_json(
                     "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
                     (pdf_filename, page_number),
                 )
+                _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
                 for item_order, item_dict in enumerate(items, 1):
                     if not isinstance(item_dict, dict):
                         continue
+                    retail_code, dist_code = resolve_retail_dist(
+                        item_dict.get("得意先"), item_dict.get("得意先CD")
+                    )
+                    if retail_code:
+                        item_dict["小売先CD"] = retail_code
+                    if dist_code:
+                        item_dict["受注先CD"] = dist_code
+                    product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+                    if product_result:
+                        code, shikiri, honbu = product_result
+                        if code:
+                            item_dict["商品CD"] = code
+                        if shikiri is not None:
+                            item_dict["仕切"] = shikiri
+                        if honbu is not None:
+                            item_dict["本部長"] = honbu
                     separated = db._separate_item_fields(item_dict, form_type=form_type)
                     item_data = separated.get("item_data") or {}
                     if first_item_keys is None and item_data:
@@ -2013,9 +1866,26 @@ Use the same key names as the template. Fill values from the document for each r
             )
             row = cursor.fetchone()
             form_type = row[0] if row and row[0] else None
+            _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
             for item_order, item_dict in enumerate(items, 1):
                 if not isinstance(item_dict, dict):
                     continue
+                retail_code, dist_code = resolve_retail_dist(
+                    item_dict.get("得意先"), item_dict.get("得意先CD")
+                )
+                if retail_code:
+                    item_dict["小売先CD"] = retail_code
+                if dist_code:
+                    item_dict["受注先CD"] = dist_code
+                product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+                if product_result:
+                    code, shikiri, honbu = product_result
+                    if code:
+                        item_dict["商品CD"] = code
+                    if shikiri is not None:
+                        item_dict["仕切"] = shikiri
+                    if honbu is not None:
+                        item_dict["本部長"] = honbu
                 separated = db._separate_item_fields(item_dict, form_type=form_type)
                 item_data = separated.get("item_data") or {}
                 cursor.execute("""
@@ -2100,9 +1970,26 @@ async def create_items_from_answer(
             )
             row = cursor.fetchone()
             form_type = row[0] if row and row[0] else None
+            _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
             for item_order, item_dict in enumerate(items, 1):
                 if not isinstance(item_dict, dict):
                     continue
+                retail_code, dist_code = resolve_retail_dist(
+                    item_dict.get("得意先"), item_dict.get("得意先CD")
+                )
+                if retail_code:
+                    item_dict["小売先CD"] = retail_code
+                if dist_code:
+                    item_dict["受注先CD"] = dist_code
+                product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+                if product_result:
+                    code, shikiri, honbu = product_result
+                    if code:
+                        item_dict["商品CD"] = code
+                    if shikiri is not None:
+                        item_dict["仕切"] = shikiri
+                    if honbu is not None:
+                        item_dict["本部長"] = honbu
                 separated = db._separate_item_fields(item_dict, form_type=form_type)
                 item_data = separated.get("item_data") or {}
                 customer = separated.get("customer")
@@ -2201,18 +2088,28 @@ async def delete_document(
                 WHERE pdf_filename = %s
             """, (pdf_filename,))
             deleted_count = cursor.rowcount
-            
+
             cursor.execute("""
                 DELETE FROM documents_archive 
                 WHERE pdf_filename = %s
             """, (pdf_filename,))
             deleted_count += cursor.rowcount
-            
+
             if deleted_count == 0:
                 raise HTTPException(status_code=404, detail="Document not found")
-            
+
+            # 해당 문서의 정답지 페이지를 미사용으로 전환 (merged → deleted, 대시보드 unused_pages 반영)
+            try:
+                cursor.execute("""
+                    UPDATE rag_learning_status_current
+                    SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+                    WHERE pdf_filename = %s
+                """, (pdf_filename,))
+            except Exception:
+                # 테이블/컬럼 없음 등은 무시 (문서 삭제는 계속 진행)
+                pass
+
             conn.commit()
-        
         # DB 삭제 후 해당 문서의 분석 완료 이미지(static)도 삭제
         _delete_static_images_for_document(pdf_filename)
 

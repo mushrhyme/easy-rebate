@@ -15,6 +15,7 @@ from database.registry import get_db
 from database.db_manager import _similarity_difflib
 from backend.core.auth import get_current_user_optional, get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
+from modules.core.rag_manager import get_rag_manager
 
 router = APIRouter()
 
@@ -26,16 +27,17 @@ _DIST_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
 _DOMAE_RETAIL_1_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_1.csv"
 _DOMAE_RETAIL_2_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_2.csv"
 _SAP_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "sap_retail.csv"
+_SAP_PRODUCT_CSV = _PROJECT_ROOT / "database" / "csv" / "sap_product.csv"
 
 
 # ----- sap_retail 검색 (정적 경로를 맨 위에 등록해 404 방지) -----
 @router.get("/retail/candidates-by-sap-retail")
 async def get_retail_candidates_by_sap_retail(
-    query: str = Query("", description="検索語（대표슈퍼명・판매처명 등)"),
+    query: str = Query("", description="検索語（소매처명・판매처명 등)"),
     top_k: int = Query(10, ge=1, le=30, description="반환 건수"),
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
 ):
-    """sap_retail.csv에서 대표슈퍼명·판매처명 유사도 검색. 매핑 폴백용."""
+    """sap_retail.csv에서 소매처명·판매처명 유사도 검색. 매핑 폴백용."""
     query = (query or "").strip()
     csv_path = _SAP_RETAIL_CSV
     print(f"[sap_retail] query={query!r} (len={len(query)}), path={csv_path}, exists={csv_path.exists()}")
@@ -44,18 +46,28 @@ async def get_retail_candidates_by_sap_retail(
     if not csv_path.exists():
         return {"query": query, "matches": [], "skipped_reason": "sap_retail.csv not found"}
     try:
-        df = pd.read_csv(csv_path, dtype=str, encoding="utf-8")
+        df = pd.read_csv(csv_path, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
         scored = []
+        q_upper = query.upper()
         for _, r in df.iterrows():
-            retail_name = (r.get("대표슈퍼명") or "").strip()
+            retail_name = (r.get("소매처명") or "").strip()
             dist_name = (r.get("판매처명") or "").strip()
-            retail_code = (r.get("대표슈퍼코드") or "").strip()
+            retail_code = (r.get("소매처코드") or "").strip()
             dist_code = (r.get("판매처코드") or "").strip()
             if not retail_code:
                 continue
             s1 = _similarity_difflib(query, retail_name)
             s2 = _similarity_difflib(query, dist_name) if dist_name else 0.0
-            score = max(s1, s2)
+            # 부분 일치: 검색어가 이름에 포함되면 높은 점수 (짧은 검색어도 나오도록)
+            part = 0.0
+            if query in retail_name or query in dist_name:
+                part = 0.95
+            elif q_upper in (retail_name.upper() if retail_name else ""):
+                part = 0.9
+            elif q_upper in (dist_name.upper() if dist_name else ""):
+                part = 0.9
+            score = max(s1, s2, part)
             if score >= min_similarity:
                 scored.append((score, retail_code, retail_name, dist_code, dist_name))
         scored.sort(key=lambda x: -x[0])
@@ -76,25 +88,26 @@ async def get_retail_candidates_by_sap_retail(
 
 @router.get("/retail/sap-row-by-retail-code")
 async def get_sap_row_by_retail_code(
-    retail_code: str = Query(..., description="대표슈퍼코드(小売先CD)"),
+    retail_code: str = Query(..., description="소매처코드(小売先CD)"),
 ):
-    """sap_retail에서 대표슈퍼코드로 첫 행 조회. SAP受注先・SAP小売先 표시용."""
+    """sap_retail에서 소매처코드로 첫 행 조회. SAP受注先・SAP小売先 표시용."""
     code = (retail_code or "").strip()
     if not code:
         return {"retail_code": "", "row": None}
     if not _SAP_RETAIL_CSV.exists():
         return {"retail_code": code, "row": None, "skipped_reason": "sap_retail.csv not found"}
     try:
-        df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str, encoding="utf-8")
-        rows = df[df["대표슈퍼코드"].astype(str).str.strip() == code]
+        df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
+        rows = df[df["소매처코드"].astype(str).str.strip() == code]
         if rows.empty:
             return {"retail_code": code, "row": None}
         r = rows.iloc[0]
         return {
             "retail_code": code,
             "row": {
-                "소매처코드": (r.get("대표슈퍼코드") or "").strip(),
-                "소매처명": (r.get("대표슈퍼명") or "").strip(),
+                "소매처코드": (r.get("소매처코드") or "").strip(),
+                "소매처명": (r.get("소매처명") or "").strip(),
                 "판매처코드": (r.get("판매처코드") or "").strip(),
                 "판매처명": (r.get("판매처명") or "").strip(),
             },
@@ -248,7 +261,7 @@ async def get_my_supers(current_user=Depends(get_current_user)):
 @router.get("/all-super-names")
 async def get_all_super_names_route(current_user=Depends(get_current_user)):
     """
-    retail_user.csv 대표슈퍼명 전체(중복 제거). 거래처↔담당 유사도 매핑 시 notepad와 동일하게 전체 풀에서 최적 매칭용.
+    retail_user.csv 소매처명 전체(중복 제거). 거래처↔담당 유사도 매핑 시 notepad와 동일하게 전체 풀에서 최적 매칭용.
     """
     from modules.utils.retail_user_utils import get_all_super_names
     return {"super_names": get_all_super_names()}
@@ -340,13 +353,12 @@ async def post_customer_similarity_mapping(
 @router.get("/unit-price-by-product")
 async def get_unit_price_by_product(
     product_name: str = Query(..., description="商品名（제품명）"),
-    top_k: int = Query(10, ge=1, le=50, description="반환 건수"),
-    min_similarity: float = Query(0.2, ge=0.0, le=1.0, description="제품명 최소 유사도"),
-    sub_min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="제품용량 최소 유사도"),
+    top_k: int = Query(5, ge=1, le=50, description="반환 건수（평균 유사도 순 상위）"),
+    min_similarity: float = Query(0.2, ge=0.0, le=1.0, description="미사용（호환용）"),
+    sub_min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="미사용（호환용）"),
 ):
     """
-    제품명(商品名)을 입력받아 용량을 분리하고, unit_price.csv에서 제품명·용량 유사도로
-    매칭된 시키리/본부장 단가 목록을 반환. 검토 탭에서 그리드 추가용.
+    제품명·용량 유사도를 각각 계산해 평균으로 정렬한 상위 top_k 반환. min_similarity 필터 없음.
     """
     if not _UNIT_PRICE_CSV.exists():
         raise HTTPException(status_code=503, detail="unit_price.csv not found")
@@ -388,14 +400,89 @@ async def get_unit_price_by_product(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/product/candidates-by-sap-product")
+async def get_product_candidates_by_sap_product(
+    query: str = Query("", description="検索語（제품명으로 검색）"),
+    top_k: int = Query(10, ge=1, le=30, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+):
+    """
+    sap_product.csv에서 제품명으로만 유사도 검색. 단가 탭 최종후보 검색 → 제품코드만 반환.
+    반환: [{ 제품코드, 제품명 }, ...] （仕切・本部長는 unit_price에서 商品コード로 별도 조회）
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"query": "", "matches": []}
+    if not _SAP_PRODUCT_CSV.exists():
+        return {"query": q, "matches": [], "skipped_reason": "sap_product.csv not found"}
+    try:
+        df_sap = pd.read_csv(_SAP_PRODUCT_CSV, dtype=str, encoding="utf-8-sig")
+        df_sap.columns = [c.strip().lstrip("\ufeff") for c in df_sap.columns]
+        scored = []
+        for _, r in df_sap.iterrows():
+            name = (r.get("제품명") or "").strip()
+            sap_name = (r.get("SAP제품명") or "").strip()
+            code = (r.get("제품코드") or "").strip()
+            if not code:
+                continue
+            s1 = _similarity_difflib(q, name) if name else 0.0
+            s2 = _similarity_difflib(q, sap_name) if sap_name else 0.0
+            score = max(s1, s2)
+            if score >= min_similarity:
+                scored.append((score, code, name or sap_name))
+        scored.sort(key=lambda x: -x[0])
+        rows = scored[:top_k]
+        matches = [{"제품코드": code, "제품명": name or ""} for _, code, name in rows]
+        return {"query": q, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/unit-price-by-product-code")
+async def get_unit_price_by_product_code(
+    product_code: str = Query(..., description="商品コード（제품코드）"),
+):
+    """
+    unit_price.csv에서 商品コード로 1건 조회. 仕切・本部長 자동완성용.
+    반환: { 商品コード, 仕切, 本部長 } or null
+    """
+    code = (product_code or "").strip()
+    if not code:
+        return {"row": None}
+    if not _UNIT_PRICE_CSV.exists():
+        return {"row": None}
+    try:
+        df = pd.read_csv(_UNIT_PRICE_CSV, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
+        for _, r in df.iterrows():
+            c = (r.get("제품코드") or "").strip()
+            if c != code:
+                continue
+            try:
+                시키리 = float(r.get("시키리") or 0) if pd.notna(r.get("시키리")) else None
+                본부장 = float(r.get("본부장") or 0) if pd.notna(r.get("본부장")) else None
+            except (TypeError, ValueError):
+                시키리, 본부장 = None, None
+            return {
+                "row": {
+                    "商品コード": code,
+                    "仕切": 시키리,
+                    "本部長": 본부장,
+                },
+            }
+        return {"row": None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/retail-candidates-by-customer")
 async def get_retail_candidates_by_customer(
     customer_name: str = Query(..., description="거래처명(得意先 등)"),
     top_k: int = Query(20, ge=1, le=100, description="반환 건수"),
-    min_similarity: float = Query(0.5, ge=0.0, le=1.0, description="대표슈퍼명 최소 유사도"),
+    min_similarity: float = Query(0.5, ge=0.0, le=1.0, description="소매처명 최소 유사도"),
 ):
     """
-    거래처명으로 retail_user.csv 대표슈퍼명과 유사도 매칭 후보 반환.
+    거래처명으로 retail_user.csv 소매처명과 유사도 매칭 후보 반환.
     컬럼: 소매처코드, 소매처명, 판매처코드, 판매처명 (판매처는 dist_retail.csv).
     """
     if not _RETAIL_USER_CSV.exists():
@@ -405,25 +492,25 @@ async def get_retail_candidates_by_customer(
         return {"customer_name_input": "", "matches": []}
     try:
         df_retail = pd.read_csv(_RETAIL_USER_CSV, dtype=str)
-        # (대표슈퍼명, 대표슈퍼코드) 유사도 계산 → 상위 top_k, min_similarity 이상
+        # (소매처명, 소매처코드) 유사도 계산 → 상위 top_k, min_similarity 이상
         scored = []
         for _, r in df_retail.iterrows():
-            name = (r.get("대표슈퍼명") or "").strip()
-            code = (r.get("대표슈퍼코드") or "").strip()
+            name = (r.get("소매처명") or "").strip()
+            code = (r.get("소매처코드") or "").strip()
             if not name or not code:
                 continue
             score = _similarity_difflib(customer_name, name)
             if score >= min_similarity:
                 scored.append((score, name, code))
         scored.sort(key=lambda x: -x[0])
-        retail_tuples = scored[:top_k]  # (score, 대표슈퍼명, 대표슈퍼코드)
+        retail_tuples = scored[:top_k]  # (score, 소매처명, 소매처코드)
 
-        # dist_retail: 대표슈퍼코드 → [(판매처코드, 판매처명), ...] (첫 행만 또는 전부)
+        # dist_retail: 소매처코드 → [(판매처코드, 판매처명), ...] (첫 행만 또는 전부)
         dist_by_retail = {}
         if _DIST_RETAIL_CSV.exists():
             df_dist = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
             for _, r in df_dist.iterrows():
-                retail_code = (r.get("대표슈퍼코드") or "").strip()
+                retail_code = (r.get("소매처코드") or "").strip()
                 dist_code = (r.get("판매처코드") or "").strip()
                 dist_name = (r.get("판매처명") or "").strip()
                 if not retail_code:
@@ -449,14 +536,14 @@ async def get_retail_candidates_by_customer(
 
 
 def _dist_by_retail_first() -> dict:
-    """대표슈퍼코드 → (판매처코드, 판매처명) 첫 행만. dist_retail 기준."""
+    """소매처코드 → (판매처코드, 판매처명) 첫 행만. dist_retail 기준."""
     out = {}
     if not _DIST_RETAIL_CSV.exists():
         return out
     try:
         df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
         for _, r in df.iterrows():
-            retail = (r.get("대표슈퍼코드") or "").strip()
+            retail = (r.get("소매처코드") or "").strip()
             dist_c = (r.get("판매처코드") or "").strip()
             dist_n = (r.get("판매처명") or "").strip()
             if retail and retail not in out:
@@ -467,14 +554,14 @@ def _dist_by_retail_first() -> dict:
 
 
 def _sap_dist_by_retail_first() -> dict:
-    """대표슈퍼코드 → (판매처코드, 판매처명) 첫 행만. sap_retail 기준 (대표슈퍼코드=슈퍼코드)."""
+    """소매처코드 → (판매처코드, 판매처명) 첫 행만. sap_retail 기준."""
     out = {}
     if not _SAP_RETAIL_CSV.exists():
         return out
     try:
         df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str)
         for _, r in df.iterrows():
-            retail = (r.get("대표슈퍼코드") or "").strip()
+            retail = (r.get("소매처코드") or "").strip()
             dist_c = (r.get("판매처코드") or "").strip()
             dist_n = (r.get("판매처명") or "").strip()
             if retail and retail not in out:
@@ -485,7 +572,7 @@ def _sap_dist_by_retail_first() -> dict:
 
 
 def _dist_for_retail(retail_code: str) -> tuple:
-    """매핑한 소매처코드(대표슈퍼코드)로 판매처코드/판매처명 반환. sap_retail 우선, 없으면 dist_retail."""
+    """매핑한 소매처코드로 판매처코드/판매처명 반환. sap_retail 우선, 없으면 dist_retail."""
     code = (retail_code or "").strip()
     if not code:
         return ("", "")
@@ -497,10 +584,10 @@ def _dist_for_retail(retail_code: str) -> tuple:
 
 @router.get("/retail/by-customer-code")
 async def get_retail_by_customer_code(
-    customer_code: str = Query(..., description="得意先CD(소매처코드)"),
+    customer_code: str = Query(..., description="得意先CD(도매소매처코드)"),
 ):
     """
-    得意先CD로 domae_retail_1에서 소매처코드 일치 행의 대표슈퍼코드 1건 반환.
+    得意先CD(도매소매처코드)로 domae_retail_1 조회 → 해당 행의 소매처코드/소매처명 1건 반환.
     판매처코드/판매처명은 dist_retail에서 조회해 함께 반환.
     """
     customer_code = (customer_code or "").strip()
@@ -510,16 +597,19 @@ async def get_retail_by_customer_code(
         return {"customer_code_input": customer_code, "match": None, "skipped_reason": "domae_retail_1.csv not found"}
     try:
         df = pd.read_csv(_DOMAE_RETAIL_1_CSV, dtype=str)
-        row = df[df["소매처코드"].astype(str).str.strip() == customer_code]
+        # 得意先CD = domae_retail_1의 도매소매처코드(1열). 소매처코드(2열)로 착각하면 안 됨
+        row = df[df["도매소매처코드"].astype(str).str.strip() == customer_code]
         if row.empty:
             return {"customer_code_input": customer_code, "match": None, "skipped_reason": None}
         r = row.iloc[0]
-        retail_code = (r.get("대표슈퍼코드") or "").strip()
-        retail_name = (r.get("대표슈퍼명") or "").strip()
+        retail_code = (r.get("소매처코드") or "").strip()
+        retail_name = (r.get("소매처명") or "").strip()
         dist_c, dist_n = _dist_for_retail(retail_code)
         return {
             "customer_code_input": customer_code,
             "match": {
+                "도매소매처코드": customer_code,
+                "도매소매처명": "",  # domae_retail_1에는 도매소매처명 컬럼 없음
                 "소매처코드": retail_code,
                 "소매처명": retail_name,
                 "판매처코드": dist_c,
@@ -539,7 +629,7 @@ async def get_retail_candidates_by_shop_name(
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="소매처명 최소 유사도"),
 ):
     """
-    거래처명으로 domae_retail_2의 소매처명과 유사도 매칭 후보 반환 (대표슈퍼코드 + dist_retail 판매처).
+    거래처명으로 domae_retail_2의 소매처명과 유사도 매칭 후보 반환 (소매처코드 + dist_retail 판매처).
     """
     customer_name = (customer_name or "").strip()
     if not customer_name:
@@ -547,28 +637,116 @@ async def get_retail_candidates_by_shop_name(
     if not _DOMAE_RETAIL_2_CSV.exists():
         return {"customer_name_input": customer_name, "matches": [], "skipped_reason": "domae_retail_2.csv not found"}
     try:
-        df = pd.read_csv(_DOMAE_RETAIL_2_CSV, dtype=str)
+        df = pd.read_csv(_DOMAE_RETAIL_2_CSV, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
+        cols = list(df.columns)
         scored = []
         for _, r in df.iterrows():
+            # domae_retail_2 1열 = 도매소매처명. 인덱스로 읽어 컬럼명/인코딩 이슈 회피
+            domae_name = (str(r.iloc[0]) if len(cols) > 0 else "") or ""
+            domae_name = (domae_name or "").strip()
             name = (r.get("소매처명") or "").strip()
-            code = (r.get("대표슈퍼코드") or "").strip()
-            retail_name = (r.get("대표슈퍼명") or "").strip()
+            code = (r.get("소매처코드") or "").strip()
+            retail_name = (r.get("소매처명") or "").strip()
+            # 일부 행만 2열/3열 값이 반대로 들어간 경우: 코드 컬럼에 이름, 이름 컬럼에 코드 → 표시 시 보정
+            if code and retail_name:
+                code_like = retail_name.isdigit() and len(retail_name) >= 4
+                name_like = not code.isdigit() or "■" in code
+                if name_like and code_like:
+                    code, retail_name = retail_name, code
             if not name or not code:
                 continue
             score = _similarity_difflib(customer_name, name)
             if score >= min_similarity:
-                scored.append((score, name, code, retail_name))
+                scored.append((score, name, code, retail_name, domae_name))
         scored.sort(key=lambda x: -x[0])
         top = scored[:top_k]
         matches = []
-        for score, shop_name, retail_code, retail_name in top:
-            dist_c, dist_n = _dist_for_retail(retail_code)
+        for score, shop_name, retail_code, retail_name, domae_name in top:
+            dist_c, dist_n = _dist_for_retail(retail_code)  # 보정된 코드로 판매처 조회
             matches.append({
+                "도매소매처코드": "",  # domae_retail_2에는 도매소매처코드 컬럼 없음
+                "도매소매처명": domae_name,
                 "소매처코드": retail_code,
                 "소매처명": retail_name,
                 "판매처코드": dist_c,
                 "판매처명": dist_n,
                 "similarity": round(score, 4),
+            })
+        return {"customer_name_input": customer_name, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _retail_code_to_names() -> dict:
+    """소매처코드 → (소매처명, 판매처코드, 판매처명). dist_retail 우선, 없으면 retail_user로 소매처명만."""
+    out = {}
+    if _DIST_RETAIL_CSV.exists():
+        try:
+            df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
+            for _, r in df.iterrows():
+                rc = (r.get("소매처코드") or "").strip()
+                rn = (r.get("소매처명") or "").strip()
+                dc = (r.get("판매처코드") or "").strip()
+                dn = (r.get("판매처명") or "").strip()
+                if rc and rc not in out:
+                    out[rc] = (rn, dc, dn)
+        except Exception:
+            pass
+    if _RETAIL_USER_CSV.exists():
+        try:
+            df = pd.read_csv(_RETAIL_USER_CSV, dtype=str)
+            for _, r in df.iterrows():
+                rc = (r.get("소매처코드") or "").strip()
+                rn = (r.get("소매처명") or "").strip()
+                if rc and rc not in out:
+                    out[rc] = (rn, "", "")
+                elif rc:
+                    prev = out[rc]
+                    if not prev[0] and rn:
+                        out[rc] = (rn, prev[1], prev[2])
+        except Exception:
+            pass
+    return out
+
+
+@router.get("/retail/candidates-by-rag-answer")
+async def get_retail_candidates_by_rag_answer(
+    customer_name: str = Query(..., description="거래처명(得意先)"),
+    top_k: int = Query(5, ge=1, le=20, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+):
+    """
+    得意先으로 판매처-소매처 RAG 정답지 벡터 인덱스 검색.
+    반환: RetailMatch 형식(得意先, 소매처코드, 소매처명, 판매처코드, 판매처명, similarity).
+    """
+    customer_name = (customer_name or "").strip()
+    if not customer_name:
+        return {"customer_name_input": "", "matches": []}
+    try:
+        rag = get_rag_manager()
+        raw = rag.search_retail_rag_answer(customer_name, top_k=top_k, min_similarity=min_similarity)
+        if not raw:
+            return {"customer_name_input": customer_name, "matches": [], "skipped_reason": "RAG 정답지 인덱스가 비어있거나 검색 결과 없음"}
+        code_to_names = _retail_code_to_names()
+        matches = []
+        for r in raw:
+            retail_code = (r.get("小売先CD") or "").strip()
+            dist_c = (r.get("受注先CD") or "").strip()
+            retail_n, dist_c_lookup, dist_n = code_to_names.get(retail_code, ("", "", ""))
+            if not dist_c and dist_c_lookup:
+                dist_c = dist_c_lookup
+            if not dist_n and dist_c:
+                dist_n = _dist_for_retail(retail_code)[1] or dist_n
+            matches.append({
+                "得意先": r.get("得意先", ""),
+                "도매소매처코드": "",
+                "도매소매처명": r.get("得意先", ""),
+                "소매처코드": retail_code,
+                "소매처명": retail_n or retail_code,
+                "판매처코드": dist_c,
+                "판매처명": dist_n or dist_c,
+                "similarity": r.get("similarity", 0.0),
             })
         return {"customer_name_input": customer_name, "matches": matches}
     except Exception as e:
@@ -656,12 +834,9 @@ async def get_page_ocr_text(
     db=Depends(get_db)
 ):
     """
-    페이지 OCR 텍스트 조회 (정답지 생성 탭에서 이미지 아래 표시용)
-
-    1) debug2/{pdf_name}/page_{N}_ocr_text.txt (RAG 파싱 시 저장된 파일)
-    2) 저장된 페이지 이미지로 Azure OCR(표 복원)
-    3) PDF 세션 경로에서 Azure(표 복원) 또는 PyMuPDF 추출
-    4) result/ 페이지 JSON의 text 필드 시도
+    페이지 OCR 텍스트 조회 (정답지 생성 탭 전용).
+    해답 생성 브릿지로 넘어온 문서는 이미 RAG 파싱으로 debug2가 있으므로,
+    외부 API(Azure) 호출 없이 DB 저장분 → debug2만 사용.
     """
     try:
         pdf_name = pdf_filename
@@ -670,66 +845,30 @@ async def get_page_ocr_text(
 
         ocr_text = ""
 
-        # 1) debug2/{pdf_name}/page_{N}_ocr_text.txt (RAG 파싱 시 저장된 OCR 텍스트)
+        # 0) DB에 저장된 OCR (이전 저장 시 화면에서 보낸 값)
         try:
-            from pathlib import Path
-            from modules.utils.config import get_project_root
-
-            root = get_project_root()
-            debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
-            if debug2_file.exists():
-                ocr_text = debug2_file.read_text(encoding="utf-8").strip()
+            with db.get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT page_meta FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
+                    (pdf_filename, page_number),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if isinstance(row[0], str) else None)
+                    if isinstance(meta, dict) and meta.get("_ocr_text"):
+                        ocr_text = (meta["_ocr_text"] or "").strip()
         except Exception:
             pass
 
-        # 2) 저장된 페이지 이미지로 Azure OCR(표 복원)
+        # 1) debug2 (RAG 파싱 시 저장된 파일) — 외부 API 호출 없음
         if not ocr_text.strip():
             try:
-                image_path = db.get_page_image_path(pdf_filename, page_number)
-                if image_path:
-                    from pathlib import Path
-                    from modules.utils.config import get_project_root
-                    from modules.core.extractors.azure_extractor import get_azure_extractor
-                    from modules.utils.table_ocr_utils import raw_to_full_text
-
-                    root = get_project_root()
-                    full_path = Path(image_path) if Path(image_path).is_absolute() else root / image_path
-                    if full_path.exists():
-                        extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
-                        raw = await asyncio.to_thread(
-                            extractor.extract_from_image_raw, image_path=full_path
-                        )
-                        if raw:
-                            ocr_text = raw_to_full_text(raw)  # 표시용: 인식한 전체 문자열
-            except Exception:
-                pass
-
-        # 3) PDF 파일에서 Azure(표 복원) 또는 PyMuPDF 추출
-        if not ocr_text.strip():
-            try:
-                from pathlib import Path
-                from modules.utils.pdf_utils import find_pdf_path, PdfTextExtractor
-
-                pdf_path_str = find_pdf_path(pdf_name)
-                if pdf_path_str:
-                    def _extract_pdf_text():
-                        ext = PdfTextExtractor(upload_channel="mail")
-                        try:
-                            return ext.extract_text(Path(pdf_path_str), page_number) or ""
-                        finally:
-                            ext.close_all()
-
-                    ocr_text = await asyncio.to_thread(_extract_pdf_text)
-            except Exception:
-                pass
-
-        # 4) result/ 페이지 JSON의 text 필드 시도
-        if not ocr_text.strip():
-            try:
-                from modules.core.storage import PageStorage
-                page_data = PageStorage.load_page(pdf_name, page_number)
-                if page_data and isinstance(page_data.get("text"), str):
-                    ocr_text = page_data["text"]
+                from modules.utils.config import get_project_root
+                root = get_project_root()
+                debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
+                if debug2_file.exists():
+                    ocr_text = debug2_file.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
 

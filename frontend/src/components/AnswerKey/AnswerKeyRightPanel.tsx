@@ -1,16 +1,15 @@
 /**
- * 정답지 탭 — 우측: キー・値 / テンプレート / JSON 탭 및 저장 버튼
+ * 정답지 탭 — 우측: キー・値 / テンプレート 탭 및 저장 버튼
  */
 import { KEY_LABELS } from './answerKeyTabConstants'
 
 /** 우측 패널에 필요한 상태·핸들러 (AnswerKeyTab에서 한 번에 전달) */
 export interface AnswerKeyRightPanelCtx {
-  rightView: 'kv' | 'json' | 'template'
-  setRightView: (v: 'kv' | 'json' | 'template') => void
+  rightView: 'kv' | 'template'
+  setRightView: (v: 'kv' | 'template') => void
   firstRowToTemplateEntries: (row: unknown) => Array<{ id: string; key: string; value: string }>
   currentPageRows: Array<Record<string, unknown>>
   setTemplateEntries: React.Dispatch<React.SetStateAction<Array<{ id: string; key: string; value: string }>>>
-  syncJsonEditFromAnswer: () => void
   dirtyIds: Set<number>
   pageMetaDirtyPages: Set<number>
   answerProvider: string
@@ -19,9 +18,6 @@ export interface AnswerKeyRightPanelCtx {
   selectedDoc: { pdf_filename: string; total_pages: number } | null
   rows: Array<Record<string, unknown>>
   itemDataKeys: string[]
-  jsonEditText: string
-  setJsonEditText: (v: string) => void
-  applyJsonEdit: () => void
   allDataLoaded: boolean
   templateEntries: Array<{ id: string; key: string; value: string }>
   updateTemplateEntry: (id: string, field: 'key' | 'value', value: string) => void
@@ -77,7 +73,6 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
     setRightView,
     firstRowToTemplateEntries,
     currentPageRows,
-    syncJsonEditFromAnswer,
     dirtyIds,
     pageMetaDirtyPages,
     answerProvider,
@@ -86,9 +81,6 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
     selectedDoc,
     rows,
     itemDataKeys,
-    jsonEditText,
-    setJsonEditText,
-    applyJsonEdit,
     allDataLoaded,
     templateEntries,
     setTemplateEntries,
@@ -141,6 +133,7 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
   return (
     <div className="answer-key-right">
       <div
+        className="answer-key-right-body"
         style={
           readOnly
             ? { pointerEvents: 'none' as const, opacity: 0.85, userSelect: 'none' as const }
@@ -164,16 +157,6 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
           }}
         >
           テンプレート（先頭行）
-        </button>
-        <button
-          type="button"
-          className={`answer-key-tab-btn ${rightView === 'json' ? 'active' : ''}`}
-          onClick={() => {
-            setRightView('json')
-            syncJsonEditFromAnswer()
-          }}
-        >
-          JSON
         </button>
       </div>
       <div className="answer-key-grid-header">
@@ -210,25 +193,7 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
           </button>
         </div>
       </div>
-      {rightView === 'json' && (
-        <div className="answer-key-json-view">
-          <label className="answer-key-ocr-label">解答JSON（編集後に適用）</label>
-          <textarea
-            className="answer-key-json-textarea"
-            value={jsonEditText}
-            onChange={(e) => setJsonEditText(e.target.value)}
-            placeholder='{"page_role":"detail","items":[...]}'
-            spellCheck={false}
-          />
-          <button
-            type="button"
-            className="answer-key-btn answer-key-apply-json-btn"
-            onClick={applyJsonEdit}
-          >
-            JSONを適用
-          </button>
-        </div>
-      )}
+      <div className="answer-key-right-content">
       {rightView === 'template' && (
         <div className="answer-key-template-view">
           <p className="answer-key-template-desc">
@@ -596,6 +561,7 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
           )}
         </div>
       )}
+      </div>
       </div>
       <div className="answer-key-actions">
         {readOnly ? (

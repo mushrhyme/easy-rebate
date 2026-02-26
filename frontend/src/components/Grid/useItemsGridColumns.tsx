@@ -38,6 +38,8 @@ export interface UseItemsGridColumnsParams {
   onOpenUnitPriceModal: (row: GridRow) => void
   /** true면 편집·추가/삭제·체크박스 비활성 */
   readOnly?: boolean
+  /** detail일 때만 タイプ/受注先CD/小売先CD/商品CD/仕切/本部長/NET 컬럼 표시 */
+  pageRole?: string | null
 }
 
 const CHAR_PX = 11
@@ -76,9 +78,11 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     deleteItemPending,
     onOpenUnitPriceModal,
     readOnly = false,
+    pageRole = null,
   } = params
 
   const hasItems = items.length > 0
+  const isDetailPage = pageRole === 'detail'
 
   return useMemo(() => {
     let orderedKeys: string[] = []
@@ -221,98 +225,140 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         ),
       })
 
-      cols.push({
-        key: 'タイプ',
-        name: 'タイプ',
-        width: 100,
-        minWidth: 100,
-        frozen: true,
-        resizable: false,
-        editable: false,
-        renderCell: ({ row }) => {
-          const raw = row['タイプ']
-          // JSON 결과 그대로 표시 (디폴트 없음)
-          const displayValue = raw != null && String(raw).trim() !== '' ? String(raw) : '—'
-          const isEditing = !readOnly && editingItemIds.has(row.item_id)
-          if (isEditing) {
-            const selectValue = raw != null && String(raw).trim() !== '' ? String(raw) : ''
-            return (
-              <select
-                value={selectValue}
-                onChange={(e) => {
-                  const newValue = e.target.value === '' ? null : e.target.value
-                  handleCellChange(row.item_id, 'タイプ', newValue)
-                }}
-                style={{
-                  width: '100%',
-                  border: '1px solid #ccc',
-                  padding: '4px',
-                  borderRadius: '4px',
-                  fontSize: '13px',
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <option value="">—</option>
-                <option value="条件">条件</option>
-                <option value="販促費8%">販促費8%</option>
-                <option value="販促費10%">販促費10%</option>
-                <option value="CF8%">CF8%</option>
-                <option value="CF10%">CF10%</option>
-                <option value="非課税">非課税</option>
-                <option value="消費税">消費税</option>
-              </select>
-            )
-          }
-          return <span>{displayValue}</span>
-        },
-      })
+      // detail 페이지 한정: タイプ, 受注先CD, 小売先CD, 商品CD, 仕切, 本部長, NET (summary/cover 등에서는 매핑 불필요·혼선 방지)
+      if (isDetailPage) {
+        cols.push({
+          key: 'タイプ',
+          name: 'タイプ',
+          width: 100,
+          minWidth: 100,
+          frozen: true,
+          resizable: false,
+          editable: false,
+          renderCell: ({ row }) => {
+            const raw = row['タイプ']
+            const displayValue = raw != null && String(raw).trim() !== '' ? String(raw) : '条件'
+            const isEditing = !readOnly && editingItemIds.has(row.item_id)
+            if (isEditing) {
+              const selectValue = raw != null && String(raw).trim() !== '' ? String(raw) : '条件'
+              return (
+                <select
+                  value={selectValue}
+                  onChange={(e) => {
+                    handleCellChange(row.item_id, 'タイプ', e.target.value)
+                  }}
+                  style={{
+                    width: '100%',
+                    border: '1px solid #ccc',
+                    padding: '4px',
+                    borderRadius: '4px',
+                    fontSize: '13px',
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <option value="条件">条件</option>
+                  <option value="販促費8%">販促費8%</option>
+                  <option value="販促費10%">販促費10%</option>
+                  <option value="CF8%">CF8%</option>
+                  <option value="CF10%">CF10%</option>
+                  <option value="非課税">非課税</option>
+                  <option value="消費税">消費税</option>
+                </select>
+              )
+            }
+            return <span>{displayValue}</span>
+          },
+        })
 
-      // 검토 탭 frozen: 순서 판매처→소매처, 컬럼명 受注先コード / 代表スーパー
-      cols.push({
-        key: '판매처코드',
-        name: '受注先CD',
-        width: 100,
-        minWidth: 80,
-        frozen: true,
-        resizable: true,
-        editable: false,
-        renderCell: ({ row }) => {
-          const v = row['판매처코드']
-          return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
-        },
-      })
-      cols.push({
-        key: '소매처코드',
-        name: '小売先CD',
-        width: 100,
-        minWidth: 80,
-        frozen: true,
-        resizable: true,
-        editable: false,
-        renderCell: ({ row }) => {
-          const v = row['소매처코드']
-          return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
-        },
-      })
-      cols.push({
-        key: '제품코드',
-        name: '商品CD',
-        width: 100,
-        minWidth: 80,
-        frozen: true,
-        resizable: true,
-        editable: false,
-        renderCell: ({ row }) => {
-          const v = row['제품코드']
-          return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
-        },
-      })
+        const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null
+        cols.push({
+          key: '受注先CD',
+          name: '受注先CD',
+          width: 100,
+          minWidth: 80,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          renderCell: ({ row }) => {
+            const v = row['受注先CD']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+          },
+        })
+        cols.push({
+          key: '小売先CD',
+          name: '小売先CD',
+          width: 100,
+          minWidth: 80,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          renderCell: ({ row }) => {
+            const v = row['小売先CD']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+          },
+        })
+        cols.push({
+          key: '商品CD',
+          name: '商品CD',
+          width: 100,
+          minWidth: 80,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          renderCell: ({ row }) => {
+            const v = row['商品CD']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+          },
+        })
+        cols.push({
+          key: '仕切',
+          name: '仕切',
+          width: 90,
+          minWidth: 80,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          renderCell: ({ row }) => {
+            const v = row['仕切']
+            const n = parseCellNum(v)
+            return <span>{n != null ? Number(n).toLocaleString() : '—'}</span>
+          },
+        })
+        cols.push({
+          key: '本部長',
+          name: '本部長',
+          width: 90,
+          minWidth: 80,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          renderCell: ({ row }) => {
+            const v = row['本部長']
+            const n = parseCellNum(v)
+            return <span>{n != null ? Number(n).toLocaleString() : '—'}</span>
+          },
+        })
+        cols.push({
+          key: 'net',
+          name: 'NET',
+          width: 90,
+          minWidth: 90,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          renderCell: ({ row }) => {
+            const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
+            const shikiriNum = parseCellNum(row['仕切'])
+            if (condNum == null || shikiriNum == null) return <span>—</span>
+            return <span>{(shikiriNum - condNum).toLocaleString()}</span>
+          },
+        })
+      }
     }
 
     if (hasItems) {
-      const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null
       for (const key of orderedKeys) {
-        if (key === 'customer' || key === 'タイプ' || key === '소매처코드' || key === '판매처코드' || key === '제품코드') continue
+        if (key === 'customer' || key === 'タイプ' || key === '受注先CD' || key === '小売先CD' || key === '商品CD' || key === '仕切' || key === '本部長') continue
         const firstValue = items[0]?.item_data?.[key]
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))
@@ -347,22 +393,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
       }
-
-      cols.push({
-        key: 'net',
-        name: 'NET',
-        width: 90,
-        minWidth: 90,
-        frozen: false,
-        resizable: true,
-        editable: false,
-        renderCell: ({ row }) => {
-          const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
-          const shikiriNum = parseCellNum(row['仕切'])
-          if (condNum == null || shikiriNum == null) return <span>—</span>
-          return <span>{(shikiriNum - condNum).toLocaleString()}</span>
-        },
-      })
+      // NET은 frozen에 이미 포함됨 (위 검토 탭 frozen 블록)
     }
 
     const adjustedCols: Column<GridRow>[] = cols.map((col) => {
@@ -439,5 +470,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     deleteItemPending,
     onOpenUnitPriceModal,
     readOnly,
+    pageRole,
   ])
 }

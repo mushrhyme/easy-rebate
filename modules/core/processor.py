@@ -106,6 +106,8 @@ class PdfProcessor:
 
             # 3.1. form_type을 RAG에서 사용한 참조 예제의 form_type으로 재설정
             # 각 페이지의 _rag_reference.form_type 중 유효한 값을 모아 가장 많이 등장하는 값으로 결정
+            pdf_filename_for_log = f"{pdf_name}.pdf"
+            print(f"[form_type] processor 입력 form_type={form_type!r}, 페이지 수={len(page_results)}")
             try:
                 rag_form_types = []
                 for page_json in page_results:
@@ -114,6 +116,7 @@ class PdfProcessor:
                         ref_form_type = ref.get("form_type")
                         if isinstance(ref_form_type, str) and ref_form_type.strip():
                             rag_form_types.append(ref_form_type.strip())
+                print(f"[form_type] RAG 참조 수집: rag_form_types={rag_form_types!r} (len={len(rag_form_types)})")
                 if rag_form_types:
                     # 가장 많이 등장한 form_type 선택
                     from collections import Counter
@@ -121,9 +124,15 @@ class PdfProcessor:
                     if most_common_form_type and most_common_form_type != form_type:
                         print(f"📋 RAG 참조 예제 기준 form_type 재설정: {form_type!r} → {most_common_form_type!r}")
                         form_type = most_common_form_type
+                    else:
+                        print(f"[form_type] RAG most_common={most_common_form_type!r}, 유지 form_type={form_type!r}")
+                else:
+                    print(f"[form_type] 경고: _rag_reference.form_type 없음 → 기존 form_type 유지={form_type!r}")
             except Exception as _e:
                 # form_type 추론 실패 시에는 기존 form_type 그대로 사용
+                print(f"[form_type] RAG form_type 추론 예외: {_e!r} → form_type 유지={form_type!r}")
                 pass
+            print(f"[form_type] save_document_data 호출 직전: pdf_filename={pdf_filename_for_log!r}, form_type={form_type!r}")
             
             # 3.5. 빈값 채우기 (직전 페이지에서 관리번호/거래처명/摘要, 다음 페이지에서 세액)
             # form_type 별 config 매핑이 있으면 해당 필드만 채움. 없으면(get→None) 스킵.
@@ -133,9 +142,8 @@ class PdfProcessor:
             except Exception:
                 pass
 
-            # 3.6. 양식지 2번 전용 후처리
-            # 리ベート計算条件（適用人数/適用入数） 이 「納価条件」 인 행은
-            # 取引数量合計（総数:内数） 를 0 으로 강제 세팅
+            # 3.6. 양식지 2번 전용 후처리: 計算条件（適用人数）가 納価条件인 행은
+            # 金額 + 金額2 → 金額에 합산, 金額2 키 삭제 (DB 저장·검토 탭 동일)
             try:
                 from modules.utils.form2_rebate_utils import normalize_form2_rebate_conditions
                 page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)
@@ -168,7 +176,43 @@ class PdfProcessor:
                             image_data_list.append(img_bytes.getvalue())
                         else:
                             image_data_list.append(None)
-                
+
+                # 분석 직후·DB 저장 전: 1→2→3 매핑 선적용 (受注先CD/小売先CD/商品CD를 page_results에 넣어서 저장)
+                try:
+                    from modules.utils.retail_resolve import resolve_retail_dist
+                    from modules.utils.config import get_project_root
+                    from backend.unit_price_lookup import resolve_product_and_prices
+                    _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+                    for page_json in page_results:
+                        if not isinstance(page_json, dict):
+                            continue
+                        for item_dict in page_json.get("items") or []:
+                            if not isinstance(item_dict, dict):
+                                continue
+                            customer_name = (
+                                item_dict.get("得意先")
+                                or item_dict.get("得意先名")
+                                or item_dict.get("得意先様")
+                                or item_dict.get("取引先")
+                            )
+                            customer_code = item_dict.get("得意先CD")
+                            retail_code, dist_code = resolve_retail_dist(customer_name, customer_code)
+                            if retail_code:
+                                item_dict["小売先CD"] = retail_code
+                            if dist_code:
+                                item_dict["受注先CD"] = dist_code
+                            product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+                            if product_result:
+                                code, shikiri, honbu = product_result
+                                if code:
+                                    item_dict["商品CD"] = code
+                                if shikiri is not None:
+                                    item_dict["仕切"] = shikiri
+                                if honbu is not None:
+                                    item_dict["本部長"] = honbu
+                except Exception:
+                    pass
+
                 # DB에 저장 (이미지 데이터 직접 전달)
                 try:
                     success = db_manager.save_document_data(

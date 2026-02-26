@@ -13,9 +13,6 @@ interface AnswerKeyLeftPanelProps {
   imageSize: { w: number; h: number } | null
   setImageSize: React.Dispatch<React.SetStateAction<{ w: number; h: number } | null>>
   pageOcrTextQueries: Array<{ data?: { ocr_text?: string }; isLoading?: boolean }>
-  ocrRerunAzureModel: string
-  setOcrRerunAzureModel: React.Dispatch<React.SetStateAction<string>>
-  rerunOcrMutation: { mutate: (vars: { azureModel?: string }) => void; isPending: boolean }
 }
 
 export function AnswerKeyLeftPanel({
@@ -30,9 +27,6 @@ export function AnswerKeyLeftPanel({
   imageSize,
   setImageSize,
   pageOcrTextQueries,
-  ocrRerunAzureModel,
-  setOcrRerunAzureModel,
-  rerunOcrMutation,
 }: AnswerKeyLeftPanelProps) {
   return (
     <div className="answer-key-left">
@@ -100,30 +94,7 @@ export function AnswerKeyLeftPanel({
           )}
         </div>
         <div className="answer-key-ocr-section">
-          <div className="answer-key-ocr-header">
-            <label className="answer-key-ocr-label">OCRテキスト</label>
-            <div className="answer-key-ocr-rerun-wrap">
-              <select
-                className="answer-key-ocr-azure-model-select"
-                value={ocrRerunAzureModel}
-                onChange={(e) => setOcrRerunAzureModel(e.target.value)}
-                title="Azure 모델 선택"
-              >
-                <option value="prebuilt-layout">prebuilt-layout（表・レイアウト）</option>
-                <option value="prebuilt-read">prebuilt-read（OCRのみ）</option>
-                <option value="prebuilt-document">prebuilt-document（一般文書）</option>
-              </select>
-              <button
-                type="button"
-                className="answer-key-btn answer-key-ocr-rerun-btn"
-                onClick={() => rerunOcrMutation.mutate({ azureModel: ocrRerunAzureModel })}
-                disabled={!selectedDoc || rerunOcrMutation.isPending}
-                title="Azure Document Intelligenceで現在ページを再認識"
-              >
-                {rerunOcrMutation.isPending ? '認識中…' : 'Azureで再認識'}
-              </button>
-            </div>
-          </div>
+          <label className="answer-key-ocr-label">OCRテキスト</label>
           <textarea
             className="answer-key-ocr-text"
             readOnly

@@ -9,7 +9,7 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import { documentsApi, itemsApi, searchApi, ragAdminApi } from '@/api/client'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import { useAuth } from '@/contexts/AuthContext'
-import { getApiBaseUrl, getPageImageAbsoluteUrl } from '@/utils/apiConfig'
+import { getPageImageAbsoluteUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
 import {
   type GridRow,
@@ -37,8 +37,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   /** 저장 시 항상 최신 rows 사용 (클로저 지연으로 タイプ 등이 빠지는 것 방지) */
   const rowsRef = useRef<GridRow[]>([])
   const [selectedDoc, setSelectedDoc] = useState<{ pdf_filename: string; total_pages: number } | null>(null)
-  /** RAG(img) 문서일 때 relative_path — 이게 있으면 img 기반 answer.json/이미지 사용 */
-  const [selectedDocRelativePath, setSelectedDocRelativePath] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [rows, setRows] = useState<GridRow[]>([])
   const [itemDataKeys, setItemDataKeys] = useState<string[]>([])
@@ -50,8 +48,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'building' | 'done' | 'error'>( 'idle')
   const [saveMessage, setSaveMessage] = useState<string>('')
   const [showLearningRequestModal, setShowLearningRequestModal] = useState(false)
-  const [rightView, setRightView] = useState<'kv' | 'json' | 'template'>('kv')
-  const [jsonEditText, setJsonEditText] = useState('')
+  const [rightView, setRightView] = useState<'kv' | 'template'>('kv')
   /** 템플릿 뷰: 첫 행만 キー・値 목록 (키/값 추가·삭제·편집 가능) */
   const [templateEntries, setTemplateEntries] = useState<Array<{ id: string; key: string; value: string }>>([])
   /** キー・値 탭: items에서 키 이름 인라인 편집용 */
@@ -67,8 +64,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const [newKeyInput, setNewKeyInput] = useState('')
   /** 정답 생성: Gemini / GPT 5.2 (Vision) | Azure+RAG(표 구조 보존) */
   const [answerProvider, setAnswerProvider] = useState<'gemini' | 'gpt-5.2'>('gpt-5.2')
-  /** OCR 다시 인식: Azure 모델 (prebuilt-read / prebuilt-layout / prebuilt-document) */
-  const [ocrRerunAzureModel, setOcrRerunAzureModel] = useState<string>('prebuilt-layout')
   /** 画像 Ctrl+ホイール 拡大縮小 */
   const [imageScale, setImageScale] = useState(1)
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null)
@@ -121,36 +116,11 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     selectedDoc && inVectorPdfSet.has(selectedDoc.pdf_filename.trim().toLowerCase())
   )
 
-  /** RAG(img) 문서일 때 해당 폴더의 answer.json 전체 (ocr_text는 별도 API) */
-  const { data: answerJsonFromImg } = useQuery({
-    queryKey: ['answer-json-from-img', selectedDocRelativePath ?? ''],
-    queryFn: () => documentsApi.getAnswerJsonFromImg(selectedDocRelativePath!),
-    enabled: !!selectedDocRelativePath,
-  })
-
   /** base DB 문서: answer-json 한 번 로드 → 메모리에서 편집 → 저장 시에만 DB 반영 (순서/정렬 이슈 제거) */
   const { data: answerJsonFromDb } = useQuery({
     queryKey: ['document-answer-json', selectedDoc?.pdf_filename ?? ''],
     queryFn: () => documentsApi.getDocumentAnswerJson(selectedDoc!.pdf_filename),
-    enabled: !!selectedDoc?.pdf_filename && !selectedDocRelativePath,
-  })
-
-  /** OCR 다시 인식 (Azure 전용) — 결과를 debug2에 저장 후 화면 갱신 */
-  const rerunOcrMutation = useMutation({
-    mutationFn: ({ azureModel }: { azureModel?: string }) =>
-      searchApi.rerunPageOcr(selectedDoc!.pdf_filename, currentPage, azureModel),
-    onSuccess: (data) => {
-      queryClient.setQueryData(
-        ['page-ocr-text', selectedDoc?.pdf_filename, currentPage],
-        data
-      )
-      setSaveMessage('OCRを再認識しました。')
-      setSaveStatus('done')
-    },
-    onError: (e: any) => {
-      setSaveMessage(e?.response?.data?.detail || e?.message || 'OCR再認識に失敗しました。')
-      setSaveStatus('error')
-    },
+    enabled: !!selectedDoc?.pdf_filename,
   })
 
   const generateAnswerMutation = useMutation({
@@ -308,22 +278,12 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     return Array.isArray(raw) ? raw : []
   }, [documentsData])
 
-  // 검토 탭 또는 RAG 현황판에서 넘어온 경우 해당 문서 자동 선택
+  // 검토 탭에서 넘어온 경우 해당 문서 자동 선택 (解答作成 지정 문서만)
   useEffect(() => {
     if (!initialDocument || !onConsumeInitialDocument) return
     const doc = documents.find((d) => d.pdf_filename === initialDocument.pdf_filename)
     if (doc) {
       setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
-      setSelectedDocRelativePath(null)
-      setCurrentPage(1)
-      onConsumeInitialDocument()
-    } else if (initialDocument.relative_path && initialDocument.total_pages > 0) {
-      // RAG 목록에만 있고 정답지 탭 목록에 없는 문서 → img 기반 뷰
-      setSelectedDoc({
-        pdf_filename: initialDocument.pdf_filename,
-        total_pages: initialDocument.total_pages,
-      })
-      setSelectedDocRelativePath(initialDocument.relative_path)
       setCurrentPage(1)
       onConsumeInitialDocument()
     }
@@ -335,10 +295,8 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setPageRoleEdits({})
   }, [selectedDoc?.pdf_filename])
 
-  const isRagMode = !!selectedDocRelativePath
-
   const pageImageQueries = useQueries({
-    queries: selectedDoc && !isRagMode
+    queries: selectedDoc
       ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
           queryKey: ['answer-key-page-image', selectedDoc.pdf_filename, i + 1],
           queryFn: () => searchApi.getPageImage(selectedDoc.pdf_filename, i + 1),
@@ -348,7 +306,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   })
 
   const pageItemsQueries = useQueries({
-    queries: selectedDoc && !isRagMode
+    queries: selectedDoc
       ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
           queryKey: ['items', selectedDoc.pdf_filename, i + 1],
           queryFn: () => itemsApi.getByPage(selectedDoc.pdf_filename, i + 1),
@@ -358,7 +316,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   })
 
   const pageMetaQueries = useQueries({
-    queries: selectedDoc && !isRagMode
+    queries: selectedDoc
       ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
           queryKey: ['page-meta', selectedDoc.pdf_filename, i + 1],
           queryFn: () => documentsApi.getPageMeta(selectedDoc.pdf_filename, i + 1),
@@ -378,10 +336,10 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       : [],
   })
 
-  const allItemsLoaded = isRagMode ? !!answerJsonFromImg : (!!answerJsonFromDb || pageItemsQueries.every((q) => !q.isLoading && (q.data != null || q.isError)))
-  const allPageMetaLoaded = isRagMode ? !!answerJsonFromImg : (!!answerJsonFromDb || pageMetaQueries.every((q) => !q.isLoading && (q.data != null || q.isError)))
+  const allItemsLoaded = !!answerJsonFromDb || pageItemsQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
+  const allPageMetaLoaded = !!answerJsonFromDb || pageMetaQueries.every((q) => !q.isLoading && (q.data != null || q.isError))
   const allDataLoaded = allItemsLoaded && allPageMetaLoaded
-  const allImagesLoaded = isRagMode ? true : pageImageQueries.every((q) => !q.isLoading && q.data != null)
+  const allImagesLoaded = pageImageQueries.every((q) => !q.isLoading && q.data != null)
 
   /** page_meta 조회 실패(404 등) 페이지 번호 목록 — 일부 페이지만 page_data가 있을 때 안내용 */
   const pageMetaErrorPageNumbers = useMemo(() => {
@@ -391,63 +349,9 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       .filter((p) => p > 0)
   }, [selectedDoc, pageMetaQueries])
 
-  // RAG(img) 문서: answer.json 순서 그대로 — pages/items 모두 인덱스 순으로만 접근해 0,1,2,...,10,11 보장
-  useEffect(() => {
-    if (!isRagMode || !answerJsonFromImg?.pages) return
-    const pagesArr = Array.isArray(answerJsonFromImg.pages) ? answerJsonFromImg.pages : []
-    if (pagesArr.length === 0) return
-    const combined: GridRow[] = []
-    const keysOrder: string[] = []
-    const keysSet = new Set<string>()
-    for (let pi = 0; pi < pagesArr.length; pi++) {
-      const page = pagesArr[pi] as Record<string, any>
-      const pageNum = Number(page?.page_number) || pi + 1
-      let items: any[] = []
-      const rawItems = page?.items
-      if (Array.isArray(rawItems)) {
-        // 인덱스 0,1,2,... 순으로만 추출 (이터레이션 순서 의존 제거)
-        items = Array.from({ length: rawItems.length }, (_, i) => rawItems[i])
-      } else if (rawItems && typeof rawItems === 'object') {
-        items = Object.entries(rawItems)
-          .sort((a, b) => Number(a[0]) - Number(b[0]))
-          .map(([, v]) => v)
-      }
-      for (let idx = 0; idx < items.length; idx++) {
-        const item = items[idx]
-        const itemData = item?.item_data ?? item
-        const row: GridRow = {
-          item_id: pageNum * 1000 + idx,
-          page_number: pageNum,
-          item_order: idx + 1,
-          version: 1,
-        }
-        if (itemData && typeof itemData === 'object') {
-          Object.keys(itemData).forEach((k) => {
-            if (SYSTEM_ROW_KEYS.includes(k)) return
-            row[k] = itemData[k]
-            if (!keysSet.has(k)) {
-              keysSet.add(k)
-              keysOrder.push(k)
-            }
-          })
-        }
-        row.item_order = idx + 1
-        ;(row as Record<string, unknown>)._displayIndex = pageNum * 10000 + idx
-        combined.push(row)
-      }
-    }
-    combined.sort(
-      (a, b) =>
-        a.page_number - b.page_number ||
-        Number((a as Record<string, unknown>)._displayIndex ?? 0) - Number((b as Record<string, unknown>)._displayIndex ?? 0)
-    )
-    setRows(combined)
-    setItemDataKeys(keysOrder)
-  }, [isRagMode, answerJsonFromImg])
-
   // base DB: answer-json 한 번 로드 → rows 동기화 (JSON 배열 순서 그대로, DB N회 조회 없음)
   useEffect(() => {
-    if (!!selectedDocRelativePath || !answerJsonFromDb?.pages?.length) return
+    if (!answerJsonFromDb?.pages?.length) return
     if (skipNextSyncFromServerRef.current) {
       skipNextSyncFromServerRef.current = false
       return
@@ -487,12 +391,12 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setDirtyIds(new Set())
     setPageMetaFlatEdits({})
     setPageMetaDirtyPages(new Set())
-  }, [answerJsonFromDb, selectedDocRelativePath, dirtyIds.size, pageMetaDirtyPages.size])
+  }, [answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages.size])
 
   // (레거시) base DB를 answer-json이 아닌 페이지별 API로 로드할 때만 사용 — answerJsonFromDb 사용 시 미실행
   const pageItemsDataUpdatedAt = pageItemsQueries.map((q) => q.dataUpdatedAt ?? 0).join(',')
   useEffect(() => {
-    if (!selectedDoc || !allDataLoaded || !!selectedDocRelativePath || answerJsonFromDb != null) return
+    if (!selectedDoc || !allDataLoaded || answerJsonFromDb != null) return
     if (skipNextSyncFromServerRef.current) {
       skipNextSyncFromServerRef.current = false
       return
@@ -535,7 +439,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setDirtyIds(new Set())
     setPageMetaFlatEdits({})
     setPageMetaDirtyPages(new Set())
-  }, [selectedDoc, allDataLoaded, isRagMode, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size])
+  }, [selectedDoc, allDataLoaded, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size])
 
   useEffect(() => {
     rowsRef.current = rows
@@ -747,25 +651,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
 
   const currentPageMetaData = useMemo(() => {
     if (!selectedDoc) return null
-    if (isRagMode && answerJsonFromImg?.pages) {
-      const page = answerJsonFromImg.pages.find((p: any) => Number(p.page_number) === currentPage)
-      if (!page) return null
-      // RAG answer.json에는 page_meta 키가 없을 수 있음 → page 루트에서 items/page_number/page_role 제외한 것만 page_meta로 사용
-      let page_meta: Record<string, any> =
-        page.page_meta != null && typeof page.page_meta === 'object' && !Array.isArray(page.page_meta)
-          ? page.page_meta
-          : {}
-      if (Object.keys(page_meta).length === 0 && typeof page === 'object') {
-        page_meta = {}
-        Object.keys(page).forEach((k) => {
-          if (!PAGE_LEVEL_EXCLUDE_KEYS.has(k)) page_meta[k] = (page as Record<string, any>)[k]
-        })
-      }
-      return {
-        page_role: page.page_role ?? null,
-        page_meta,
-      }
-    }
     if (answerJsonFromDb?.pages) {
       const page = answerJsonFromDb.pages.find((p: any) => Number(p.page_number) === currentPage)
       if (!page) return null
@@ -788,7 +673,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     const q = pageMetaQueries[currentPage - 1]
     if (!q?.data) return null
     return q.data as { page_role: string | null; page_meta: Record<string, any> }
-  }, [selectedDoc, currentPage, isRagMode, answerJsonFromImg, answerJsonFromDb, pageMetaQueries, PAGE_LEVEL_EXCLUDE_KEYS])
+  }, [selectedDoc, currentPage, answerJsonFromDb, pageMetaQueries, PAGE_LEVEL_EXCLUDE_KEYS])
 
   /** detail 페이지용: page_meta.区_mapping (숫자 → ラベル). 키/값 문자열 정규화 (number 혼용 대비) */
   const kuMapping = useMemo(() => {
@@ -1055,226 +940,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     },
   })
 
-  const answerJson = useMemo(() => {
-    const pageMeta = buildPageMetaFromEdits(currentPage)
-    const pageRole =
-      pageRoleEdits[currentPage] ?? currentPageMetaData?.page_role ?? 'detail'
-    // _displayIndex는 정렬용 내부 키 → JSON/저장에는 포함하지 않음
-    const items = currentPageRows.map(({ item_id, page_number, item_order, version, _displayIndex, ...rest }) => rest)
-    return { page_role: pageRole, ...pageMeta, items }
-  }, [currentPage, pageRoleEdits, currentPageMetaData?.page_role, currentPageRows, buildPageMetaFromEdits])
-
-  const syncJsonEditFromAnswer = useCallback(() => {
-    try {
-      setJsonEditText(JSON.stringify(answerJson, null, 2))
-    } catch {
-      setJsonEditText('{}')
-    }
-  }, [answerJson])
-
-  // JSON 탭: キー・値/생성 결과와 연동 — 탭 진입 시·페이지 변경 시·rows(answerJson) 변경 시 항상 현재 정답 상태 반영
-  useEffect(() => {
-    if (rightView !== 'json') return
-    try {
-      setJsonEditText(JSON.stringify(answerJson, null, 2))
-    } catch {
-      setJsonEditText('{}')
-    }
-  }, [rightView, currentPage, answerJson])
-
-  /** parsed item → GridRow (시스템 필드 유지, item 키만 반영해 삭제된 키는 제거) */
-  const itemToGridRow = useCallback((r: GridRow, item: Record<string, unknown>): GridRow => {
-    const system: Partial<GridRow> = {
-      item_id: r.item_id,
-      page_number: r.page_number,
-      item_order: r.item_order,
-      version: r.version,
-    }
-    const customer = (item.customer ?? item['得意先'] ?? r.customer) as string | null
-    const rest: Record<string, string | number | boolean | null | undefined> = {}
-    Object.entries(item).forEach(([k, v]) => {
-      if (!SYSTEM_ROW_KEYS.includes(k) && k !== 'customer') rest[k] = v as string | number | boolean | null | undefined
-    })
-    if (item['商品名'] != null || (r as Record<string, unknown>)['商品名'] != null) {
-      rest['商品名'] = (item['商品名'] ?? (r as Record<string, unknown>)['商品名']) as string | null
-    }
-    return { ...system, customer, ...rest } as GridRow
-  }, [])
-
-  const applyJsonEdit = useCallback(async () => {
-    try {
-      const parsed = JSON.parse(jsonEditText) as { page_role?: string; items?: Record<string, unknown>[]; [k: string]: unknown }
-      if (!parsed || typeof parsed !== 'object') return
-      const { items: parsedItems, page_role: parsedPageRole, ...restMeta } = parsed
-      const flatMeta: Record<string, string> = {}
-      const pushFlat = (obj: Record<string, unknown>, prefix: string) => {
-        Object.entries(obj).forEach(([k, v]) => {
-          if (v !== null && v !== undefined && typeof v === 'object' && !Array.isArray(v)) {
-            pushFlat(v as Record<string, unknown>, prefix ? `${prefix}.${k}` : k)
-          } else {
-            flatMeta[prefix ? `${prefix}.${k}` : k] = String(v ?? '')
-          }
-        })
-      }
-      pushFlat(restMeta as Record<string, unknown>, '')
-      if (Object.keys(flatMeta).length > 0) {
-        setPageMetaFlatEdits((prev) => ({ ...prev, [currentPage]: flatMeta }))
-        setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
-      }
-      const hasParsedItems = Array.isArray(parsedItems)
-      const parsedCount = (parsedItems?.length ?? 0) as number
-      const isEmptyPage = currentPageRows.length === 0
-
-      /** 적용 후 itemDataKeys를 parsed items 기준으로 갱신 */
-      const syncItemDataKeysFromParsed = (items: Record<string, unknown>[]) => {
-        const keys = new Set<string>()
-        items.forEach((item) => {
-          Object.keys(item).forEach((k) => {
-            if (!SYSTEM_ROW_KEYS.includes(k)) keys.add(k)
-          })
-        })
-        if (keys.size) setItemDataKeys(Array.from(keys))
-      }
-
-      if (hasParsedItems && parsedCount > 0 && isEmptyPage && selectedDoc) {
-        try {
-          await documentsApi.createItemsFromAnswer(
-            selectedDoc.pdf_filename,
-            currentPage,
-            parsedItems!,
-            parsedPageRole ?? 'detail'
-          )
-          if (Object.keys(restMeta).length > 0) {
-            await documentsApi.updatePageMeta(selectedDoc.pdf_filename, currentPage, restMeta as Record<string, unknown>)
-          }
-          syncItemDataKeysFromParsed(parsedItems!)
-          queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-          queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
-          setSaveMessage('空ページにJSONを適用しDBに保存しました。')
-        } catch (e: unknown) {
-          const err = e as { response?: { data?: { detail?: string } }; message?: string }
-          setSaveMessage(err?.response?.data?.detail || err?.message || 'DBの保存に失敗しました。')
-          setSaveStatus('error')
-        }
-        return
-      }
-
-      if (hasParsedItems && parsedCount === 0 && !isEmptyPage && selectedDoc) {
-        try {
-          for (const row of currentPageRows) {
-            await itemsApi.delete(row.item_id)
-          }
-          setRows((prev) => prev.filter((r) => r.page_number !== currentPage))
-          setDirtyIds((prev) => {
-            const next = new Set(prev)
-            currentPageRows.forEach((r) => next.delete(r.item_id))
-            return next
-          })
-          queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-          setSaveMessage('このページのすべての行を削除しました。')
-        } catch (e: unknown) {
-          const err = e as { response?: { data?: { detail?: string } }; message?: string }
-          setSaveMessage(err?.response?.data?.detail || err?.message || '行の削除に失敗しました。')
-          setSaveStatus('error')
-        }
-        return
-      }
-
-      if (hasParsedItems && parsedCount > 0 && !isEmptyPage) {
-        const existingCount = currentPageRows.length
-        const hasExtraItems = selectedDoc != null && parsedCount > existingCount
-        const hasFewerItems = parsedCount < existingCount
-
-        if (hasFewerItems && selectedDoc) {
-          try {
-            const toDelete = currentPageRows.slice(parsedCount)
-            for (const row of toDelete) {
-              await itemsApi.delete(row.item_id)
-            }
-            const kept = currentPageRows.slice(0, parsedCount)
-            const updatedCurrent = kept.map((r, i) => itemToGridRow(r, parsedItems![i] as Record<string, unknown>))
-            const newDirty = new Set(updatedCurrent.map((r) => r.item_id))
-            setRows((prev) => {
-              const other = prev.filter((r) => r.page_number !== currentPage)
-              return [...other, ...updatedCurrent].sort(
-                (a, b) => (a.page_number - b.page_number) || (Number(a.item_order ?? 0) - Number(b.item_order ?? 0))
-              )
-            })
-            setDirtyIds((d) => new Set([...d, ...newDirty]))
-            syncItemDataKeysFromParsed(parsedItems!)
-            queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-            setSaveMessage(`JSON適用: ${toDelete.length}行削除、${parsedCount}行を更新しました。`)
-          } catch (e: unknown) {
-            const err = e as { response?: { data?: { detail?: string } }; message?: string }
-            setSaveMessage(err?.response?.data?.detail || err?.message || '削除・更新に失敗しました。')
-            setSaveStatus('error')
-          }
-          return
-        }
-
-        if (hasExtraItems) {
-          try {
-            for (let i = 0; i < existingCount; i++) {
-              const row = currentPageRows[i]
-              const item = parsedItems![i] as Record<string, unknown>
-              const updatedRow = itemToGridRow(row, item)
-              await updateItemMutation.mutateAsync({ itemId: row.item_id, row: updatedRow })
-            }
-            const extraItems = parsedItems!.slice(existingCount) as Record<string, unknown>[]
-            const excludeFromItemData = ['customer', 'item_id', 'page_number', 'item_order', 'version', '_displayIndex']
-            let lastItemId = currentPageRows[currentPageRows.length - 1].item_id
-            for (const item of extraItems) {
-              const customer = (item.customer ?? item['得意先'] ?? null) as string | null
-              const item_data = Object.fromEntries(
-                Object.entries(item).filter(([k]) => !excludeFromItemData.includes(k))
-              ) as Record<string, any>
-              const created = await itemsApi.create(
-                selectedDoc!.pdf_filename,
-                currentPage,
-                item_data,
-                lastItemId
-              )
-              lastItemId = created.item_id
-            }
-            setDirtyIds((prev) => {
-              const next = new Set(prev)
-              currentPageRows.forEach((r) => next.delete(r.item_id))
-              return next
-            })
-            syncItemDataKeysFromParsed(parsedItems!)
-            queryClient.invalidateQueries({ queryKey: ['items', selectedDoc!.pdf_filename] })
-            setSaveMessage(`기존 ${existingCount}행 갱신, ${extraItems.length}행 추가 후 DB에 반영했습니다。`)
-          } catch (e: unknown) {
-            const err = e as { response?: { data?: { detail?: string } }; message?: string }
-            setSaveMessage(err?.response?.data?.detail || err?.message || 'DBの保存に失敗しました。')
-            setSaveStatus('error')
-          }
-          return
-        }
-
-        const newDirty = new Set<number>()
-        setRows((prev) =>
-          prev.map((r) => {
-            if (r.page_number !== currentPage) return r
-            const idx = currentPageRows.findIndex((row) => row.item_id === r.item_id)
-            if (idx < 0 || idx >= parsedItems!.length) return r
-            const updated = itemToGridRow(r, parsedItems![idx] as Record<string, unknown>)
-            newDirty.add(r.item_id)
-            return updated
-          })
-        )
-        setDirtyIds((d) => new Set([...d, ...newDirty]))
-        syncItemDataKeysFromParsed(parsedItems!)
-        setSaveMessage('JSONを適用しました。')
-      } else {
-        setSaveMessage('JSONを適用しました。')
-      }
-    } catch (_e) {
-      setSaveMessage('JSONの形式が不正です。')
-      setSaveStatus('error')
-    }
-  }, [jsonEditText, currentPage, currentPageRows, selectedDoc, queryClient, itemToGridRow, updateItemMutation])
-
   const handleSaveGrid = useCallback(async () => {
     if (!selectedDoc) return
     const latestRows = rowsRef.current
@@ -1312,32 +977,16 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         const page_roleRaw =
           pageRoleEdits[p] ??
           (pageMetaQueries[p - 1]?.data as { page_role?: string } | undefined)?.page_role ??
-          (isRagMode && answerJsonFromImg?.pages
-            ? (answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
+          (answerJsonFromDb?.pages
+            ? (answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
             : undefined) ??
           'detail'
         const page_role = ['cover', 'detail', 'summary', 'reply'].includes(page_roleRaw) ? page_roleRaw : 'detail'
-        let page_meta: Record<string, unknown>
-        if (isRagMode && answerJsonFromImg?.pages) {
-          const basePage = answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
-          page_meta = {}
-          if (basePage) {
-            Object.keys(basePage).forEach((k) => {
-              if (k !== 'items' && k !== 'page_number' && k !== 'page_role헉') page_meta[k] = basePage[k]
-            })
-          }
-          const edits = pageMetaFlatEdits[p] ?? {}
-          Object.entries(edits).forEach(([path, value]) => {
-            if (value === PAGE_META_DELETE_SENTINEL) return
-            setNestedByPath(page_meta, path, value)
-          })
-        } else {
-          page_meta = buildPageMetaFromEdits(p) as Record<string, unknown>
-        }
+        const page_meta = buildPageMetaFromEdits(p) as Record<string, unknown>
         pages.push({ page_number: p, page_role, page_meta, items: item_data_list })
       }
       // 画面表示済みOCRをキャッシュから付与（ベクター登録で再抽出しない）
-      if (selectedDoc && !isRagMode && pages.length > 0) {
+      if (selectedDoc && pages.length > 0) {
         for (const page of pages) {
           const cached = queryClient.getQueryData<{ ocr_text?: string }>([
             'page-ocr-text',
@@ -1349,16 +998,11 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           }
         }
       }
-      if (isRagMode && selectedDocRelativePath) {
-        await documentsApi.saveAnswerJsonFromImg(selectedDocRelativePath, { pages })
-        queryClient.invalidateQueries({ queryKey: ['answer-json-from-img', selectedDocRelativePath] })
-      } else {
-        await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
-        skipNextSyncFromServerRef.current = true
-        queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
-        queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-        queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
-      }
+      await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
+      skipNextSyncFromServerRef.current = true
+      queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
+      queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
+      queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
       setDirtyIds(new Set())
       setPageMetaFlatEdits({})
       setPageMetaDirtyPages(new Set())
@@ -1367,13 +1011,13 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         pageMetaDirtyPages.forEach((pn) => delete next[pn])
         return next
       })
-      setSaveMessage(isRagMode ? 'JSONファイルを保存しました。' : 'グリッドの変更を保存しました。')
+      setSaveMessage('グリッドの変更を保存しました。')
       setSaveStatus('done')
     } catch (e: any) {
       setSaveMessage(e?.response?.data?.detail || e?.message || '保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, selectedDocRelativePath, isRagMode, answerJsonFromImg, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
+  }, [selectedDoc, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
 
   const handleSaveAsAnswerKey = useCallback(async () => {
     if (!selectedDoc) return
@@ -1382,8 +1026,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     try {
       const latestRows = rowsRef.current
       const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
-      // ベクターDB登録は page_data_current を参照するため、DB文書の場合は必ず先にDBへ保存する
-      const needBuildPages = hasDirty || !isRagMode
+      const needBuildPages = true
       const excludeFromItemData = ['item_id', 'page_number', 'item_order', 'version', '_displayIndex']
       const pages: Array<{ page_number: number; page_role: string; page_meta: Record<string, unknown>; items: Array<Record<string, unknown>> }> = []
       if (needBuildPages) {
@@ -1411,29 +1054,13 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           const page_roleRaw =
             pageRoleEdits[p] ??
             (pageMetaQueries[p - 1]?.data as { page_role?: string } | undefined)?.page_role ??
-            (isRagMode && answerJsonFromImg?.pages
-              ? (answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
-              : answerJsonFromDb?.pages
-                ? (answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
-                : undefined) ??
+            (answerJsonFromDb?.pages
+              ? (answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
+              : undefined) ??
             'detail'
           const page_role = ['cover', 'detail', 'summary', 'reply'].includes(page_roleRaw) ? page_roleRaw : 'detail'
           let page_meta: Record<string, unknown>
-          if (isRagMode && answerJsonFromImg?.pages) {
-            const basePage = answerJsonFromImg.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
-            page_meta = {}
-            if (basePage) {
-              Object.keys(basePage).forEach((k) => {
-                if (k !== 'items' && k !== 'page_number' && k !== 'page_role') page_meta[k] = basePage[k]
-              })
-            }
-            const editsForMeta = pageMetaFlatEdits[p] ?? {}
-            Object.entries(editsForMeta).forEach(([path, value]) => {
-              if (value === PAGE_META_DELETE_SENTINEL) return
-              if (/^items\[\d+\]\./.test(path)) return
-              setNestedByPath(page_meta, path, value)
-            })
-          } else if (answerJsonFromDb?.pages) {
+          if (answerJsonFromDb?.pages) {
             const basePage = answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as Record<string, unknown> | undefined
             page_meta = {}
             if (basePage) {
@@ -1454,7 +1081,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         }
       }
       // 画面表示済みOCRをキャッシュから付与（ベクター登録で再抽出しない）
-      if (selectedDoc && !isRagMode && pages.length > 0) {
+      if (selectedDoc && pages.length > 0) {
         for (const page of pages) {
           const cached = queryClient.getQueryData<{ ocr_text?: string }>([
             'page-ocr-text',
@@ -1467,16 +1094,11 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         }
       }
       if (hasDirty) {
-        if (isRagMode && selectedDocRelativePath) {
-          await documentsApi.saveAnswerJsonFromImg(selectedDocRelativePath, { pages })
-          queryClient.invalidateQueries({ queryKey: ['answer-json-from-img', selectedDocRelativePath] })
-        } else {
-          await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
-          skipNextSyncFromServerRef.current = true
-          queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
-          queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
-          queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
-        }
+        await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
+        skipNextSyncFromServerRef.current = true
+        queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
+        queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
+        queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
         setDirtyIds(new Set())
         setPageMetaFlatEdits({})
         setPageMetaDirtyPages(new Set())
@@ -1485,8 +1107,8 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           pageMetaDirtyPages.forEach((pn) => delete next[pn])
           return next
         })
-      } else if (!isRagMode && pages.length > 0) {
-        // 変更なしでもDB文書は先に保存（page_data_current に存在させてから学習フラグを付与）
+      } else if (pages.length > 0) {
+        // 変更なしでも先に保存（page_data_current に存在させてから学習フラグを付与）
         await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
         skipNextSyncFromServerRef.current = true
         queryClient.invalidateQueries({ queryKey: ['document-answer-json', selectedDoc.pdf_filename] })
@@ -1494,26 +1116,22 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
       }
       setSaveStatus('building')
-      if (isRagMode) {
-        setSaveMessage('ベクターDBに登録しています…')
-        const formFolder = selectedDocRelativePath?.split('/')[0] ?? ''
-        await ragAdminApi.build(formFolder || undefined)
-      } else {
-        setSaveMessage('学習フラグを設定し、ベクターDBに登録しています…')
-        for (let p = 1; p <= selectedDoc.total_pages; p++) {
-          await ragAdminApi.setLearningFlag({
-            pdf_filename: selectedDoc.pdf_filename,
-            page_number: p,
-            selected: true,
-          })
-        }
-        await ragAdminApi.buildFromLearningPages(undefined)
+      setSaveMessage('学習フラグを設定し、ベクターDBに登録しています…')
+      for (let p = 1; p <= selectedDoc.total_pages; p++) {
+        await ragAdminApi.setLearningFlag({
+          pdf_filename: selectedDoc.pdf_filename,
+          page_number: p,
+          selected: true,
+        })
       }
+      await ragAdminApi.buildFromLearningPages(undefined)
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
       setSaveMessage('解答として保存し、ベクターDBに登録しました。')
       setSaveStatus('done')
+      // DB反映完了後、解答作成リストから外して検討タブへ自動遷移
+      onRevokeSuccess?.()
     } catch (e: any) {
       const status = e?.response?.status
       const detail = e?.response?.data?.detail
@@ -1526,19 +1144,14 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       setSaveMessage(msg)
       setSaveStatus('error')
     }
-  }, [selectedDoc, selectedDocRelativePath, isRagMode, answerJsonFromImg, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient])
+  }, [selectedDoc, answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages, pageRoleEdits, pageMetaQueries, pageMetaFlatEdits, buildPageMetaFromEdits, setNestedByPath, queryClient, onRevokeSuccess])
 
   const imageUrls = useMemo(() => {
-    if (isRagMode && selectedDocRelativePath && selectedDoc?.total_pages) {
-      return Array.from({ length: selectedDoc.total_pages }, (_, i) =>
-        documentsApi.getImgPageImageUrl(selectedDocRelativePath, i + 1)
-      )
-    }
     return pageImageQueries.map((q) => {
       const data = q.data as { image_url?: string } | undefined
       return getPageImageAbsoluteUrl(data?.image_url) ?? null
     })
-  }, [isRagMode, selectedDocRelativePath, selectedDoc?.total_pages, pageImageQueries])
+  }, [pageImageQueries])
 
   return (
     <div className="answer-key-tab">
@@ -1558,14 +1171,12 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             const v = e.target.value
             if (!v) {
               setSelectedDoc(null)
-              setSelectedDocRelativePath(null)
               setRows([])
               return
             }
             const doc = documents.find((d) => d.pdf_filename === v)
             if (doc) {
               setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
-              setSelectedDocRelativePath(null)
             }
           }}
         >
@@ -1575,12 +1186,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               {d.pdf_filename} ({d.total_pages}ページ)
             </option>
           ))}
-          {/* RAG 현황판에서 넘어온 문서는 목록에 없으므로 option 추가 */}
-          {selectedDoc && !documents.some((d) => d.pdf_filename === selectedDoc.pdf_filename) && (
-            <option value={selectedDoc.pdf_filename}>
-              {selectedDoc.pdf_filename} ({selectedDoc.total_pages}ページ) — RAG参照
-            </option>
-          )}
         </select>
         {selectedDoc && (
           <>
@@ -1677,9 +1282,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             imageSize={imageSize}
             setImageSize={setImageSize}
             pageOcrTextQueries={pageOcrTextQueries}
-            ocrRerunAzureModel={ocrRerunAzureModel}
-            setOcrRerunAzureModel={setOcrRerunAzureModel}
-            rerunOcrMutation={rerunOcrMutation}
           />
 
           <AnswerKeyRightPanel
@@ -1689,7 +1291,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               firstRowToTemplateEntries: (row: unknown) => firstRowToTemplateEntries(row as GridRow | undefined),
               currentPageRows,
               setTemplateEntries,
-              syncJsonEditFromAnswer,
               dirtyIds,
               pageMetaDirtyPages,
               answerProvider,
@@ -1698,9 +1299,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               selectedDoc,
               rows,
               itemDataKeys,
-              jsonEditText,
-              setJsonEditText,
-              applyJsonEdit,
               allDataLoaded,
               templateEntries,
               updateTemplateEntry,

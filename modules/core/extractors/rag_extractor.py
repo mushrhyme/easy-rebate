@@ -25,6 +25,37 @@ def _normalize_amount_colon(value: Any) -> Any:
     return value
 
 
+def _sanitize_invalid_json_escapes(s: str) -> str:
+    """
+    JSON 원문에서 잘못된 이스케이프(\\X, X가 허용 문자 아님)를 수정.
+    허용: \\" \\\\ \\/ \\b \\f \\n \\r \\t \\uXXXX → 그대로 유지.
+    그 외(예: \\ن) → 백슬래시 제거 후 다음 문자만 유지.
+    """
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] != "\\" or i + 1 >= len(s):
+            out.append(s[i])
+            i += 1
+            continue
+        n = s[i + 1]
+        if n in '"\\/bfnrt':
+            out.append(s[i])
+            out.append(n)
+            i += 2
+            continue
+        if n == "u" and i + 5 <= len(s):
+            hex_part = s[i + 2 : i + 6]
+            if len(hex_part) == 4 and all(c in "0123456789aAbBcCdDeEfF" for c in hex_part):
+                out.append(s[i : i + 6])
+                i += 6
+                continue
+        # invalid: drop backslash, keep next char (e.g. \ن → ن)
+        out.append(n)
+        i += 2
+    return "".join(out)
+
+
 # RAG 예제를 프롬프트에 넣을 때 제거할 필드 (DB/앱 식별용, LLM 추출 대상 아님)
 _EXAMPLE_STRIP_KEYS = frozenset({"item_id", "pdf_filename", "page_number", "item_order", "version", "review_status"})
 
@@ -552,15 +583,18 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         result_text = re.sub(r':\s*True\s*([,}])', r': true\1', result_text)
         result_text = re.sub(r':\s*False\s*([,}])', r': false\1', result_text)
         
-        # JSON 파싱 시도
+        # JSON 파싱 시도 (실패 시 잘못된 이스케이프 정규화 후 1회 재시도)
         try:
             # NaN 문자열을 null로 변환 (JSON 표준에 맞게)
             import math
             result_text = re.sub(r':\s*NaN\s*([,}])', r': null\1', result_text, flags=re.IGNORECASE)
             result_text = re.sub(r':\s*"NaN"\s*([,}])', r': null\1', result_text, flags=re.IGNORECASE)
-            
-            # 파싱 전: 문자열 값 안의 탭·연속 공백으로 인한 잘림/오류 방지 (JSON 내부 문자열만 정규화하는 건 파싱 후에 수행)
-            result_json = json.loads(result_text)
+
+            try:
+                result_json = json.loads(result_text)
+            except json.JSONDecodeError:
+                result_text = _sanitize_invalid_json_escapes(result_text)
+                result_json = json.loads(result_text)  # 잘못된 이스케이프 정규화 후 재시도 1회
             
             # items 내 문자열 값 정규화: 탭·全角スペース→공백, 연속 공백/줄바꿈 하나로
             def _normalize_item_string(s):
