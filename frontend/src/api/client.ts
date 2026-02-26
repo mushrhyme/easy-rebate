@@ -120,17 +120,23 @@ export const documentsApi = {
   /**
    * 文書一覧取得
    * @param uploadChannel チャネルで絞り込み（省略可）
-   * @param options is_answer_key_document: 解答対象のみ / exclude_answer_key: 検討タブ用に正解表対象を除外 / form_type: 様式で絞り込み
+   * @param options exclude_img_seed: true で img/build_faiss_db 전용 문서 제외（업로드/검토 탭용）
    */
   getList: async (
     uploadChannel?: string,
-    options?: { is_answer_key_document?: boolean; exclude_answer_key?: boolean; form_type?: string }
+    options?: {
+      is_answer_key_document?: boolean
+      exclude_answer_key?: boolean
+      form_type?: string
+      exclude_img_seed?: boolean
+    }
   ): Promise<DocumentListResponse> => {
     const params: Record<string, string | boolean> = {}
     if (uploadChannel) params.upload_channel = uploadChannel
     if (options?.is_answer_key_document === true) params.is_answer_key_document = true
     if (options?.exclude_answer_key === true) params.exclude_answer_key = true
     if (options?.form_type) params.form_type = options.form_type
+    if (options?.exclude_img_seed === true) params.exclude_img_seed = true
     const response = await client.get<DocumentListResponse>('/api/documents', { params })
     return response.data
   },
@@ -785,6 +791,93 @@ export const searchApi = {
   },
 
   /**
+   * 거래처명(得意先)으로 소매처 유사도 후보 (retail_user + dist_retail)
+   */
+  getRetailCandidatesByCustomer: async (
+    customerName: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    customer_name_input: string
+    matches: Array<{
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+      similarity: number
+    }>
+  }> => {
+    const params: Record<string, any> = { customer_name: customerName }
+    if (options?.topK != null) params.top_k = options.topK
+    if (options?.minSimilarity != null) params.min_similarity = options.minSimilarity
+    const response = await client.get('/api/search/retail-candidates-by-customer', { params })
+    return response.data
+  },
+
+  /** 得意先CD로 domae_retail_1 조회 → 대표슈퍼코드 1건 (판매처는 dist_retail) */
+  getRetailByCustomerCode: async (
+    customerCode: string
+  ): Promise<{
+    customer_code_input: string
+    match: {
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+      similarity: number
+    } | null
+    skipped_reason: string | null
+  }> => {
+    const response = await client.get('/api/search/retail/by-customer-code', {
+      params: { customer_code: customerCode },
+    })
+    return response.data
+  },
+
+  /** 得意先으로 domae_retail_2 소매처명 유사도 후보 최대 5건 */
+  getRetailCandidatesByShopName: async (
+    customerName: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    customer_name_input: string
+    matches: Array<{
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+      similarity: number
+    }>
+    skipped_reason?: string | null
+  }> => {
+    const params: Record<string, any> = { customer_name: customerName }
+    if (options?.topK != null) params.top_k = options.topK
+    if (options?.minSimilarity != null) params.min_similarity = options.minSimilarity
+    const response = await client.get('/api/search/retail/candidates-by-shop-name', { params })
+    return response.data
+  },
+
+  /** sap_retail.csv 대표슈퍼명·판매처명 유사도 검색（매핑 후보 없을 때 폴백） */
+  getRetailCandidatesBySapRetail: async (
+    query: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    query: string
+    matches: Array<{
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+      similarity: number
+    }>
+    skipped_reason?: string | null
+  }> => {
+    const topK = options?.topK ?? 10
+    const minSim = options?.minSimilarity ?? 0
+    const url = `/api/search/retail/candidates-by-sap-retail?query=${encodeURIComponent(query)}&top_k=${topK}&min_similarity=${minSim}`
+    const response = await client.get(url)
+    return response.data
+  },
+
+  /**
    * 페이지 이미지 조회
    */
   getPageImage: async (
@@ -960,25 +1053,48 @@ export const authApi = {
 /**
  * SAP 업로드 API
  */
+/** SAP 대상 문서 1건 (양식지별 목록용) */
+export type SapDocumentEntry = { pdf_filename: string; item_count: number }
+
 export const sapUploadApi = {
   /**
-   * SAP 엑셀 파일 미리보기
+   * SAP 대상 문서가 있는 연월 목록 (created_by_user_id IS NOT NULL, detail 페이지 있음)
    */
-  preview: async (): Promise<{
+  getAvailableYearMonths: async (): Promise<{ year_months: Array<{ year: number; month: number }> }> => {
+    const response = await client.get('/api/sap-upload/available-year-months')
+    return response.data
+  },
+
+  /**
+   * 조건 충족 문서 목록 (양식지별). year/month 필수.
+   */
+  getDocuments: async (year: number, month: number): Promise<{
+    by_form: Record<string, SapDocumentEntry[]>
+    total_items: number
+  }> => {
+    const response = await client.get('/api/sap-upload/documents', { params: { year, month } })
+    return response.data
+  },
+
+  /**
+   * SAP 엑셀 미리보기. year/month 지정 시 해당 기간만.
+   */
+  preview: async (params?: { year?: number; month?: number }): Promise<{
     total_items: number
     preview_rows: Array<Record<string, any>>
     column_names: string[]
     message: string
   }> => {
-    const response = await client.get('/api/sap-upload/preview')
+    const response = await client.get('/api/sap-upload/preview', { params: params ?? {} })
     return response.data
   },
 
   /**
-   * SAP 엑셀 파일 다운로드
+   * SAP 엑셀 다운로드. year/month 지정 시 해당 기간 문서 item만 취합.
    */
-  download: async (): Promise<Blob> => {
+  download: async (params?: { year?: number; month?: number }): Promise<Blob> => {
     const response = await client.get('/api/sap-upload/download', {
+      params: params ?? {},
       responseType: 'blob',
     })
     return response.data

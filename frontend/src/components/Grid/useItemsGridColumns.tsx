@@ -36,6 +36,8 @@ export interface UseItemsGridColumnsParams {
   deleteItemPending: boolean
   /** 액션 메뉴에서 "単価" 클릭 시 해당 행으로 단가 후보 모달 열기 */
   onOpenUnitPriceModal: (row: GridRow) => void
+  /** true면 편집·추가/삭제·체크박스 비활성 */
+  readOnly?: boolean
 }
 
 const CHAR_PX = 11
@@ -73,6 +75,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     createItemPending,
     deleteItemPending,
     onOpenUnitPriceModal,
+    readOnly = false,
   } = params
 
   const hasItems = items.length > 0
@@ -157,6 +160,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         frozen: true,
         resizable: false,
         renderCell: ({ row }) => {
+          if (readOnly) return <span className="rdg-cell-no">—</span>
           const itemId = row.item_id
           return (
             <ActionCellWithMenu
@@ -192,6 +196,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             onToggle={handleCheckboxUpdate}
             onTooltip={(text, x, y) => setReviewTooltip({ text, x, y })}
             onTooltipClear={() => setReviewTooltip(null)}
+            disabled={readOnly}
           />
         ),
       })
@@ -211,6 +216,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             onToggle={handleCheckboxUpdate}
             onTooltip={(text, x, y) => setReviewTooltip({ text, x, y })}
             onTooltipClear={() => setReviewTooltip(null)}
+            disabled={readOnly}
           />
         ),
       })
@@ -227,7 +233,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           const raw = row['タイプ']
           // JSON 결과 그대로 표시 (디폴트 없음)
           const displayValue = raw != null && String(raw).trim() !== '' ? String(raw) : '—'
-          const isEditing = editingItemIds.has(row.item_id)
+          const isEditing = !readOnly && editingItemIds.has(row.item_id)
           if (isEditing) {
             const selectValue = raw != null && String(raw).trim() !== '' ? String(raw) : ''
             return (
@@ -260,12 +266,40 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           return <span>{displayValue}</span>
         },
       })
+
+      // 검토 탭 frozen: 순서 판매처→소매처, 컬럼명 受注先コード / 代表スーパー
+      cols.push({
+        key: '판매처코드',
+        name: '受注先コード',
+        width: 100,
+        minWidth: 80,
+        frozen: true,
+        resizable: true,
+        editable: false,
+        renderCell: ({ row }) => {
+          const v = row['판매처코드']
+          return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+        },
+      })
+      cols.push({
+        key: '소매처코드',
+        name: '代表スーパー',
+        width: 100,
+        minWidth: 80,
+        frozen: true,
+        resizable: true,
+        editable: false,
+        renderCell: ({ row }) => {
+          const v = row['소매처코드']
+          return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+        },
+      })
     }
 
     if (hasItems) {
       const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null
       for (const key of orderedKeys) {
-        if (key === 'customer' || key === 'タイプ') continue
+        if (key === 'customer' || key === 'タイプ' || key === '소매처코드' || key === '판매처코드') continue
         const firstValue = items[0]?.item_data?.[key]
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))
@@ -278,8 +312,9 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           width: dataBasedWidth,
           minWidth: Math.max(dataBasedWidth, COL_WIDTH_MIN),
           resizable: true,
+          editable: !readOnly,
           renderCell: ({ row }) => {
-            const isEditing = editingItemIds.has(row.item_id)
+            const isEditing = !readOnly && editingItemIds.has(row.item_id)
             const value = row[key] ?? ''
             if (isEditing) {
               return (
@@ -390,5 +425,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     createItemPending,
     deleteItemPending,
     onOpenUnitPriceModal,
+    readOnly,
   ])
 }

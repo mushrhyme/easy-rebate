@@ -110,6 +110,77 @@
   letter-spacing: 1px;
 }
 
+.sap-upload-period-select {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  color: white;
+  font-size: 1.125rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  min-width: 140px;
+}
+.sap-upload-period-select option {
+  color: #1f2937;
+}
+
+/* 대상 파일 목록（様式別） */
+.sap-upload-file-list-section {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.sap-upload-file-list-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #1f2937;
+  margin: 0 0 1rem 0;
+}
+.sap-upload-file-list-loading,
+.sap-upload-file-list-empty {
+  color: #6b7280;
+  margin: 0;
+  font-size: 0.9375rem;
+}
+.sap-upload-file-list-by-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.sap-upload-form-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem;
+}
+.sap-upload-form-group-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #4b5563;
+  margin: 0 0 0.5rem 0;
+}
+.sap-upload-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+}
+.sap-upload-file-item {
+  padding: 0.25rem 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.sap-upload-file-name {
+  color: #1f2937;
+  word-break: break-all;
+}
+.sap-upload-file-count {
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
 /* 통계 카드 그리드 */
 .sap-upload-stats-grid {
   display: grid;

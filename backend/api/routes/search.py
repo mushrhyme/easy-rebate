@@ -21,6 +21,57 @@ router = APIRouter()
 # 프로젝트 루트 (search.py: backend/api/routes/search.py -> parent*4 = project_root)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _UNIT_PRICE_CSV = _PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
+_RETAIL_USER_CSV = _PROJECT_ROOT / "database" / "csv" / "retail_user.csv"
+_DIST_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
+_DOMAE_RETAIL_1_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_1.csv"
+_DOMAE_RETAIL_2_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_2.csv"
+_SAP_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "sap_retail.csv"
+
+
+# ----- sap_retail 검색 (정적 경로를 맨 위에 등록해 404 방지) -----
+@router.get("/retail/candidates-by-sap-retail")
+async def get_retail_candidates_by_sap_retail(
+    query: str = Query("", description="検索語（대표슈퍼명・판매처명 등)"),
+    top_k: int = Query(10, ge=1, le=30, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+):
+    """sap_retail.csv에서 대표슈퍼명·판매처명 유사도 검색. 매핑 폴백용."""
+    query = (query or "").strip()
+    csv_path = _SAP_RETAIL_CSV
+    print(f"[sap_retail] query={query!r} (len={len(query)}), path={csv_path}, exists={csv_path.exists()}")
+    if not query:
+        return {"query": "", "matches": []}
+    if not csv_path.exists():
+        return {"query": query, "matches": [], "skipped_reason": "sap_retail.csv not found"}
+    try:
+        df = pd.read_csv(csv_path, dtype=str, encoding="utf-8")
+        scored = []
+        for _, r in df.iterrows():
+            retail_name = (r.get("대표슈퍼명") or "").strip()
+            dist_name = (r.get("판매처명") or "").strip()
+            retail_code = (r.get("대표슈퍼코드") or "").strip()
+            dist_code = (r.get("판매처코드") or "").strip()
+            if not retail_code:
+                continue
+            s1 = _similarity_difflib(query, retail_name)
+            s2 = _similarity_difflib(query, dist_name) if dist_name else 0.0
+            score = max(s1, s2)
+            if score >= min_similarity:
+                scored.append((score, retail_code, retail_name, dist_code, dist_name))
+        scored.sort(key=lambda x: -x[0])
+        matches = [
+            {
+                "소매처코드": rc,
+                "소매처명": rn,
+                "판매처코드": dc,
+                "판매처명": dn,
+                "similarity": round(sc, 4),
+            }
+            for sc, rc, rn, dc, dn in scored[:top_k]
+        ]
+        return {"query": query, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _get_in_vector_pdf_filenames(db) -> List[str]:
@@ -304,6 +355,165 @@ async def get_unit_price_by_product(
             "product_name_input": product_name,
             "matches": records,
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/retail-candidates-by-customer")
+async def get_retail_candidates_by_customer(
+    customer_name: str = Query(..., description="거래처명(得意先 등)"),
+    top_k: int = Query(20, ge=1, le=100, description="반환 건수"),
+    min_similarity: float = Query(0.5, ge=0.0, le=1.0, description="대표슈퍼명 최소 유사도"),
+):
+    """
+    거래처명으로 retail_user.csv 대표슈퍼명과 유사도 매칭 후보 반환.
+    컬럼: 소매처코드, 소매처명, 판매처코드, 판매처명 (판매처는 dist_retail.csv).
+    """
+    if not _RETAIL_USER_CSV.exists():
+        raise HTTPException(status_code=503, detail="retail_user.csv not found")
+    customer_name = (customer_name or "").strip()
+    if not customer_name:
+        return {"customer_name_input": "", "matches": []}
+    try:
+        df_retail = pd.read_csv(_RETAIL_USER_CSV, dtype=str)
+        # (대표슈퍼명, 대표슈퍼코드) 유사도 계산 → 상위 top_k, min_similarity 이상
+        scored = []
+        for _, r in df_retail.iterrows():
+            name = (r.get("대표슈퍼명") or "").strip()
+            code = (r.get("대표슈퍼코드") or "").strip()
+            if not name or not code:
+                continue
+            score = _similarity_difflib(customer_name, name)
+            if score >= min_similarity:
+                scored.append((score, name, code))
+        scored.sort(key=lambda x: -x[0])
+        retail_tuples = scored[:top_k]  # (score, 대표슈퍼명, 대표슈퍼코드)
+
+        # dist_retail: 대표슈퍼코드 → [(판매처코드, 판매처명), ...] (첫 행만 또는 전부)
+        dist_by_retail = {}
+        if _DIST_RETAIL_CSV.exists():
+            df_dist = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
+            for _, r in df_dist.iterrows():
+                retail_code = (r.get("대표슈퍼코드") or "").strip()
+                dist_code = (r.get("판매처코드") or "").strip()
+                dist_name = (r.get("판매처명") or "").strip()
+                if not retail_code:
+                    continue
+                if retail_code not in dist_by_retail:
+                    dist_by_retail[retail_code] = []
+                dist_by_retail[retail_code].append((dist_code, dist_name))
+
+        matches = []
+        for score, retail_name, retail_code in retail_tuples:
+            dist_list = dist_by_retail.get(retail_code) or [(None, None)]
+            for dist_code, dist_name in dist_list:
+                matches.append({
+                    "소매처코드": retail_code,
+                    "소매처명": retail_name,
+                    "판매처코드": dist_code or "",
+                    "판매처명": dist_name or "",
+                    "similarity": round(score, 4),
+                })
+        return {"customer_name_input": customer_name, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _dist_by_retail_first() -> dict:
+    """대표슈퍼코드 → (판매처코드, 판매처명) 첫 행만. 응답용."""
+    out = {}
+    if not _DIST_RETAIL_CSV.exists():
+        return out
+    try:
+        df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
+        for _, r in df.iterrows():
+            retail = (r.get("대표슈퍼코드") or "").strip()
+            dist_c = (r.get("판매처코드") or "").strip()
+            dist_n = (r.get("판매처명") or "").strip()
+            if retail and retail not in out:
+                out[retail] = (dist_c, dist_n)
+    except Exception:
+        pass
+    return out
+
+
+@router.get("/retail/by-customer-code")
+async def get_retail_by_customer_code(
+    customer_code: str = Query(..., description="得意先CD(소매처코드)"),
+):
+    """
+    得意先CD로 domae_retail_1에서 소매처코드 일치 행의 대표슈퍼코드 1건 반환.
+    판매처코드/판매처명은 dist_retail에서 조회해 함께 반환.
+    """
+    customer_code = (customer_code or "").strip()
+    if not customer_code:
+        return {"customer_code_input": "", "match": None, "skipped_reason": None}
+    if not _DOMAE_RETAIL_1_CSV.exists():
+        return {"customer_code_input": customer_code, "match": None, "skipped_reason": "domae_retail_1.csv not found"}
+    try:
+        df = pd.read_csv(_DOMAE_RETAIL_1_CSV, dtype=str)
+        row = df[df["소매처코드"].astype(str).str.strip() == customer_code]
+        if row.empty:
+            return {"customer_code_input": customer_code, "match": None, "skipped_reason": None}
+        r = row.iloc[0]
+        retail_code = (r.get("대표슈퍼코드") or "").strip()
+        retail_name = (r.get("대표슈퍼명") or "").strip()
+        dist_c, dist_n = _dist_by_retail_first().get(retail_code) or ("", "")
+        return {
+            "customer_code_input": customer_code,
+            "match": {
+                "소매처코드": retail_code,
+                "소매처명": retail_name,
+                "판매처코드": dist_c,
+                "판매처명": dist_n,
+                "similarity": 1.0,
+            },
+            "skipped_reason": None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/retail/candidates-by-shop-name")
+async def get_retail_candidates_by_shop_name(
+    customer_name: str = Query(..., description="거래처명(得意先 등)"),
+    top_k: int = Query(5, ge=1, le=20, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="소매처명 최소 유사도"),
+):
+    """
+    거래처명으로 domae_retail_2의 소매처명과 유사도 매칭 후보 반환 (대표슈퍼코드 + dist_retail 판매처).
+    """
+    customer_name = (customer_name or "").strip()
+    if not customer_name:
+        return {"customer_name_input": "", "matches": []}
+    if not _DOMAE_RETAIL_2_CSV.exists():
+        return {"customer_name_input": customer_name, "matches": [], "skipped_reason": "domae_retail_2.csv not found"}
+    try:
+        df = pd.read_csv(_DOMAE_RETAIL_2_CSV, dtype=str)
+        scored = []
+        for _, r in df.iterrows():
+            name = (r.get("소매처명") or "").strip()
+            code = (r.get("대표슈퍼코드") or "").strip()
+            retail_name = (r.get("대표슈퍼명") or "").strip()
+            if not name or not code:
+                continue
+            score = _similarity_difflib(customer_name, name)
+            if score >= min_similarity:
+                scored.append((score, name, code, retail_name))
+        scored.sort(key=lambda x: -x[0])
+        top = scored[:top_k]
+        dist_map = _dist_by_retail_first()
+        matches = []
+        for score, shop_name, retail_code, retail_name in top:
+            dist_c, dist_n = dist_map.get(retail_code) or ("", "")
+            matches.append({
+                "소매처코드": retail_code,
+                "소매처명": retail_name,
+                "판매처코드": dist_c,
+                "판매처명": dist_n,
+                "similarity": round(score, 4),
+            })
+        return {"customer_name_input": customer_name, "matches": matches}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

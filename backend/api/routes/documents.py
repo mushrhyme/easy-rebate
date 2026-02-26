@@ -114,9 +114,8 @@ def _get_ocr_text_azure_sync(db, pdf_filename: str, page_number: int) -> str:
     return (ocr_text or "").strip()
 
 
-# 업로드/검토 탭 목록: data_year/data_month NULL인 문서도 포함 (과거 데이터·마이그레이션 호환)
-# 벡터 시드 문서는 upload_channel 이 'finet'/'mail' 이 아니면 구분 가능하나, 현재는 NULL도 목록에 포함
-UPLOAD_LIST_EXCLUDE_SEED = ""
+# 업로드/검토 탭: img 폴더 기반 build_faiss_db로만 등록된 문서(created_by_user_id IS NULL) 제외
+# 현황 탭: 제외하지 않음 (exclude_img_seed=False)
 
 
 def query_documents_table(
@@ -128,16 +127,16 @@ def query_documents_table(
     is_answer_key_document: Optional[bool] = None,
     exclude_answer_key: Optional[bool] = None,
     answer_key_designated_by_user_id: Optional[int] = None,
+    exclude_img_seed: bool = False,
 ) -> List[Tuple]:
     """
-    documents 테이블 조회 헬퍼 함수 (current/archive 테이블 자동 선택)
-    벡터 DB 시드(img 동기화) 문서는 목록에 포함하지 않음 (data_year/data_month 가 있는 문서만).
+    documents 테이블 조회 헬퍼 (current/archive 자동 선택).
 
     Args:
-        is_answer_key_document: True のとき正解表対象文書のみ返す。
-        exclude_answer_key: True のとき正解表対象文書を除外（検討タブ用）。
-        answer_key_designated_by_user_id: 指定時は正解表対象のうち、この user_id が指定した文書のみ返す（管理者は指定せず全件）。
+        exclude_img_seed: True면 created_by_user_id IS NULL 문서 제외 (업로드/검토/정답지 탭용).
+                          False면 전부 포함 (현황 탭용).
     """
+    seed_filter = " AND created_by_user_id IS NOT NULL" if exclude_img_seed else ""
     with db.get_connection() as conn:
         cursor = conn.cursor()
         if is_answer_key_document:
@@ -159,7 +158,7 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
-                    WHERE {col} = %s{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}{seed_filter}
                     ORDER BY created_at DESC
                 """, params)
             else:
@@ -168,7 +167,7 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM {documents_table}
-                    WHERE 1=1{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
+                    WHERE 1=1{answer_key_filter}{designated_filter}{seed_filter}
                     ORDER BY created_at DESC
                 """, params)
             rows = cursor.fetchall()
@@ -184,12 +183,12 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
-                    WHERE {col} = %s{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}{seed_filter}
                     UNION ALL
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
-                    WHERE {col} = %s{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
+                    WHERE {col} = %s{answer_key_filter}{designated_filter}{seed_filter}
                     ORDER BY created_at DESC
                 """, params)
             else:
@@ -201,12 +200,12 @@ def query_documents_table(
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_current
-                    WHERE 1=1{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
+                    WHERE 1=1{answer_key_filter}{designated_filter}{seed_filter}
                     UNION ALL
                     SELECT pdf_filename, total_pages, form_type, upload_channel, created_at, data_year, data_month,
                            COALESCE(is_answer_key_document, FALSE)
                     FROM documents_archive
-                    WHERE 1=1{answer_key_filter}{designated_filter}{UPLOAD_LIST_EXCLUDE_SEED}
+                    WHERE 1=1{answer_key_filter}{designated_filter}{seed_filter}
                     ORDER BY created_at DESC
                 """, params)
             rows = cursor.fetchall()
@@ -686,15 +685,16 @@ async def process_pdf_background(
                         created_at = datetime(data_year, data_month, 1)
                         cursor.execute("""
                             UPDATE documents_current 
-                            SET upload_channel = %s, created_at = %s, data_year = %s, data_month = %s
+                            SET upload_channel = %s, created_at = %s, data_year = %s, data_month = %s,
+                                created_by_user_id = COALESCE(created_by_user_id, %s)
                             WHERE pdf_filename = %s
-                        """, (upload_channel, created_at, data_year, data_month, pdf_filename))
+                        """, (upload_channel, created_at, data_year, data_month, user_id, pdf_filename))
                     else:
                         cursor.execute("""
                             UPDATE documents_current 
-                            SET upload_channel = %s 
+                            SET upload_channel = %s, created_by_user_id = COALESCE(created_by_user_id, %s)
                             WHERE pdf_filename = %s
-                        """, (upload_channel, pdf_filename))
+                        """, (upload_channel, user_id, pdf_filename))
                     conn.commit()
             except Exception:
                 pass
@@ -767,14 +767,12 @@ async def get_documents(
     month: Optional[int] = None,
     is_answer_key_document: Optional[bool] = None,
     exclude_answer_key: Optional[bool] = None,
+    exclude_img_seed: bool = False,
     db=Depends(get_db)
 ):
     """
-    문서 목록 조회 (current/archive 테이블 사용)
-
-    Args:
-        is_answer_key_document: True のとき正解表対象文書のみ返す。
-        exclude_answer_key: True のとき正解表対象文書を除外（検討タブ用）。
+    문서 목록 조회 (current/archive 테이블 사용).
+    exclude_img_seed=True: img/build_faiss_db 전용 문서 제외 (업로드/검토 탭용).
     """
     try:
         rows = query_documents_table(
@@ -785,6 +783,7 @@ async def get_documents(
             month=month,
             is_answer_key_document=is_answer_key_document,
             exclude_answer_key=exclude_answer_key,
+            exclude_img_seed=exclude_img_seed,
         )
         documents = _build_document_list_from_rows(db, rows, year=year, month=month)
         logging.info(
@@ -935,6 +934,7 @@ async def get_documents_for_answer_key_tab(
         db,
         is_answer_key_document=True,
         answer_key_designated_by_user_id=None if is_admin else user_id,
+        exclude_img_seed=True,
     )
     documents = _build_document_list_from_rows(db, rows)
     return DocumentListResponse(documents=documents, total=len(documents))

@@ -702,6 +702,34 @@
 .unit-price-match-modal-close:hover {
   color: #111;
 }
+.mapping-modal-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.mapping-modal-tab {
+  padding: 10px 16px;
+  font-size: 13px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  color: #6b7280;
+}
+.mapping-modal-tab:hover {
+  color: #111;
+}
+.mapping-modal-tab.active {
+  font-weight: 600;
+  color: #111;
+  border-bottom-color: #4ECDC4;
+}
+.mapping-modal-subtitle {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #6b7280;
+}
 .unit-price-match-modal-body {
   padding: 16px;
   overflow: auto;
@@ -744,5 +772,78 @@
 }
 .unit-price-match-table button:hover {
   background: #3dbdb5;
+}
+
+.retail-mapping-section {
+  margin-bottom: 20px;
+}
+.retail-mapping-section-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.retail-final-section {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #f0f9ff;
+  border-radius: 8px;
+  border: 1px solid #bae6fd;
+}
+.retail-final-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.retail-final-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.retail-confirm-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #059669;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+}
+.retail-confirm-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+.retail-confirm-btn:not(:disabled):hover {
+  background: #047857;
+}
+
+.retail-sap-search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.retail-sap-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+}
+.retail-sap-search-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  background: #4ECDC4;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+}
+.retail-sap-search-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
