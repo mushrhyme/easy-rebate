@@ -167,6 +167,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       // 검토 탭 frozen 컬럼 (표시 전용, 저장 제외)
       row['소매처코드'] = item.frozen_retail_code ?? null
       row['판매처코드'] = item.frozen_dist_code ?? null
+      row['제품코드'] = item.frozen_product_code ?? null
 
       return row
     })
@@ -245,6 +246,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       // 검토 탭 frozen 컬럼 (표시 전용)
       row['소매처코드'] = item.frozen_retail_code ?? null
       row['판매처코드'] = item.frozen_dist_code ?? null
+      row['제품코드'] = item.frozen_product_code ?? null
 
       return row
     })
@@ -698,7 +700,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         key !== 'first_review_checked' &&
         key !== 'second_review_checked' &&
         key !== '소매처코드' &&
-        key !== '판매처코드'
+        key !== '판매처코드' &&
+        key !== '제품코드'
       ) {
         itemData[key] = rowData[key]
       }

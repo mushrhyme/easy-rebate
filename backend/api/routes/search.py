@@ -74,6 +74,35 @@ async def get_retail_candidates_by_sap_retail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/retail/sap-row-by-retail-code")
+async def get_sap_row_by_retail_code(
+    retail_code: str = Query(..., description="대표슈퍼코드(小売先CD)"),
+):
+    """sap_retail에서 대표슈퍼코드로 첫 행 조회. SAP受注先・SAP小売先 표시용."""
+    code = (retail_code or "").strip()
+    if not code:
+        return {"retail_code": "", "row": None}
+    if not _SAP_RETAIL_CSV.exists():
+        return {"retail_code": code, "row": None, "skipped_reason": "sap_retail.csv not found"}
+    try:
+        df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str, encoding="utf-8")
+        rows = df[df["대표슈퍼코드"].astype(str).str.strip() == code]
+        if rows.empty:
+            return {"retail_code": code, "row": None}
+        r = rows.iloc[0]
+        return {
+            "retail_code": code,
+            "row": {
+                "소매처코드": (r.get("대표슈퍼코드") or "").strip(),
+                "소매처명": (r.get("대표슈퍼명") or "").strip(),
+                "판매처코드": (r.get("판매처코드") or "").strip(),
+                "판매처명": (r.get("판매처명") or "").strip(),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _get_in_vector_pdf_filenames(db) -> List[str]:
     """rag_vector_index에서 벡터 인덱스에 포함된 pdf_filename 목록 반환."""
     try:
@@ -420,7 +449,7 @@ async def get_retail_candidates_by_customer(
 
 
 def _dist_by_retail_first() -> dict:
-    """대표슈퍼코드 → (판매처코드, 판매처명) 첫 행만. 응답용."""
+    """대표슈퍼코드 → (판매처코드, 판매처명) 첫 행만. dist_retail 기준."""
     out = {}
     if not _DIST_RETAIL_CSV.exists():
         return out
@@ -435,6 +464,35 @@ def _dist_by_retail_first() -> dict:
     except Exception:
         pass
     return out
+
+
+def _sap_dist_by_retail_first() -> dict:
+    """대표슈퍼코드 → (판매처코드, 판매처명) 첫 행만. sap_retail 기준 (대표슈퍼코드=슈퍼코드)."""
+    out = {}
+    if not _SAP_RETAIL_CSV.exists():
+        return out
+    try:
+        df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str)
+        for _, r in df.iterrows():
+            retail = (r.get("대표슈퍼코드") or "").strip()
+            dist_c = (r.get("판매처코드") or "").strip()
+            dist_n = (r.get("판매처명") or "").strip()
+            if retail and retail not in out:
+                out[retail] = (dist_c, dist_n)
+    except Exception:
+        pass
+    return out
+
+
+def _dist_for_retail(retail_code: str) -> tuple:
+    """매핑한 소매처코드(대표슈퍼코드)로 판매처코드/판매처명 반환. sap_retail 우선, 없으면 dist_retail."""
+    code = (retail_code or "").strip()
+    if not code:
+        return ("", "")
+    sap = _sap_dist_by_retail_first()
+    if code in sap:
+        return sap[code]
+    return _dist_by_retail_first().get(code) or ("", "")
 
 
 @router.get("/retail/by-customer-code")
@@ -458,7 +516,7 @@ async def get_retail_by_customer_code(
         r = row.iloc[0]
         retail_code = (r.get("대표슈퍼코드") or "").strip()
         retail_name = (r.get("대표슈퍼명") or "").strip()
-        dist_c, dist_n = _dist_by_retail_first().get(retail_code) or ("", "")
+        dist_c, dist_n = _dist_for_retail(retail_code)
         return {
             "customer_code_input": customer_code,
             "match": {
@@ -502,10 +560,9 @@ async def get_retail_candidates_by_shop_name(
                 scored.append((score, name, code, retail_name))
         scored.sort(key=lambda x: -x[0])
         top = scored[:top_k]
-        dist_map = _dist_by_retail_first()
         matches = []
         for score, shop_name, retail_code, retail_name in top:
-            dist_c, dist_n = dist_map.get(retail_code) or ("", "")
+            dist_c, dist_n = _dist_for_retail(retail_code)
             matches.append({
                 "소매처코드": retail_code,
                 "소매처명": retail_name,

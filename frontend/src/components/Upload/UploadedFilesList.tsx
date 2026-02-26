@@ -51,6 +51,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', 'upload_channel', selectedChannel] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
     },
     onError: (err: unknown) => {
       const msg = err && typeof err === 'object' && 'response' in err
@@ -66,6 +67,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', 'upload_channel', selectedChannel] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
       queryClient.invalidateQueries({ queryKey: ['form-types'] })
     },
     onError: (err: unknown) => {

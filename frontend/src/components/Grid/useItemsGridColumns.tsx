@@ -270,7 +270,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
       // 검토 탭 frozen: 순서 판매처→소매처, 컬럼명 受注先コード / 代表スーパー
       cols.push({
         key: '판매처코드',
-        name: '受注先コード',
+        name: '受注先CD',
         width: 100,
         minWidth: 80,
         frozen: true,
@@ -283,7 +283,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
       })
       cols.push({
         key: '소매처코드',
-        name: '代表スーパー',
+        name: '小売先CD',
         width: 100,
         minWidth: 80,
         frozen: true,
@@ -294,12 +294,25 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
         },
       })
+      cols.push({
+        key: '제품코드',
+        name: '商品CD',
+        width: 100,
+        minWidth: 80,
+        frozen: true,
+        resizable: true,
+        editable: false,
+        renderCell: ({ row }) => {
+          const v = row['제품코드']
+          return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+        },
+      })
     }
 
     if (hasItems) {
       const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null
       for (const key of orderedKeys) {
-        if (key === 'customer' || key === 'タイプ' || key === '소매처코드' || key === '판매처코드') continue
+        if (key === 'customer' || key === 'タイプ' || key === '소매처코드' || key === '판매처코드' || key === '제품코드') continue
         const firstValue = items[0]?.item_data?.[key]
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))

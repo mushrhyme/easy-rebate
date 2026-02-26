@@ -21,13 +21,14 @@ _ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
 _RETAIL_USER_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "retail_user.csv"
 _DIST_RETAIL_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
+_SAP_RETAIL_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "sap_retail.csv"
 
 # 검토 탭 frozen 컬럼: 取引先一覧과 동일 (유사도 최고 1건, 최소치 없음)
 _frozen_lookup_cache: Optional[tuple] = None
 
 
 def _load_frozen_lookup() -> tuple:
-    """(retail_list: [(대표슈퍼명, 대표슈퍼코드)], retail_to_dist: {대표슈퍼코드: 판매처코드})"""
+    """(retail_list: [(대표슈퍼명, 대표슈퍼코드)], retail_to_dist: {대표슈퍼코드: 판매처코드}). 판매처는 sap_retail 우선, 없으면 dist_retail."""
     global _frozen_lookup_cache
     if _frozen_lookup_cache is not None:
         return _frozen_lookup_cache
@@ -46,6 +47,18 @@ def _load_frozen_lookup() -> tuple:
                     retail_list.append((name, code))
         except Exception:
             pass
+    # sap_retail: 대표슈퍼코드 → 판매처코드 (우선)
+    if _SAP_RETAIL_CSV.exists():
+        try:
+            df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str)
+            for _, r in df.iterrows():
+                retail = (r.get("대표슈퍼코드") or "").strip()
+                dist = (r.get("판매처코드") or "").strip()
+                if retail and dist and retail not in retail_to_dist:
+                    retail_to_dist[retail] = dist
+        except Exception:
+            pass
+    # dist_retail: sap에 없을 때만
     if _DIST_RETAIL_CSV.exists():
         try:
             df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
@@ -749,9 +762,10 @@ class ItemResponse(BaseModel):
     item_data: Dict[str, Any]  # 상품명 등은 item_data['商品名'] 사용
     review_status: Dict[str, Any]
     version: int
-    # 검토 탭 frozen 컬럼: 소매처명→retail_user→소매처코드, dist_retail→판매처코드
-    frozen_retail_code: Optional[str] = None  # 소매처코드(대표슈퍼코드)
+    # 검토 탭 frozen 컬럼: 소매처명→retail_user→소매처코드, dist_retail→판매처코드, 商品名→unit_price→제품코드
+    frozen_retail_code: Optional[str] = None   # 소매처코드(대표슈퍼코드)
     frozen_dist_code: Optional[str] = None     # 판매처코드
+    frozen_product_code: Optional[str] = None  # 제품코드(단가리스트 매칭)
 
 
 @router.get("/{pdf_filename}/pages/{page_number}")
@@ -847,7 +861,8 @@ async def get_page_items(
                 if key not in exclude_keys:
                     item_data[key] = value
 
-            # 商品名이 있으면 unit_price에서 시키리/본부장 자동 매칭 → 그리드에 표시
+            # 商品名이 있으면 unit_price에서 시키리/본부장·제품코드 자동 매칭 → 그리드에 표시
+            frozen_product_code: Optional[str] = None  # 단가리스트 매칭 시 제품코드
             if _UNIT_PRICE_CSV.exists():
                 product_name = item_data.get("商品名")
                 if product_name is not None and str(product_name).strip():
@@ -866,6 +881,9 @@ async def get_page_items(
                         )
                         if not df.empty:
                             row = df.iloc[0]
+                            pc = row.get("제품코드")  # unit_price CSV 컬럼
+                            if pc is not None:
+                                frozen_product_code = str(pc).strip() or None
                             shikiri = row.get("시키리")
                             honbu = row.get("본부장")
                             if shikiri is not None:
@@ -911,6 +929,7 @@ async def get_page_items(
                     version=item.get('version', 1),
                     frozen_retail_code=frozen_retail_code,
                     frozen_dist_code=frozen_dist_code,
+                    frozen_product_code=frozen_product_code,
                 )
             )
         return {"items": item_list, "item_data_keys": item_data_keys}

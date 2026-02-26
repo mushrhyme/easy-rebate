@@ -61,6 +61,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
   /** 업로드/분석 완료 시 검토 탭·업로드 탭 문서 목록 동기화 */
   const invalidateDocumentLists = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+    queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
     queryClient.invalidateQueries({ queryKey: ['documents', 'upload_channel', uploadChannel] })
     queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
   }, [queryClient, uploadChannel])
