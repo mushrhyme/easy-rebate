@@ -70,7 +70,7 @@ class RAGConfig:
     rag_llm_parallel_workers: int = 5  # RAG+LLM 2단계 병렬 워커 수
     ocr_request_delay: float = 2.0  # (미사용) Upstage 등 호출 간격용 예비
     rag_prompt_file: str = "rag_with_example_v4.txt"
-    gemini_prompt_file: str = "prompt_v3.txt"
+    gemini_prompt_file: str = "prompt_v5.txt"
     # PDF 분석 완료 후 img 폴더에 복사할지 여부. False면 DB만 사용(중복 저장 없음).
     # True로 두면 벡터DB 재구축(ベクターDB再構築) 시 img 스캔에 새 문서가 포함됨.
     auto_save_to_training_folder: bool = False

@@ -1,34 +1,27 @@
 """
-양식지 2번 전용 리베이트 조건 후처리 유틸
+양식지 2번 전용 후처리 유틸
 
 - 対象: 양식지 2번 (form_type == "02")
-- 조건:
-    リベート計算条件（適用人数） == "納価条件" 인 경우
-- 처리:
-    取引数量合計（総数:内数） 값을 "0" 으로 강제 세팅
+- 条件: 計算条件（適用人数） == "納価条件" 인 행
+- 処理: 金額 + 金額2 를 金額에 합산, 金額2 키 삭제 (DB 저장·검토 탭에서 동일 데이터 사용)
 
-page_results 구조는 RAG 파서에서 내려주는 것과 동일하게
-각 페이지가 {"items": [...]} 형태의 딕셔너리라고 가정한다.
+page_results 구조: RAG 파서와 동일, 각 페이지 {"items": [...]} 형태.
 """
 
 from typing import Any, Dict, List, Optional
 
 
-# 리베이트 계산조건 필드명 후보
-REBATE_CONDITION_FIELD_NAMES = [
+# 計算条件 필드명 후보 (納価条件 체크용)
+CONDITION_FIELD_NAMES = [
+    "計算条件（適用人数）",
+    "計算条件(適用人数)",
     "リベート計算条件（適用人数）",
     "リベート計算条件(適用人数)",
-    "リベート計算条件（適用入数）",
-    "リベート計算条件(適用入数)",
-    "リベート 計算条件 (適用入数)",
 ]
 
-# 取引数量合計 필드명 후보
-TOTAL_QUANTITY_FIELD_NAMES = [
-    "取引数量合計（総数:内数）",
-    "取引数量合計 (総数:内数)",
-    "取引数量合計(総数:内数)",
-]
+# 金額 필드명
+AMOUNT_KEY = "金額"
+AMOUNT2_KEY = "金額2"
 
 
 def _get_str_value(item: Dict[str, Any], key: str) -> Optional[str]:
@@ -41,9 +34,21 @@ def _get_str_value(item: Dict[str, Any], key: str) -> Optional[str]:
     if isinstance(value, str):
         text = value.strip()
         return text or None
-    # 숫자 등은 문자열로 캐스팅
     text = str(value).strip()
     return text or None
+
+
+def _parse_amount(value: Any) -> int:
+    """金額/金額2 값을 정수로 파싱 (쉼표 제거)."""
+    if value is None:
+        return 0
+    s = str(value).replace(",", "").strip()
+    if not s:
+        return 0
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return 0
 
 
 def _get_first_existing_key(item: Dict[str, Any], candidates: List[str]) -> Optional[str]:
@@ -59,25 +64,23 @@ def normalize_form2_rebate_conditions(
     form_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    양식지 2번 전용 리베이트 조건 후처리.
+    양식지 2번 전용 후처리.
 
-    - 대상: form_type 이 "02" / "2" / 2 인 경우만 처리
-    - 로직:
-        리베ート計算条件(適用人数/適用入数) 가 "納価条件" 인 행은
-        取引数量合計（総数:内数）를 "0" 으로 덮어쓴다.
+    - 対象: form_type 이 "02" / "2" / 2 인 경우만 처리
+    - ロ직: 計算条件（適用人数） 가 "納価条件" 인 행은
+      金額 = 金額 + 金額2 로 합산하고, 金額2 키를 삭제한다.
 
     Args:
         page_results: 페이지별 결과 리스트 (각 요소는 {"items": [...]} 형태)
         form_type: 양식지 타입 (예: "01", "02" ...)
 
     Returns:
-        수정된 page_results (in-place 로도 수정되지만, 동일 객체를 반환)
+        수정된 page_results (in-place 수정, 동일 객체 반환)
     """
-    # form_type 이 2번이 아니면 아무 것도 하지 않고 그대로 반환
     if form_type is None:
         return page_results
 
-    normalized_form_type = str(form_type).lstrip("0")  # "02" -> "2"
+    normalized_form_type = str(form_type).lstrip("0")
     if normalized_form_type != "2":
         return page_results
 
@@ -93,8 +96,7 @@ def normalize_form2_rebate_conditions(
             if not isinstance(item, dict):
                 continue
 
-            # 리베이트 계산조건 필드 찾기
-            condition_key = _get_first_existing_key(item, REBATE_CONDITION_FIELD_NAMES)
+            condition_key = _get_first_existing_key(item, CONDITION_FIELD_NAMES)
             if not condition_key:
                 continue
 
@@ -102,14 +104,13 @@ def normalize_form2_rebate_conditions(
             if condition_value != "納価条件":
                 continue
 
-            # 取引数量合計 필드 찾기
-            quantity_key = _get_first_existing_key(item, TOTAL_QUANTITY_FIELD_NAMES)
-            if not quantity_key:
-                # 필드가 아예 없으면 생성은 하지 않는다 (명시된 케이스만 0 세팅)
-                continue
+            # 金額 + 金額2 합산 후 金額에 저장
+            amount1 = _parse_amount(item.get(AMOUNT_KEY))
+            amount2 = _parse_amount(item.get(AMOUNT2_KEY))
+            item[AMOUNT_KEY] = str(amount1 + amount2)
 
-            # 문자열 "0" 으로 덮어쓰기 (원본 JSON이 문자열 숫자이므로)
-            item[quantity_key] = "0"
+            # 金額2 키 삭제 (검토 탭/DB에서 사용하지 않음)
+            if AMOUNT2_KEY in item:
+                del item[AMOUNT2_KEY]
 
     return page_results
-

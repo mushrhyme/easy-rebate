@@ -60,6 +60,27 @@ export const RagAdminPanel = () => {
     enabled: isAdmin,
   })
 
+  const { data: retailRagAnswerData, isLoading: retailRagAnswerLoading } = useQuery({
+    queryKey: ['rag-admin', 'retail-rag-answer-items'],
+    queryFn: () => ragAdminApi.getRetailRagAnswerItems(),
+    enabled: isAdmin,
+  })
+  const retailRagAnswerItems = (retailRagAnswerData?.items ?? []) as Array<{
+    得意先: string
+    受注先CD: string
+    小売先CD: string
+  }>
+
+  const rebuildRetailRagIndexMutation = useMutation({
+    mutationFn: () => ragAdminApi.rebuildRetailRagAnswerIndex(),
+    onSuccess: (data) => {
+      alert(`벡터 인덱스 구축 완료: ${data.vector_count}건`)
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.detail ?? err?.message ?? '인덱스 구축 실패')
+    },
+  })
+
   const deleteUserMutation = useMutation({
     mutationFn: (userId: number) => authApi.deleteUser(userId),
     onSuccess: () => {
@@ -334,6 +355,53 @@ export const RagAdminPanel = () => {
       </div>
 
       <div className="rag-admin-content">
+        <section className="rag-admin-card rag-admin-card-wide">
+          <h3 className="rag-admin-section-title">판매처-소매처 RAG 정답지</h3>
+          <p className="rag-admin-helper">
+            created_by_user_id가 null이 아닌 문서에 속한 item의 得意先 / 受注先CD / 小売先CD 목록입니다. 아래 목록으로 벡터 인덱스를 구축하면 매핑 모달 4번(得意先 RAG 정답지 類似度)에서 검색됩니다.
+          </p>
+          <p className="rag-admin-helper">
+            <button
+              type="button"
+              className="rag-admin-button primary"
+              disabled={rebuildRetailRagIndexMutation.isPending || retailRagAnswerItems.length === 0}
+              onClick={() => rebuildRetailRagIndexMutation.mutate()}
+            >
+              {rebuildRetailRagIndexMutation.isPending ? '구축 중…' : '벡터 인덱스 재구축'}
+            </button>
+          </p>
+          {retailRagAnswerLoading ? (
+            <p>読み込み中...</p>
+          ) : (
+            <div className="rag-admin-master-grid-wrap">
+              <table className="rag-admin-master-table">
+                <thead>
+                  <tr>
+                    <th>得意先</th>
+                    <th>受注先CD</th>
+                    <th>小売先CD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {retailRagAnswerItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={3}>該当データがありません。</td>
+                    </tr>
+                  ) : (
+                    retailRagAnswerItems.map((row, idx) => (
+                      <tr key={idx}>
+                        <td>{row.得意先 || '—'}</td>
+                        <td>{row.受注先CD || '—'}</td>
+                        <td>{row.小売先CD || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
         <section className="rag-admin-card rag-admin-card-wide">
           <h3 className="rag-admin-section-title">管理マスタ</h3>
           <div className="rag-admin-subtabs">

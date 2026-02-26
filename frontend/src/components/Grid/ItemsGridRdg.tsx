@@ -164,10 +164,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
-      // 검토 탭 frozen 컬럼 (표시 전용, 저장 제외)
-      row['소매처코드'] = item.frozen_retail_code ?? null
-      row['판매처코드'] = item.frozen_dist_code ?? null
-      row['제품코드'] = item.frozen_product_code ?? null
+      // 검토 탭 frozen: 受注先CD/小売先CD/商品CD → item_data 원천만 사용 (타입과 동일)
 
       return row
     })
@@ -243,10 +240,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
-      // 검토 탭 frozen 컬럼 (표시 전용)
-      row['소매처코드'] = item.frozen_retail_code ?? null
-      row['판매처코드'] = item.frozen_dist_code ?? null
-      row['제품코드'] = item.frozen_product_code ?? null
+      // 검토 탭 frozen: item_data 원천만 사용
 
       return row
     })
@@ -505,6 +499,130 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     }
   }, [updateItem, sessionId, queryClient, pdfFilename, pageNumber])
 
+  /** 일괄 검토 체크: 최신 데이터 1회 fetch 후 모든 항목 병렬 PATCH (CancelledError 방지) */
+  type BulkReviewUpdate = { itemId: number; field: 'first_review_checked' | 'second_review_checked'; checked: boolean }
+  const bulkUpdateReviewStatus = useCallback(async (updates: BulkReviewUpdate[]) => {
+    if (updates.length === 0) return
+    if (!sessionId) {
+      alert('セッションIDがありません。ページを再読み込みしてください。')
+      return
+    }
+    // 낙관적 업데이트: 한 번에 반영
+    setRows((prev) =>
+      prev.map((r) => {
+        const u = updates.find((x) => x.itemId === r.item_id)
+        if (!u) return r
+        return {
+          ...r,
+          first_review_checked: u.field === 'first_review_checked' ? u.checked : r.first_review_checked,
+          second_review_checked: u.field === 'second_review_checked' ? u.checked : r.second_review_checked,
+        }
+      })
+    )
+    let latestItems: { items: any[] }
+    try {
+      latestItems = await queryClient.fetchQuery({
+        queryKey: ['items', pdfFilename, pageNumber],
+        queryFn: () => itemsApi.getByPage(pdfFilename, pageNumber),
+        staleTime: 0,
+      })
+    } catch (err: any) {
+      const isCancelled = err?.name === 'CancelledError' || /cancel/i.test(String(err?.message))
+      if (isCancelled) {
+        setRows((prev) =>
+          prev.map((r) => {
+            const u = updates.find((x) => x.itemId === r.item_id)
+            if (!u) return r
+            return {
+              ...r,
+              first_review_checked: u.field === 'first_review_checked' ? !u.checked : r.first_review_checked,
+              second_review_checked: u.field === 'second_review_checked' ? !u.checked : r.second_review_checked,
+            }
+          })
+        )
+        queryClient.invalidateQueries({ queryKey: ['items', pdfFilename, pageNumber] })
+        return
+      }
+      console.error('❌ [일괄 체크] 최신 데이터 가져오기 실패:', err)
+      alert('データの取得に失敗しました。ページを再読み込みしてください。')
+      setRows((prev) =>
+        prev.map((r) => {
+          const u = updates.find((x) => x.itemId === r.item_id)
+          if (!u) return r
+          return {
+            ...r,
+            first_review_checked: u.field === 'first_review_checked' ? !u.checked : r.first_review_checked,
+            second_review_checked: u.field === 'second_review_checked' ? !u.checked : r.second_review_checked,
+          }
+        })
+      )
+      return
+    }
+    const payloads: { itemId: number; request: any }[] = []
+    const skipIds = new Set<number>()
+    for (const u of updates) {
+      const item = latestItems.items.find((i: any) => i.item_id === u.itemId)
+      if (!item || item.version === undefined || item.version === null) {
+        skipIds.add(u.itemId)
+        continue
+      }
+      const curFirst = item.review_status?.first_review?.checked ?? false
+      const curSecond = item.review_status?.second_review?.checked ?? false
+      payloads.push({
+        itemId: item.item_id,
+        request: {
+          item_data: item.item_data ?? {},
+          review_status: {
+            first_review: { checked: u.field === 'first_review_checked' ? u.checked : curFirst },
+            second_review: { checked: u.field === 'second_review_checked' ? u.checked : curSecond },
+          },
+          expected_version: item.version,
+          session_id: sessionId,
+        },
+      })
+    }
+    if (skipIds.size) {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!skipIds.has(r.item_id)) return r
+          const u = updates.find((x) => x.itemId === r.item_id)
+          if (!u) return r
+          return {
+            ...r,
+            first_review_checked: u.field === 'first_review_checked' ? !u.checked : r.first_review_checked,
+            second_review_checked: u.field === 'second_review_checked' ? !u.checked : r.second_review_checked,
+          }
+        })
+      )
+    }
+    const results = await Promise.allSettled(
+      payloads.map((p) => updateItem.mutateAsync({ itemId: p.itemId, request: p.request }))
+    )
+    const failed = results
+      .map((r, i) => (r.status === 'rejected' ? payloads[i].itemId : null))
+      .filter((id): id is number => id != null)
+    if (failed.length > 0) {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!failed.includes(r.item_id)) return r
+          const u = updates.find((x) => x.itemId === r.item_id)
+          if (!u) return r
+          return {
+            ...r,
+            first_review_checked: u.field === 'first_review_checked' ? !u.checked : r.first_review_checked,
+            second_review_checked: u.field === 'second_review_checked' ? !u.checked : r.second_review_checked,
+          }
+        })
+      )
+      queryClient.invalidateQueries({ queryKey: ['items', pdfFilename, pageNumber] })
+      const firstRejected = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined
+      const msg = firstRejected?.reason?.response?.data?.detail ?? firstRejected?.reason?.message ?? '不明'
+      alert(`${failed.length}件の更新に失敗しました。\n\n例: ${msg}`)
+    } else {
+      queryClient.invalidateQueries({ queryKey: ['items', pdfFilename, pageNumber] })
+    }
+  }, [sessionId, queryClient, pdfFilename, pageNumber, updateItem])
+
   // 행 추가/삭제는 useItemsGridColumns에서 사용하므로 먼저 정의
   const handleAddRow = useCallback(async (afterItemId?: number) => {
     if (!pdfFilename || !pageNumber) return
@@ -577,6 +695,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     deleteItemPending: deleteItem.isPending,
     onOpenUnitPriceModal: setUnitPriceModalRow,
     readOnly,
+    pageRole: pageMetaData?.page_role ?? null,
   })
 
   // 행 편집 시작 (락 획득)
@@ -690,7 +809,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       version: updatedItem.version
     })
 
-    // item_data 추출 (공통·표시전용 필드 제외)
+    // item_data 추출 (공통·표시전용 필드 제외). タイプ null/빈값 → '条件'
     const itemData: any = {}
     Object.keys(rowData).forEach((key) => {
       if (
@@ -698,12 +817,11 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         key !== 'item_order' &&
         key !== 'customer' &&
         key !== 'first_review_checked' &&
-        key !== 'second_review_checked' &&
-        key !== '소매처코드' &&
-        key !== '판매처코드' &&
-        key !== '제품코드'
+        key !== 'second_review_checked'
       ) {
-        itemData[key] = rowData[key]
+        let val = rowData[key]
+        if (key === 'タイプ' && (val == null || String(val).trim() === '')) val = '条件'
+        itemData[key] = val
       }
     })
 
@@ -927,55 +1045,92 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     }
   }, [saveAllEditingRows])
 
-  // 부모에서 저장·일괄 체크 호출용 노출
+  // 부모에서 저장·일괄 체크 호출용 노출 (1회 fetch + 병렬 PATCH로 한 번에 처리)
   useImperativeHandle(ref, () => ({
     save() {
       void saveAllEditingRows()
     },
     async checkAllFirst() {
       const currentRows = rowsRef.current
-      const toCheck = currentRows.filter((r) => !r.first_review_checked)
-      for (const row of toCheck) {
-        await handleCheckboxUpdate(row.item_id, 'first_review_checked', true)
-      }
+      const updates = currentRows
+        .filter((r) => !r.first_review_checked)
+        .map((r) => ({ itemId: r.item_id, field: 'first_review_checked' as const, checked: true }))
+      await bulkUpdateReviewStatus(updates)
     },
     async checkAllSecond() {
       const currentRows = rowsRef.current
-      const toCheck = currentRows.filter((r) => !r.second_review_checked)
-      for (const row of toCheck) {
-        await handleCheckboxUpdate(row.item_id, 'second_review_checked', true)
-      }
+      const updates = currentRows
+        .filter((r) => !r.second_review_checked)
+        .map((r) => ({ itemId: r.item_id, field: 'second_review_checked' as const, checked: true }))
+      await bulkUpdateReviewStatus(updates)
     },
     async uncheckAllFirst() {
       const currentRows = rowsRef.current
-      const toUncheck = currentRows.filter((r) => r.first_review_checked)
-      for (const row of toUncheck) {
-        await handleCheckboxUpdate(row.item_id, 'first_review_checked', false)
-      }
+      const updates = currentRows
+        .filter((r) => r.first_review_checked)
+        .map((r) => ({ itemId: r.item_id, field: 'first_review_checked' as const, checked: false }))
+      await bulkUpdateReviewStatus(updates)
     },
     async uncheckAllSecond() {
       const currentRows = rowsRef.current
-      const toUncheck = currentRows.filter((r) => r.second_review_checked)
-      for (const row of toUncheck) {
-        await handleCheckboxUpdate(row.item_id, 'second_review_checked', false)
-      }
+      const updates = currentRows
+        .filter((r) => r.second_review_checked)
+        .map((r) => ({ itemId: r.item_id, field: 'second_review_checked' as const, checked: false }))
+      await bulkUpdateReviewStatus(updates)
     },
-  }), [saveAllEditingRows, handleCheckboxUpdate])
+  }), [saveAllEditingRows, bulkUpdateReviewStatus])
 
   const handleUnitPriceSelect = useCallback(
-    (match: { 시키리?: number; 본부장?: number }) => {
-      if (!unitPriceModalRow) return
+    async (match: { 제품코드?: string | number; 시키리?: number; 본부장?: number }) => {
+      if (!unitPriceModalRow || !sessionId || !pdfFilename || pageNumber == null) return
       const itemId = unitPriceModalRow.item_id
+      const updatedRow = {
+        ...unitPriceModalRow,
+        仕切: match.시키리 ?? unitPriceModalRow['仕切'],
+        本部長: match.본부장 ?? unitPriceModalRow['本部長'],
+        商品CD: match.제품코드 != null ? String(match.제품코드) : unitPriceModalRow['商品CD'],
+      }
       setRows((prev) =>
-        prev.map((r) =>
-          r.item_id === itemId
-            ? { ...r, 仕切: match.시키리 ?? r['仕切'], 本部長: match.본부장 ?? r['本部長'] }
-            : r
-        )
+        prev.map((r) => (r.item_id === itemId ? updatedRow : r))
       )
       setUnitPriceModalRow(null)
+
+      const item = items.find((i) => i.item_id === itemId)
+      if (!item) return
+      const itemData: Record<string, unknown> = {}
+      Object.keys(updatedRow).forEach((key) => {
+        if (
+          key !== 'item_id' &&
+          key !== 'item_order' &&
+          key !== 'customer' &&
+          key !== 'first_review_checked' &&
+          key !== 'second_review_checked'
+        ) {
+          let val = updatedRow[key]
+          if (key === 'タイプ' && (val == null || String(val).trim() === '')) val = '条件'
+          itemData[key] = val
+        }
+      })
+      try {
+        await updateItem.mutateAsync({
+          itemId,
+          request: {
+            item_data: itemData,
+            review_status: {
+              first_review: { checked: Boolean(updatedRow.first_review_checked) },
+              second_review: { checked: Boolean(updatedRow.second_review_checked) },
+            },
+            expected_version: item.version,
+            session_id: sessionId,
+          },
+        })
+      } catch (err: unknown) {
+        const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? (err as Error)?.message
+        console.error('❌ [단가 적용 저장 실패]', msg)
+        alert(`保存に失敗しました: ${msg}`)
+      }
     },
-    [unitPriceModalRow]
+    [unitPriceModalRow, sessionId, pdfFilename, pageNumber, items, updateItem]
   )
 
   /** 동일 得意先CD or 得意先인 행을 그룹 키로 식별 (페이지 내 일괄 적용용) */
@@ -993,7 +1148,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       setRows((prev) =>
         prev.map((r) =>
           getRetailGroupKey(r) === groupKey
-            ? { ...r, 판매처코드: match.판매처코드, 소매처코드: match.소매처코드 }
+            ? { ...r, 受注先CD: match.판매처코드, 小売先CD: match.소매처코드 }
             : r
         )
       )

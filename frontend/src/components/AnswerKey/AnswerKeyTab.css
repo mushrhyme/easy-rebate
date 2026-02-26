@@ -278,12 +278,28 @@
 .answer-key-right {
   flex: 3;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #fff;
   border-radius: 8px;
   border: 1px solid #e5e7eb;
   overflow: hidden;
+}
+
+/* 탭·헤더 아래 콘텐츠 영역이 남은 높이를 채우고 세로 스크롤 */
+.answer-key-right-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.answer-key-right-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .answer-key-right-tabs {

@@ -21,22 +21,13 @@ import './Dashboard.css'
 
 const CHART_HUE_COLORS = ['#667eea', '#764ba2', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
 
-export interface DashboardProps {
-  /** 해당 문서로 정답지 탭을 열 때 호출 (문서 선택 시 정답지 탭으로 전환) */
-  /** RAG 문서 클릭 시 정답지 탭으로 이동. relative_path 있으면 img 기반 뷰 사용 */
-  onOpenAnswerKeyWithDocument?: (payload: {
-    pdf_filename: string
-    total_pages: number
-    relative_path: string | null
-  }) => void
-}
+export interface DashboardProps {}
 
-export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) {
+export function Dashboard(_props: DashboardProps = {}) {
   const { user, logout } = useAuth()
   const queryClient = useQueryClient()
   const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const [chartByFormType, setChartByFormType] = useState(false)
-  const [formTypeListModalFormType, setFormTypeListModalFormType] = useState<string | null>(null)
   /** 연월 필터. null = 전체. RAG 섹션 제외한 현황 데이터에 적용 */
   const [selectedYearMonth, setSelectedYearMonth] = useState<{ year: number; month: number } | null>(null)
   const { formTypeLabel } = useFormTypes()
@@ -93,11 +84,16 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
     refetchInterval: 60000,
   })
 
+  const ragStatusYearMonth = useMemo(() => {
+    if (selectedYearMonth) return selectedYearMonth
+    const d = new Date()
+    return { year: d.getFullYear(), month: d.getMonth() + 1 }
+  }, [selectedYearMonth])
+
   const { data: ragData, isLoading: ragLoading, error: ragError } = useQuery({
-    queryKey: ['rag-admin', 'status'],
-    queryFn: () => ragAdminApi.getStatus(),
+    queryKey: ['rag-admin', 'status', ragStatusYearMonth.year, ragStatusYearMonth.month],
+    queryFn: () => ragAdminApi.getStatus({ year: ragStatusYearMonth.year, month: ragStatusYearMonth.month }),
     refetchInterval: 60000,
-    // 현황 탭 RAG·文書様式·ページ役割 — 비관리자도 조회 가능 (백엔드 읽기 허용)
   })
 
   const { data: customerStatsData, isLoading: customerStatsLoading, error: customerStatsError } = useQuery({
@@ -502,23 +498,27 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
             <div className="dashboard-cards dashboard-cards-rag">
               <div className="dashboard-card dashboard-card-rag">
                 <div className="dashboard-card-value">{ragData.total_vectors.toLocaleString()}</div>
-                <div className="dashboard-card-label">総ベクター数</div>
+                <div className="dashboard-card-label">全体解答（ベクター総数）</div>
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-img">
                 <div className="dashboard-card-value">{imgFolderPagesTotal.toLocaleString()}</div>
-                <div className="dashboard-card-label">解答ページ数（base DB）</div>
+                <div className="dashboard-card-label">ベース解答（img 初回DB）</div>
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
-                <div className="dashboard-card-value">{(ragData.answer_key_pages_total ?? 0).toLocaleString()}</div>
-                <div className="dashboard-card-label">解答ページ数（upload DB）</div>
+                <div className="dashboard-card-value">{(ragData.merged_pages ?? 0).toLocaleString()}</div>
+                <div className="dashboard-card-label">使用中解答</div>
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
-                <div className="dashboard-card-value">{(ragData.answer_key_pages_this_month ?? 0).toLocaleString()}</div>
-                <div className="dashboard-card-label">今月アップロード分</div>
+                <div className="dashboard-card-value">{(ragData.unused_pages ?? 0).toLocaleString()}</div>
+                <div className="dashboard-card-label">未使用解答</div>
               </div>
               <div className="dashboard-card dashboard-card-rag dashboard-card-answer-key">
-                <div className="dashboard-card-value">{(ragData.answer_key_pages_last_month ?? 0).toLocaleString()}</div>
-                <div className="dashboard-card-label">先月アップロード分</div>
+                <div className="dashboard-card-value">{(ragData.answer_key_pages_in_period ?? 0).toLocaleString()}</div>
+                <div className="dashboard-card-label">
+                  {selectedYearMonth
+                    ? `${selectedYearMonth.year}年${selectedYearMonth.month}月 作成分`
+                    : '今月作成分'}
+                </div>
               </div>
             </div>
           )}
@@ -551,7 +551,7 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
                       <th>表示名</th>
                       <th className="dashboard-th-num">嵌入文書数</th>
                       <th className="dashboard-th-num">ページ数</th>
-                      <th className="dashboard-col-action">{isAdmin ? '操作' : '一覧'}</th>
+                      <th className="dashboard-col-action">{isAdmin ? '操作' : ''}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -580,16 +580,6 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
                           <td className="dashboard-td-num">{docCount.toLocaleString()}</td>
                           <td className="dashboard-td-num">{pageCount.toLocaleString()}</td>
                           <td className="dashboard-col-action">
-                            {onOpenAnswerKeyWithDocument && (
-                              <button
-                                type="button"
-                                className="dashboard-button dashboard-button-small dashboard-button-list"
-                                onClick={() => setFormTypeListModalFormType(opt.value)}
-                                title="該当様式の文書一覧を開き、クリックで解答作成タブへ"
-                              >
-                                一覧
-                              </button>
-                            )}
                             {isAdmin && (
                               <>
                                 <button
@@ -652,71 +642,6 @@ export function Dashboard({ onOpenAnswerKeyWithDocument }: DashboardProps = {}) 
               </div>
             )}
           </div>
-
-          {/* 様式別 嵌入文書一覧 모달: 문서 클릭 시 정답지 탭으로 이동 */}
-          {formTypeListModalFormType != null && onOpenAnswerKeyWithDocument && (
-            <div
-              className="dashboard-modal-overlay"
-              onClick={() => setFormTypeListModalFormType(null)}
-              role="dialog"
-              aria-modal="true"
-              aria-label="該当様式の文書一覧"
-            >
-              <div className="dashboard-modal" onClick={(e) => e.stopPropagation()}>
-                <h3 className="dashboard-modal-title">
-                  様式 {formTypeLabel(formTypeListModalFormType)} の文書一覧
-                </h3>
-                <p className="dashboard-modal-note">
-                  ベクターDB（RAG）に嵌入された文書一覧です。クリックで解答作成タブでその文書の正解を表示します。
-                </p>
-                <div className="dashboard-modal-list-wrap">
-                  {(() => {
-                    const docs = answerKeysFromImgData?.by_form_type?.[formTypeListModalFormType] ?? []
-                    if (docs.length === 0) {
-                      return <p className="dashboard-empty">該当様式でベクターDBに嵌入された文書がありません。</p>
-                    }
-                    return (
-                      <ul className="dashboard-modal-doc-list">
-                        {docs.map((d) => {
-                          const pdfFilename = d.pdf_name?.endsWith('.pdf') ? d.pdf_name : `${d.pdf_name ?? ''}.pdf`
-                          return (
-                            <li key={d.relative_path ?? pdfFilename}>
-                              <button
-                                type="button"
-                                className="dashboard-modal-doc-item"
-                                onClick={() => {
-                                  onOpenAnswerKeyWithDocument({
-                                    pdf_filename: pdfFilename,
-                                    total_pages: d.total_pages ?? 0,
-                                    relative_path: d.relative_path ?? null,
-                                  })
-                                  setFormTypeListModalFormType(null)
-                                }}
-                              >
-                                <span className="dashboard-modal-doc-name" title={pdfFilename}>
-                                  {d.pdf_name ?? pdfFilename}
-                                </span>
-                                <span className="dashboard-modal-doc-pages">{d.total_pages ?? 0}ページ</span>
-                              </button>
-                            </li>
-                          )
-                        })}
-                      </ul>
-                    )
-                  })()}
-                </div>
-                <div className="dashboard-modal-actions">
-                  <button
-                    type="button"
-                    className="dashboard-button dashboard-button-small"
-                    onClick={() => setFormTypeListModalFormType(null)}
-                  >
-                    閉じる
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
         </section>
       </div>

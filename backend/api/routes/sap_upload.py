@@ -1,12 +1,13 @@
 """
 SAP 업로드 엑셀 파일 생성 API
-- 데이터 입력/수식은 data/sap_upload_formulas.json 설정을 읽어 적용 (단일 소스)
+- 데이터 입력/수식은 static/sap_upload_formulas.json 설정을 읽어 적용 (단일 소스)
 """
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from io import BytesIO
+import csv
 import re
 import pandas as pd
 from openpyxl import load_workbook, Workbook
@@ -19,6 +20,37 @@ from backend.core.auth import get_current_user_optional
 from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
+
+
+def _get_project_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+_RETAIL_USER_CSV = _get_project_root() / "database" / "csv" / "retail_user.csv"
+
+# 소매처코드 → 담당자명 캐시 (D열 매핑용). retail_user.csv 컬럼: 소매처코드, 소매처명, 담당자ID, 담당자명, ID
+_retail_code_to_담당자명: Optional[Dict[str, str]] = None
+
+
+def _get_담당자명_by_小売先CD(retail_code: str) -> str:
+    """retail_user.csv에서 소매처코드=小売先CD인 행의 담당자명 반환 (없으면 '')."""
+    global _retail_code_to_담당자명
+    code = (retail_code or "").strip()
+    if not code:
+        return ""
+    if _retail_code_to_담당자명 is None:
+        _retail_code_to_담당자명 = {}
+        if _RETAIL_USER_CSV.exists():
+            try:
+                with open(_RETAIL_USER_CSV, "r", encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        rc = (row.get("소매처코드") or "").strip()
+                        name = (row.get("담당자명") or "").strip()
+                        if rc and rc not in _retail_code_to_담당자명:
+                            _retail_code_to_담당자명[rc] = name
+            except Exception as e:
+                print(f"❌ [retail_user] 읽기 오류: {e}")
+    return (_retail_code_to_담당자명 or {}).get(code, "")
 
 
 # ---------- 설정 기반 규칙 해석 (rule → 값) ----------
@@ -181,7 +213,7 @@ def get_all_items_current(
 
 
 def _load_formulas_config() -> Dict[str, Any]:
-    """sap_upload_formulas.json 로드 (없으면 기본값)."""
+    """static/sap_upload_formulas.json 로드 (없으면 기본값)."""
     path = _get_formulas_path()
     if path.exists():
         try:
@@ -199,7 +231,7 @@ def process_item_for_sap(
 ) -> Dict[str, Any]:
     """
     아이템 데이터를 SAP 양식에 맞게 가공.
-    config(sap_upload_formulas.json)의 dataInputColumns 규칙을 적용.
+    config(static/sap_upload_formulas.json)의 dataInputColumns 규칙을 적용.
     """
     item_data = item.get('item_data', {})
     if isinstance(item_data, str):
@@ -302,6 +334,15 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
     for item in items:
         form_type = item.get("form_type", "01")
         processed = process_item_for_sap(item, form_type, config)
+        # D열: item_data에 없음. J열(小売先CD)로 retail_user.csv 매핑 담당자명으로 항상 채움
+        item_data = item.get("item_data") or {}
+        if isinstance(item_data, str):
+            try:
+                item_data = json.loads(item_data)
+            except Exception:
+                item_data = {}
+        retail_cd = (processed.get("J") or item_data.get("小売先CD") or "").strip()
+        processed["D"] = _get_담당자명_by_小売先CD(retail_cd)
 
         for col in data_columns:
             val = processed.get(col)
@@ -534,6 +575,15 @@ async def preview_sap_excel(
         for item in preview_items:
             form_type = item.get("form_type", "01")
             processed = process_item_for_sap(item, form_type, config)
+            # D열: 小売先CD → retail_user 매핑 담당자명
+            item_data = item.get("item_data") or {}
+            if isinstance(item_data, str):
+                try:
+                    item_data = json.loads(item_data)
+                except Exception:
+                    item_data = {}
+            retail_cd = (processed.get("J") or item_data.get("小売先CD") or "").strip()
+            processed["D"] = _get_담당자명_by_小売先CD(retail_cd)
 
             row_data: Dict[str, Any] = {
                 "pdf_filename": item.get("pdf_filename", ""),
@@ -630,89 +680,34 @@ async def get_sap_column_names():
 # ========== SAP 산식 설정 (양식지별 편집용) ==========
 def _get_formulas_path() -> Path:
     project_root = Path(__file__).resolve().parent.parent.parent.parent
-    data_dir = project_root / "data"
-    data_dir.mkdir(exist_ok=True)
-    return data_dir / "sap_upload_formulas.json"
+    return project_root / "static" / "sap_upload_formulas.json"
 
 
 def _default_formulas() -> Dict[str, Any]:
     """
-    sap_upload.md 기반 기본 산식 (양식지 01~05별).
-    byForm 값: 문자열=필드명(field), 객체=rule(field/cond/expr). 백엔드가 이 규칙을 해석해 적용.
+    sap_upload.md 기반 기본 산식 (파일 없을 때 fallback).
+    byForm: 문자열=필드명, 객체=rule(field/cond/expr). 백엔드가 해석해 적용.
     """
     return {
         "dataInputColumns": [
-            {"column": "B", "byForm": {"01": {"field": "판매처"}, "02": "", "03": "", "04": "", "05": ""}},
-            {"column": "C", "byForm": {"01": {"field": "판매처コード"}, "02": "", "03": "", "04": "", "05": ""}},
-            {"column": "D", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},
-            {"column": "I", "byForm": {"01": {"field": "得意先"}, "02": {"field": "得意先"}, "03": {"field": "得意先"}, "04": {"field": "得意先"}, "05": {"field": "得意先"}}},
-            {"column": "J", "byForm": {"01": {"field": "得意先"}, "02": {"field": "得意先"}, "03": {"field": "得意先"}, "04": {"field": "得意先"}, "05": {"field": "得意先"}}},
-            {
-                "column": "K",
-                "byForm": {
-                    "01": {"expr": "得意先名 + ' ' + 得意先CD"},
-                    "02": {"field": "得意先様"},
-                    "03": {"field": "得意先名"},
-                    "04": {"field": "得意先"},
-                    "05": {"field": "得意先"},
-                },
-            },
-            {"column": "L", "byForm": {"01": {"field": "商品名"}, "02": {"field": "商品名"}, "03": {"field": "商品名"}, "04": {"field": "商品名"}, "05": {"field": "商品名"}}},
-            {"column": "P", "byForm": {"01": "", "02": "", "03": {"field": "ケース数量"}, "04": "", "05": ""}},
+            {"column": "C", "byForm": {"01": {"field": "受注先CD"}, "02": {"field": "受注先CD"}, "03": {"field": "受注先CD"}, "04": {"field": "受注先CD"}, "05": {"field": "受注先CD"}}},
+            {"column": "D", "byForm": {"01": {"field": "담당자명"}, "02": {"field": "담당자명"}, "03": {"field": "담당자명"}, "04": {"field": "담당자명"}, "05": {"field": "담당자명"}}},
+            {"column": "J", "byForm": {"01": {"field": "小売先CD"}, "02": {"field": "小売先CD"}, "03": {"field": "小売先CD"}, "04": {"field": "小売先CD"}, "05": {"field": "小売先CD"}}},
+            {"column": "M", "byForm": {"01": {"field": "商品CD"}, "02": {"field": "商品CD"}, "03": {"field": "商品CD"}, "04": {"field": "商品CD"}, "05": {"field": "商品CD"}}},
             {
                 "column": "T",
                 "byForm": {
-                    "01": {
-                        "cond": [
-                            {"if_field": "数量単位", "if_eq": "個", "then_field": "数量"},
-                            {"if_field": "数量単位", "if_eq": "CS", "then_expr": "入数*数量"},
-                        ]
-                    },
-                    "02": {"field": "取引数量合計（総数:内数）"},
-                    "03": {"field": "バラ数量"},
-                    "04": {"field_digits": "対象数量又は金額"},
+                    "01": {"cond": [{"if_field": "数量単位", "if_eq": "個", "then_field": "数量"}, {"if_field": "数量単位", "if_eq": "CS", "then_expr": "ケース入数*数量"}]},
+                    "02": {"field": "取引数量合計"},
+                    "03": {"field": "バラ"},
+                    "04": {"field": "対象数量又は金額"},
                     "05": "",
                 },
             },
-            {
-                "column": "Z",
-                "byForm": {
-                    "01": {
-                        "cond": [
-                            {"if_field": "条件区分", "if_eq": "個", "then_field": "条件"},
-                            {"if_field": "条件区分", "if_eq": "CS", "then_expr": "金額/(入数*数量)"},
-                        ]
-                    },
-                    "02": "",
-                    "03": {"expr": "条件+条件小数部*0.01"},
-                    "04": {"expr": "未収条件+未収条件小数部*0.01"},
-                    "05": "",
-                },
-            },
-            {"column": "AD", "byForm": {"01": "", "02": "", "03": {"expr": "単価+単価小数部*0.01"}, "04": "", "05": ""}},
-            {
-                "column": "AL",
-                "byForm": {
-                    "01": {"field": "金額"},
-                    "02": {"field": "リベート金額（税別）"},
-                    "03": {"field": "請求金額"},
-                    "04": {"field": "金額"},
-                    "05": {"field": "請求合計額"},
-                },
-            },
+            {"column": "AL", "byForm": {"01": {"field": "金額"}, "02": {"field": "金額（税別）"}, "03": {"field": "請求金額"}, "04": {"field": "金額"}, "05": {"field": "請求合計額"}}},
         ],
         "excelFormulaColumns": [
             {"column": "U", "formula": "=P3*N3 + R3*O3 + T3", "description": "P×N + R×O + T"},
-            {"column": "V", "formula": "=U3 / N3", "description": "U ÷ N"},
-            {"column": "AF", "formula": "=Z3 + AB3/O3 + AD3/N3", "description": "Z + AB/O + AD/N"},
-            {"column": "AG", "formula": "=AA3 + AC3/O3 + AE3/N3", "description": "AA + AC/O + AE/N"},
-            {"column": "AH", "formula": "=X3 - AF3 - AG3", "description": "X - AF - AG"},
-            {"column": "AI", "formula": "=AF3 * U3", "description": "AF × U"},
-            {"column": "AJ", "formula": "=AG3 * U3", "description": "AG × U"},
-            {"column": "AK", "formula": "=AL3 - AJ3 - AI3", "description": "AL - AJ - AI"},
-            {"column": "AM", "formula": "=AH3 / 0.85", "description": "AH ÷ 0.85"},
-            {"column": "AP", "formula": "=AH3 - AM3*AN3*0.01 - AM3*AO3*0.01", "description": "AH - AM×AN×0.01 - AM×AO×0.01"},
-            {"column": "AT", "formula": "=X3 - AP3", "description": "X - AP"},
         ],
     }
 

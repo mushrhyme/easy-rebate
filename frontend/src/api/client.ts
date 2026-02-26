@@ -191,44 +191,6 @@ export const documentsApi = {
   },
 
   /**
-   * img フォルダ内の解答フォルダ（relative_path）の answer.json 一式取得
-   */
-  getAnswerJsonFromImg: async (
-    relativePath: string
-  ): Promise<{
-    pdf_filename: string
-    form_type: string | null
-    total_pages: number
-    pages: Array<Record<string, any>>
-  }> => {
-    const response = await client.get('/api/documents/answer-json-from-img', {
-      params: { relative_path: relativePath },
-    })
-    return response.data
-  },
-
-  /**
-   * img 폴더의 Page*_answer.json에만 저장 (DB 미사용). RAG 문서는 여기서 읽어오므로 여기 저장해야 null 덮어쓰기 없음.
-   */
-  saveAnswerJsonFromImg: async (
-    relativePath: string,
-    body: { pages: Array<{ page_number: number; page_role?: string; page_meta?: Record<string, unknown>; items: Array<Record<string, unknown>> }> }
-  ): Promise<{ success: boolean; message: string; pages_count: number }> => {
-    const response = await client.put('/api/documents/answer-json-from-img', {
-      relative_path: relativePath,
-      pages: body.pages,
-    })
-    return response.data
-  },
-
-  /** img 폴더 정답지 페이지 이미지 URL (RAG 문서 뷰용). GET으로 이미지 반환 */
-  getImgPageImageUrl: (relativePath: string, pageNumber: number): string => {
-    const base = client.defaults.baseURL ?? ''
-    const sep = base.includes('?') ? '&' : '?'
-    return `${base}/api/documents/img-page-image${sep}relative_path=${encodeURIComponent(relativePath)}&page_number=${pageNumber}`
-  },
-
-  /**
    * 現在のRAGベクトルインデックスに含まれる文書(pdf_filename)一覧。アップロード一覧のハイライト用。
    */
   getInVectorIndex: async (): Promise<{ pdf_filenames: string[] }> => {
@@ -701,7 +663,7 @@ export const searchApi = {
   },
 
   /**
-   * retail_user.csv 대표슈퍼명 전체. 거래처↔담당 매핑 시 notepad와 동일하게 전체 풀에서 최적 매칭용.
+   * retail_user.csv 소매처명 전체. 거래처↔담당 매핑 시 notepad와 동일하게 전체 풀에서 최적 매칭용.
    */
   getAllSuperNames: async (): Promise<{ super_names: string[] }> => {
     const response = await client.get<{ super_names: string[] }>('/api/search/all-super-names')
@@ -761,6 +723,38 @@ export const searchApi = {
   },
 
   /**
+   * sap_product.csv 제품명 검색. 최종후보에는 제품코드만 반영. 반환: [{ 제품코드, 제품명 }]
+   */
+  getProductCandidatesBySapProduct: async (
+    query: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    query: string
+    matches: Array<{ 제품코드: string; 제품명: string }>
+    skipped_reason?: string | null
+  }> => {
+    const topK = options?.topK ?? 10
+    const minSim = options?.minSimilarity ?? 0
+    const url = `/api/search/product/candidates-by-sap-product?query=${encodeURIComponent(query)}&top_k=${topK}&min_similarity=${minSim}`
+    const response = await client.get(url)
+    return response.data
+  },
+
+  /**
+   * 商品コード로 unit_price 1건 조회. 仕切・本部長 자동완성용.
+   */
+  getUnitPriceByProductCode: async (
+    productCode: string
+  ): Promise<{
+    row: { 商品コード: string; 仕切: number | null; 本部長: number | null } | null
+  }> => {
+    const response = await client.get('/api/search/unit-price-by-product-code', {
+      params: { product_code: productCode },
+    })
+    return response.data
+  },
+
+  /**
    * 商品名으로 단가 매칭 (제품명·용량 분리 후 unit_price 유사도 조회 → 시키리/본부장 반환)
    */
   getUnitPriceByProduct: async (
@@ -813,12 +807,14 @@ export const searchApi = {
     return response.data
   },
 
-  /** 得意先CD로 domae_retail_1 조회 → 대표슈퍼코드 1건 (판매처는 dist_retail) */
+  /** 得意先CD(도매소매처코드)로 domae_retail_1 조회 → 소매처코드 1건 (판매처는 dist_retail) */
   getRetailByCustomerCode: async (
     customerCode: string
   ): Promise<{
     customer_code_input: string
     match: {
+      도매소매처코드?: string
+      도매소매처명?: string
       소매처코드: string
       소매처명: string
       판매처코드: string
@@ -833,13 +829,15 @@ export const searchApi = {
     return response.data
   },
 
-  /** 得意先으로 domae_retail_2 소매처명 유사도 후보 최대 5건 */
+  /** 得意先으로 domae_retail_2 소매처명 유사도 후보 최대 5건 (도매소매처명 = 1열) */
   getRetailCandidatesByShopName: async (
     customerName: string,
     options?: { topK?: number; minSimilarity?: number }
   ): Promise<{
     customer_name_input: string
     matches: Array<{
+      도매소매처코드?: string
+      도매소매처명?: string
       소매처코드: string
       소매처명: string
       판매처코드: string
@@ -855,7 +853,32 @@ export const searchApi = {
     return response.data
   },
 
-  /** sap_retail에서 대표슈퍼코드로 1건 조회（SAP受注先・SAP小売先 표시용） */
+  /** 得意先으로 판매처-소매처 RAG 정답지 벡터 검색 후보 */
+  getRetailCandidatesByRagAnswer: async (
+    customerName: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    customer_name_input: string
+    matches: Array<{
+      得意先?: string
+      도매소매처코드?: string
+      도매소매처명?: string
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+      similarity: number
+    }>
+    skipped_reason?: string | null
+  }> => {
+    const params: Record<string, any> = { customer_name: customerName }
+    if (options?.topK != null) params.top_k = options.topK
+    if (options?.minSimilarity != null) params.min_similarity = options.minSimilarity
+    const response = await client.get('/api/search/retail/candidates-by-rag-answer', { params })
+    return response.data
+  },
+
+  /** sap_retail에서 소매처코드로 1건 조회（SAP受注先・SAP小売先 표시용） */
   getSapRetailRowByRetailCode: async (
     retailCode: string
   ): Promise<{
@@ -874,7 +897,7 @@ export const searchApi = {
     return response.data
   },
 
-  /** sap_retail.csv 대표슈퍼명·판매처명 유사도 검색（매핑 후보 없을 때 폴백） */
+  /** sap_retail.csv 소매처명·판매처명 유사도 검색（매핑 후보 없을 때 폴백） */
   getRetailCandidatesBySapRetail: async (
     query: string,
     options?: { topK?: number; minSimilarity?: number }
@@ -1149,16 +1172,21 @@ export const sapUploadApi = {
  */
 export const ragAdminApi = {
   /**
-   * 벡터 DB 상태 조회
+   * 벡터 DB 상태 조회.
+   * year/month 지정 시 answer_key_pages_in_period = 해당 연월에 merged된 정답지 수.
    */
-  getStatus: async (): Promise<{
+  getStatus: async (params?: { year?: number; month?: number }): Promise<{
     total_vectors: number
     per_form_type: Array<{ form_type: string | null; vector_count: number }>
-    answer_key_pages_total: number
-    answer_key_pages_this_month: number
-    answer_key_pages_last_month: number
+    merged_pages: number
+    unused_pages: number
+    answer_key_pages_in_period: number | null
   }> => {
-    const response = await client.get('/api/rag-admin/status')
+    const q = new URLSearchParams()
+    if (params?.year != null) q.set('year', String(params.year))
+    if (params?.month != null) q.set('month', String(params.month))
+    const query = q.toString() ? `?${q.toString()}` : ''
+    const response = await client.get(`/api/rag-admin/status${query}`)
     return response.data
   },
 
@@ -1265,6 +1293,21 @@ export const ragAdminApi = {
     return response.data
   },
 
+  /**
+   * 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先CD / 小売先CD
+   */
+  getRetailRagAnswerItems: async (): Promise<{
+    items: Array<{ 得意先: string; 受注先CD: string; 小売先CD: string }>
+  }> => {
+    const response = await client.get('/api/rag-admin/retail-rag-answer-items')
+    return response.data
+  },
+
+  /** 판매처-소매처 RAG 정답지 벡터 인덱스 재구축 (매핑 모달 4번 검색용) */
+  rebuildRetailRagAnswerIndex: async (): Promise<{ message: string; vector_count: number }> => {
+    const response = await client.post('/api/rag-admin/retail-rag-answer-index/rebuild')
+    return response.data
+  },
 }
 /** 分析(기본 RAG) LLM: gemini | gpt5.2 */
 export type RagProvider = 'gemini' | 'gpt5.2'

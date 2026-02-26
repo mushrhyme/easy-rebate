@@ -10,7 +10,7 @@ import json
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
 
@@ -68,13 +68,13 @@ def _ensure_admin(user: Dict[str, Any]) -> None:
 
 def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     """
-    페이지 이미지에서 실제 OCR 텍스트 추출 (임베딩용).
-    우선순위: DB 저장분(_ocr_text) → debug2 → 이미지 Azure(표 복원) → PDF → result
+    학습 리퀘스트 시 임베딩용 OCR 추출.
+    해답 생성 브릿지 문서는 debug2가 있으므로 DB → debug2만 사용, Azure/PDF 호출 없음.
     """
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
     ocr_text = ""
 
-    # 0) 保存時に画面から送ったOCR（再抽出しない）
+    # 0) DB 저장분 (_ocr_text)
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
@@ -90,7 +90,7 @@ def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     except Exception:
         pass
 
-    # 1) debug2 파일
+    # 1) debug2 — 외부 API 호출 없음
     try:
         root = get_project_root()
         debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
@@ -99,45 +99,7 @@ def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     except Exception:
         pass
 
-    # 2) 저장된 페이지 이미지로 Azure OCR + 표 복원
-    if not ocr_text.strip():
-        try:
-            image_path = db.get_page_image_path(pdf_filename, page_number)
-            if image_path:
-                root = get_project_root()
-                full_path = Path(image_path) if Path(image_path).is_absolute() else root / image_path
-                if full_path.exists():
-                    from modules.core.extractors.azure_extractor import get_azure_extractor
-                    from modules.utils.table_ocr_utils import raw_to_table_restored_text
-                    extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
-                    raw = extractor.extract_from_image_raw(image_path=full_path)
-                    if raw:
-                        ocr_text = raw_to_table_restored_text(raw)
-        except Exception:
-            pass
-
-    # 3) PDF 파일에서 Azure(표 복원) 또는 PyMuPDF 폴백
-    if not ocr_text.strip():
-        try:
-            from modules.utils.pdf_utils import find_pdf_path, PdfTextExtractor
-            pdf_path_str = find_pdf_path(pdf_name)
-            if pdf_path_str:
-                extractor = PdfTextExtractor(upload_channel="mail")
-                ocr_text = extractor.extract_text(Path(pdf_path_str), page_number) or ""
-                extractor.close_all()
-        except Exception:
-            pass
-
-    # 4) result/ 페이지 JSON의 text 필드
-    if not ocr_text.strip():
-        try:
-            from modules.core.storage import PageStorage
-            page_data = PageStorage.load_page(pdf_name, page_number)
-            if page_data and isinstance(page_data.get("text"), str):
-                ocr_text = page_data["text"]
-        except Exception:
-            pass
-
+    # 없으면 빈 문자열 반환 (해당 페이지만 스킵, Azure/PDF 호출 안 함)
     return ocr_text.strip()
 
 
@@ -203,13 +165,17 @@ async def build_vector_db(
 
 @router.get("/status")
 async def get_vector_db_status(
+    year: Optional[int] = Query(None, description="선택 연월(년). 기간별 정답지 수에 사용"),
+    month: Optional[int] = Query(None, description="선택 연월(월). 기간별 정답지 수에 사용"),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
     현재 벡터 DB 상태 조회. 로그인 사용자 전체 허용 (읽기 전용).
-    answer_key_pages_*: 사용자가 정답지로 지정해 DB에 올라간 문서의 페이지 수 (Img 폴더 제외).
+    - total_vectors: 인덱스 전체 벡터 수 (미사용 포함)
+    - merged_pages: rag_learning_status_current에서 status='merged'인 페이지 수 (사용 중인 정답지)
+    - unused_pages: total_vectors - merged_pages (미사용 정답지)
+    - answer_key_pages_in_period: year/month 지정 시 해당 연월에 merged된 페이지 수
     """
-    # 읽기 전용이므로 관리자 제한 없음 — 현황 탭에서 비관리자도 RAG·文書様式·ページ役割 확인 가능
     rag_manager = get_rag_manager()
     total_vectors = rag_manager.count_examples()
 
@@ -229,54 +195,39 @@ async def get_vector_db_status(
             for row in cursor.fetchall()
         ]
 
-        # 정답지 문서(DB) 페이지 수: 전체 / 이번달 / 지난달 (created_at 기준)
+        # 사용 중인 정답지: rag_learning_status_current에서 status='merged' 페이지 수
         cursor.execute(
             """
-            SELECT COALESCE(SUM(total_pages), 0) FROM (
-                SELECT total_pages FROM documents_current WHERE is_answer_key_document = TRUE
-                UNION ALL
-                SELECT total_pages FROM documents_archive WHERE is_answer_key_document = TRUE
-            ) t
+            SELECT COUNT(*) FROM rag_learning_status_current WHERE status = 'merged'
             """
         )
-        answer_key_pages_total = int(cursor.fetchone()[0] or 0)
+        merged_pages = int(cursor.fetchone()[0] or 0)
+        unused_pages = max(0, total_vectors - merged_pages)
 
-        cursor.execute(
-            """
-            SELECT COALESCE(SUM(total_pages), 0) FROM (
-                SELECT total_pages FROM documents_current
-                WHERE is_answer_key_document = TRUE AND created_at >= date_trunc('month', CURRENT_DATE)
-                UNION ALL
-                SELECT total_pages FROM documents_archive
-                WHERE is_answer_key_document = TRUE AND created_at >= date_trunc('month', CURRENT_DATE)
-            ) t
-            """
-        )
-        answer_key_pages_this_month = int(cursor.fetchone()[0] or 0)
-
-        cursor.execute(
-            """
-            SELECT COALESCE(SUM(total_pages), 0) FROM (
-                SELECT total_pages FROM documents_current
-                WHERE is_answer_key_document = TRUE
-                  AND created_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
-                  AND created_at < date_trunc('month', CURRENT_DATE)
-                UNION ALL
-                SELECT total_pages FROM documents_archive
-                WHERE is_answer_key_document = TRUE
-                  AND created_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
-                  AND created_at < date_trunc('month', CURRENT_DATE)
-            ) t
-            """
-        )
-        answer_key_pages_last_month = int(cursor.fetchone()[0] or 0)
+        # 선택 연월에 merged된 정답지 수 (updated_at 기준). base DB(created_by_user_id IS NULL) 제외
+        answer_key_pages_in_period: Optional[int] = None
+        if year is not None and month is not None:
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM rag_learning_status_current r
+                WHERE r.status = 'merged'
+                  AND r.updated_at >= date_trunc('month', make_date(%s, %s, 1))
+                  AND r.updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
+                  AND (
+                    EXISTS (SELECT 1 FROM documents_current d WHERE d.pdf_filename = r.pdf_filename AND d.created_by_user_id IS NOT NULL)
+                    OR EXISTS (SELECT 1 FROM documents_archive a WHERE a.pdf_filename = r.pdf_filename AND a.created_by_user_id IS NOT NULL)
+                  )
+                """,
+                (year, month, year, month),
+            )
+            answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
 
     return {
         "total_vectors": int(total_vectors),
         "per_form_type": per_form,
-        "answer_key_pages_total": answer_key_pages_total,
-        "answer_key_pages_this_month": answer_key_pages_this_month,
-        "answer_key_pages_last_month": answer_key_pages_last_month,
+        "merged_pages": merged_pages,
+        "unused_pages": unused_pages,
+        "answer_key_pages_in_period": answer_key_pages_in_period,
     }
 
 
@@ -422,17 +373,6 @@ async def build_vector_from_learning_pages(
     if not rows:
         raise HTTPException(status_code=400, detail="학습 대상으로 선택된 페이지가 없습니다.")
 
-    # form_type 결정 (요청값 우선, 없으면 문서에서 첫 번째 값 사용)
-    form_type_for_index: Optional[str] = request.form_type
-    if not form_type_for_index:
-        for row in rows:
-            doc_form_type = row.get("form_type")
-            if doc_form_type:
-                form_type_for_index = doc_form_type
-                break
-        if not form_type_for_index:
-            form_type_for_index = ""
-
     # (pdf_filename, page_number) 단위로 그룹화 (items 없는 페이지는 1행, item_id=NULL)
     from collections import defaultdict
 
@@ -449,10 +389,11 @@ async def build_vector_from_learning_pages(
 
         merged_items: List[Dict[str, Any]] = []
 
-        # 연월/폼타입 정보 (첫 행 기준)
+        # 연월/폼타입 정보 (이 페이지가 속한 문서 기준: documents_current.form_type)
         first_row = item_rows[0]
         data_year = first_row.get("data_year")
         data_month = first_row.get("data_month")
+        form_type_for_page = (first_row.get("form_type") or "").strip() or ""
         page_role = first_row.get("page_role") or "detail"
         page_meta_raw = first_row.get("page_meta")
         page_meta: Dict[str, Any] = {}
@@ -490,7 +431,7 @@ async def build_vector_from_learning_pages(
         metadata: Dict[str, Any] = {
             "pdf_name": pdf_name,
             "page_num": page_number,
-            "form_type": form_type_for_index,
+            "form_type": form_type_for_page,
             "source": "db_learning_pages",
             "data_year": data_year,
             "data_month": data_month,
@@ -519,7 +460,7 @@ async def build_vector_from_learning_pages(
     result = await asyncio.to_thread(
         rag_manager.build_shard,
         shard_pages,
-        form_type=form_type_for_index or None,
+        form_type=None,
     )
     if not result:
         raise HTTPException(status_code=500, detail="Shard 생성에 실패했습니다.")
@@ -604,8 +545,8 @@ async def get_retail_user_csv(
             reader = csv.DictReader(f)
             for row in reader:
                 rows.append({
-                    "super_code": (row.get("대표슈퍼코드") or "").strip(),
-                    "super_name": (row.get("대표슈퍼명") or "").strip(),
+                    "super_code": (row.get("소매처코드") or "").strip(),
+                    "super_name": (row.get("소매처명") or "").strip(),
                     "person_id": (row.get("담당자ID") or "").strip(),
                     "person_name": (row.get("담당자명") or "").strip(),
                     "username": (row.get("ID") or "").strip(),
@@ -631,7 +572,7 @@ async def put_retail_user_csv(
     try:
         with open(RETAIL_USER_CSV_PATH, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["대표슈퍼코드", "대표슈퍼명", "담당자ID", "담당자명", "ID"])
+            writer.writerow(["소매처코드", "소매처명", "담당자ID", "담당자명", "ID"])
             for r in body.rows:
                 writer.writerow([
                     (r.get("super_code") or "").strip(),
@@ -665,8 +606,8 @@ async def get_dist_retail_csv(
                 rows.append({
                     "dist_code": (row.get("판매처코드") or "").strip(),
                     "dist_name": (row.get("판매처명") or "").strip(),
-                    "super_code": (row.get("대표슈퍼코드") or "").strip(),
-                    "super_name": (row.get("대표슈퍼명") or "").strip(),
+                    "super_code": (row.get("소매처코드") or "").strip(),
+                    "super_name": (row.get("소매처명") or "").strip(),
                     "person_id": (row.get("담당자ID") or "").strip(),
                     "person_name": (row.get("담당자명") or "").strip(),
                 })
@@ -691,7 +632,7 @@ async def put_dist_retail_csv(
     try:
         with open(DIST_RETAIL_CSV_PATH, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["판매처코드", "판매처명", "대표슈퍼코드", "대표슈퍼명", "담당자ID", "담당자명"])
+            writer.writerow(["판매처코드", "판매처명", "소매처코드", "소매처명", "담당자ID", "담당자명"])
             for r in body.rows:
                 writer.writerow([
                     (r.get("dist_code") or "").strip(),
@@ -705,6 +646,61 @@ async def put_dist_retail_csv(
         logger.exception("dist_retail.csv write failed: %s", e)
         raise HTTPException(status_code=500, detail="CSVの書き込みに失敗しました")
     return {"message": "保存しました", "rows_count": len(body.rows)}
+
+
+# ---- 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先CD / 小売先CD ----
+@router.get("/retail-rag-answer-items")
+async def get_retail_rag_answer_items(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    documents_current.created_by_user_id IS NOT NULL 인 문서에 속한 item만 조회.
+    item_data에서 得意先, 受注先CD, 小売先CD 를 꺼내 중복 제거 후 반환 (RAG 정답지 후보).
+    """
+    _ensure_admin(current_user)
+    db = get_db()
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            # (得意先, 受注先CD, 小売先CD) 조합 기준 중복 제거
+            cursor.execute("""
+                SELECT DISTINCT
+                    i.item_data->>'得意先' AS "得意先",
+                    i.item_data->>'受注先CD' AS "受注先CD",
+                    i.item_data->>'小売先CD' AS "小売先CD"
+                FROM items_current i
+                INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                WHERE d.created_by_user_id IS NOT NULL
+                ORDER BY "得意先", "受注先CD", "小売先CD"
+            """)
+            rows = cursor.fetchall()
+        items = [
+            {
+                "得意先": (r.get("得意先") or "").strip(),
+                "受注先CD": (r.get("受注先CD") or "").strip(),
+                "小売先CD": (r.get("小売先CD") or "").strip(),
+            }
+            for r in rows
+        ]
+        return {"items": items}
+    except Exception as e:
+        logger.exception("retail-rag-answer-items failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/retail-rag-answer-index/rebuild")
+async def rebuild_retail_rag_answer_index(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """판매처-소매처 RAG 정답지(得意先→受注先CD/小売先CD) 벡터 인덱스를 재구축해 DB에 저장."""
+    _ensure_admin(current_user)
+    try:
+        rag = get_rag_manager()
+        n = rag.build_retail_rag_answer_index()
+        return {"message": "OK", "vector_count": n}
+    except Exception as e:
+        logger.exception("retail-rag-answer-index rebuild failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ---- 基準管理 (master_code.xlsx) ----

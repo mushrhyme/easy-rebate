@@ -31,11 +31,11 @@ export interface Item {
     second_review: { checked: boolean; reviewed_at?: string | null; reviewed_by?: string | null }
   }
   version: number
-  /** 검토 탭 frozen 컬럼: retail_user 소매처명→소매처코드(대표슈퍼코드) */
+  /** 검토 탭 frozen 컬럼: retail_user 소매처명→소매처코드 */
   frozen_retail_code?: string | null
   /** 검토 탭 frozen 컬럼: dist_retail 소매처코드→판매처코드 */
   frozen_dist_code?: string | null
-  /** 검토 탭 frozen 컬럼: 단가리스트(商品名) 매칭 제품코드 */
+  /** 검토 탭 frozen 컬럼: 단가리스트(商品名) 매칭 商品CD */
   frozen_product_code?: string | null
 }
 

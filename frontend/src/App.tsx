@@ -57,11 +57,10 @@ function AppContent() {
     }
   }, [isAdmin, activeTab])
 
-  /** 정답지 탭으로 이동 시 선택할 문서. RAG에서 오면 relative_path 있음 → img 기반 뷰 */
+  /** 정답지 탭으로 이동 시 선택할 문서 (検索タブの解答作成指定のみ) */
   const [initialDocumentForAnswerKey, setInitialDocumentForAnswerKey] = useState<{
     pdf_filename: string
     total_pages: number
-    relative_path: string | null
   } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false) // 사이드바는 기본적으로 닫혀있음
   const [selectedUploadChannel, setSelectedUploadChannel] = useState<UploadChannel | null>(UPLOAD_CHANNELS[0] ?? null)
@@ -73,6 +72,17 @@ function AppContent() {
   const [dateFilterByChannel, setDateFilterByChannel] = useState<Partial<Record<UploadChannel, { year: number | null; month: number | null }>>>({})
   const setChannelDateFilter = useCallback((channel: UploadChannel, year: number | null, month: number | null) => {
     setDateFilterByChannel((prev) => ({ ...prev, [channel]: { year, month } }))
+  }, [])
+
+  /** 참조 안정화: useEffect 의존성으로 인한 무한 리렌더 방지 */
+  const handleUploadProgressChange = useCallback((ch: UploadChannel, payload: UploadProgressPayload) => {
+    setUploadProgressByChannel((prev) => ({ ...prev, [ch]: payload }))
+  }, [])
+  const handleRegisterRemove = useCallback((ch: UploadChannel, removeFn: ((fileName: string) => void) | null) => {
+    const next = { ...removeFileByChannelRef.current }
+    if (removeFn == null) delete next[ch]
+    else next[ch] = removeFn
+    removeFileByChannelRef.current = next
   }, [])
 
   const isSidebarOpen = sidebarOpen
@@ -214,12 +224,7 @@ function AppContent() {
       <main className="app-main">
         {activeTab === 'dashboard' && (
           <div className="dashboard-tab-wrapper">
-            <Dashboard
-              onOpenAnswerKeyWithDocument={(payload) => {
-                setInitialDocumentForAnswerKey(payload)
-                setActiveTab('ocr_test')
-              }}
-            />
+            <Dashboard />
           </div>
         )}
         {activeTab === 'upload' && (
@@ -265,15 +270,8 @@ function AppContent() {
                         setSelectedDocumentForPreview(null)
                       }}
                       isListSelected={selectedUploadChannel === channel}
-                      onUploadProgressChange={(ch, payload) => {
-                        setUploadProgressByChannel((prev) => ({ ...prev, [ch]: payload }))
-                      }}
-                      onRegisterRemove={(ch, removeFn) => {
-                        const next = { ...removeFileByChannelRef.current }
-                        if (removeFn == null) delete next[ch]
-                        else next[ch] = removeFn
-                        removeFileByChannelRef.current = next
-                      }}
+                      onUploadProgressChange={handleUploadProgressChange}
+                      onRegisterRemove={handleRegisterRemove}
                     />
                   ))}
                 </div>
@@ -313,11 +311,7 @@ function AppContent() {
           <div className="search-tab">
             <CustomerSearch
               onNavigateToAnswerKey={(pdfFilename) => {
-                setInitialDocumentForAnswerKey({
-                  pdf_filename: pdfFilename,
-                  total_pages: 0,
-                  relative_path: null,
-                })
+                setInitialDocumentForAnswerKey({ pdf_filename: pdfFilename, total_pages: 0 })
                 setActiveTab('ocr_test')
               }}
             />

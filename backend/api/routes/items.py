@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from database.registry import get_db
 from database.db_manager import _similarity_difflib
+from modules.utils.retail_resolve import resolve_retail_dist
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
@@ -19,77 +20,26 @@ router = APIRouter()
 # 프로젝트 루트 (items.py: backend/api/routes/items.py -> parent*4 = project_root)
 _ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
-_RETAIL_USER_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "retail_user.csv"
-_DIST_RETAIL_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
-_SAP_RETAIL_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "sap_retail.csv"
-
-# 검토 탭 frozen 컬럼: 取引先一覧과 동일 (유사도 최고 1건, 최소치 없음)
-_frozen_lookup_cache: Optional[tuple] = None
 
 
-def _load_frozen_lookup() -> tuple:
-    """(retail_list: [(대표슈퍼명, 대표슈퍼코드)], retail_to_dist: {대표슈퍼코드: 판매처코드}). 판매처는 sap_retail 우선, 없으면 dist_retail."""
-    global _frozen_lookup_cache
-    if _frozen_lookup_cache is not None:
-        return _frozen_lookup_cache
-    import pandas as pd
-    retail_list: List[tuple] = []  # (대표슈퍼명, 대표슈퍼코드) 중복 제거
-    seen_names: set = set()
-    retail_to_dist: Dict[str, str] = {}
-    if _RETAIL_USER_CSV.exists():
-        try:
-            df = pd.read_csv(_RETAIL_USER_CSV, dtype=str)
-            for _, r in df.iterrows():
-                name = (r.get("대표슈퍼명") or "").strip()
-                code = (r.get("대표슈퍼코드") or "").strip()
-                if name and code and name not in seen_names:
-                    seen_names.add(name)
-                    retail_list.append((name, code))
-        except Exception:
-            pass
-    # sap_retail: 대표슈퍼코드 → 판매처코드 (우선)
-    if _SAP_RETAIL_CSV.exists():
-        try:
-            df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str)
-            for _, r in df.iterrows():
-                retail = (r.get("대표슈퍼코드") or "").strip()
-                dist = (r.get("판매처코드") or "").strip()
-                if retail and dist and retail not in retail_to_dist:
-                    retail_to_dist[retail] = dist
-        except Exception:
-            pass
-    # dist_retail: sap에 없을 때만
-    if _DIST_RETAIL_CSV.exists():
-        try:
-            df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
-            for _, r in df.iterrows():
-                retail = (r.get("대표슈퍼코드") or "").strip()
-                dist = (r.get("판매처코드") or "").strip()
-                if retail and dist and retail not in retail_to_dist:
-                    retail_to_dist[retail] = dist
-        except Exception:
-            pass
-    _frozen_lookup_cache = (retail_list, retail_to_dist)
-    return _frozen_lookup_cache
-
-
-def _frozen_codes_by_similarity(customer_name: str) -> tuple:
-    """取引先一覧과 동일: 왼쪽(거래처)에 대해 오른쪽(대표슈퍼) 중 유사도 최고 1건만 사용 (최소치 없음)."""
-    customer_name = (customer_name or "").strip()
-    if not customer_name:
-        return (None, None)
-    retail_list, retail_to_dist = _load_frozen_lookup()
-    best_score = 0.0
-    best_retail_code: Optional[str] = None
-    for name, code in retail_list:
-        score = _similarity_difflib(customer_name, name)
-        if score > best_score:
-            best_score = score
-            best_retail_code = code
-    if not best_retail_code:
-        return (None, None)
-    dist_code = retail_to_dist.get(best_retail_code)
-    return (best_retail_code, dist_code)
+def _resolved_frozen_codes(item_data: Dict[str, Any], customer_fallback: Optional[str] = None) -> tuple:
+    """
+    1→2→3 순서로 매핑 확정. 이미 item_data에 受注先CD/小売先CD 있으면 사용.
+    없으면 resolve_retail_dist(得意先, 得意先CD)로 계산.
+    반환: (frozen_retail_code=小売先CD, frozen_dist_code=受注先CD).
+    """
+    stored_rc = (item_data.get("小売先CD") or "").strip()
+    stored_dc = (item_data.get("受注先CD") or "").strip()
+    if stored_rc and stored_dc:
+        return (stored_rc, stored_dc)
+    customer_name = (
+        (item_data.get("得意先") or customer_fallback or item_data.get("得意先名")
+        or item_data.get("得意先様") or item_data.get("取引先"))
+    )
+    customer_name = str(customer_name).strip() if customer_name else ""
+    customer_code = (item_data.get("得意先CD") or "").strip() or None
+    retail_code, dist_code = resolve_retail_dist(customer_name, customer_code)
+    return (retail_code, dist_code)
 
 
 # 통계 API는 반드시 동적 경로보다 먼저 정의해야 함
@@ -762,10 +712,10 @@ class ItemResponse(BaseModel):
     item_data: Dict[str, Any]  # 상품명 등은 item_data['商品名'] 사용
     review_status: Dict[str, Any]
     version: int
-    # 검토 탭 frozen 컬럼: 소매처명→retail_user→소매처코드, dist_retail→판매처코드, 商品名→unit_price→제품코드
-    frozen_retail_code: Optional[str] = None   # 소매처코드(대표슈퍼코드)
+    # 검토 탭 frozen 컬럼: 소매처명→retail_user→소매처코드, dist_retail→판매처코드, 商品名→unit_price→商品CD
+    frozen_retail_code: Optional[str] = None   # 소매처코드
     frozen_dist_code: Optional[str] = None     # 판매처코드
-    frozen_product_code: Optional[str] = None  # 제품코드(단가리스트 매칭)
+    frozen_product_code: Optional[str] = None  # 商品CD(단가리스트 매칭)
 
 
 @router.get("/{pdf_filename}/pages/{page_number}")
@@ -861,9 +811,11 @@ async def get_page_items(
                 if key not in exclude_keys:
                     item_data[key] = value
 
-            # 商品名이 있으면 unit_price에서 시키리/본부장·제품코드 자동 매칭 → 그리드에 표시
-            frozen_product_code: Optional[str] = None  # 단가리스트 매칭 시 제품코드
-            if _UNIT_PRICE_CSV.exists():
+            # 商品CD: 저장된 값 우선, 없으면 商品名으로 unit_price 매칭
+            frozen_product_code: Optional[str] = None
+            if item_data.get("商品CD") is not None and str(item_data.get("商品CD", "")).strip():
+                frozen_product_code = str(item_data["商品CD"]).strip() or None
+            elif _UNIT_PRICE_CSV.exists():
                 product_name = item_data.get("商品名")
                 if product_name is not None and str(product_name).strip():
                     try:
@@ -881,9 +833,10 @@ async def get_page_items(
                         )
                         if not df.empty:
                             row = df.iloc[0]
-                            pc = row.get("제품코드")  # unit_price CSV 컬럼
+                            pc = row.get("제품코드")  # unit_price CSV 컬럼명
                             if pc is not None:
                                 frozen_product_code = str(pc).strip() or None
+                                item_data["商品CD"] = frozen_product_code
                             shikiri = row.get("시키리")
                             honbu = row.get("본부장")
                             if shikiri is not None:
@@ -910,13 +863,20 @@ async def get_page_items(
                         ordered_item_data[k] = item_data[k]
                 item_data = ordered_item_data
 
-            # frozen 컬럼: DB _item_customer_expr과 동일 순서(得意先 우선)로 거래처 추출 후 유사도 매칭
-            customer_name = (
-                (item_data.get("得意先") or item.get("customer") or item_data.get("得意先名")
-                or item_data.get("得意先様") or item_data.get("取引先"))
-            )
-            customer_name = str(customer_name).strip() if customer_name is not None else ""
-            frozen_retail_code, frozen_dist_code = _frozen_codes_by_similarity(customer_name)
+            # frozen 컬럼: 1→2→3 순서 매핑 (저장된 受注先CD/小売先CD 우선, 없으면 resolve)
+            stored_rc = (item_data.get("小売先CD") or "").strip()
+            stored_dc = (item_data.get("受注先CD") or "").strip()
+            frozen_retail_code, frozen_dist_code = _resolved_frozen_codes(item_data, item.get("customer"))
+            # 최초 조회 시 비어 있으면 매핑 결과를 DB에 바로 저장 (다음부터는 DB 값 조회)
+            if (frozen_retail_code or frozen_dist_code) and (not stored_rc or not stored_dc):
+                try:
+                    db.update_item_retail_codes(
+                        item["item_id"],
+                        dist_code=frozen_dist_code,
+                        retail_code=frozen_retail_code,
+                    )
+                except Exception:
+                    pass
 
             item_list.append(
                 ItemResponse(
@@ -978,11 +938,22 @@ async def create_item(
         except Exception:
             pass
 
+        # 1→2→3 매핑 확정값을 item_data에 넣어 DB 저장
+        payload_item_data = dict(item_data.item_data or {})
+        retail_code, dist_code = resolve_retail_dist(
+            payload_item_data.get("得意先"),
+            payload_item_data.get("得意先CD"),
+        )
+        if retail_code:
+            payload_item_data["小売先CD"] = retail_code
+        if dist_code:
+            payload_item_data["受注先CD"] = dist_code
+
         # 아이템 생성
         item_id = db.create_item(
             pdf_filename=item_data.pdf_filename,
             page_number=item_data.page_number,
-            item_data=item_data.item_data,
+            item_data=payload_item_data,
             customer=None,
             after_item_id=item_data.after_item_id
         )
@@ -1205,11 +1176,20 @@ async def update_item(
                         detail=f"Item is locked by another user: user_id={locked_by_user_id}"
                     )
             
-        # 필드 분리 (_separate_item_fields: 검토 상태/메타만 분리, 得意先 등은 item_data에 유지)
+        # 1→2→3 매핑 확정값을 넣은 뒤 필드 분리
             pdf_filename = item[1]
             doc = db.get_document(pdf_filename)
             form_type = doc.get("form_type") if doc else None
-            separated = db._separate_item_fields(update_data.item_data, form_type=form_type)
+            payload_item_data = dict(update_data.item_data or {})
+            retail_code, dist_code = resolve_retail_dist(
+                payload_item_data.get("得意先"),
+                payload_item_data.get("得意先CD"),
+            )
+            if retail_code:
+                payload_item_data["小売先CD"] = retail_code
+            if dist_code:
+                payload_item_data["受注先CD"] = dist_code
+            separated = db._separate_item_fields(payload_item_data, form_type=form_type)
             
             set_clauses = []
             params = []

@@ -225,7 +225,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     enabled: showCustomerListModal,
   })
 
-  // 왼쪽(실제 거래처) vs 오른쪽(대표슈퍼명 전체) 유사도 매핑. notepad find_similar_supers와 동일하게 전체 풀에서 최적 매칭
+  // 왼쪽(실제 거래처) vs 오른쪽(소매처명 전체) 유사도 매핑. notepad find_similar_supers와 동일하게 전체 풀에서 최적 매칭
   const leftList = reviewTabCustomersData?.customer_names ?? []
   const { data: allSuperNamesData } = useQuery({
     queryKey: ['search', 'all-super-names'],

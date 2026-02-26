@@ -1,5 +1,10 @@
 {
-  "page_role": "detail",
+  "page_role": "summary",
   "document_number": "004376125",
-  "items": []
+  "totals": {
+    "合計ご請求額": "2,759,712",
+    "今回ご請求額": {
+      "8.00%": "2,759,712"
+    }
+  }
 }

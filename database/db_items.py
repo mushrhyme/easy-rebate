@@ -10,6 +10,8 @@ from psycopg2.extras import RealDictCursor, Json
 from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
 from modules.utils.config import get_project_root
+from modules.utils.retail_resolve import resolve_retail_dist
+from backend.unit_price_lookup import resolve_product_and_prices
 
 
 class ItemsMixin:
@@ -98,6 +100,8 @@ class ItemsMixin:
         """
         if not page_results:
             raise ValueError("page_results가 비어있습니다.")
+
+        print(f"[form_type] save_document_data 진입: pdf_filename={pdf_filename!r}, form_type={form_type!r} (type={type(form_type).__name__})")
         
         # 이 문서가 파싱할 때 사용한 RAG 예제의 키 순서 저장 (표시 시 form_type이 아닌 이 문서 기준으로 key_order 사용)
         document_metadata = {}
@@ -146,6 +150,9 @@ class ItemsMixin:
                             updated_at = CURRENT_TIMESTAMP,
                             document_metadata = COALESCE(EXCLUDED.document_metadata, documents_current.document_metadata)
                     """, (pdf_filename, total_pages, form_type, upload_channel, notes, user_id, user_id, doc_meta_json))
+                cursor.execute("SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
+                row = cursor.fetchone()
+                print(f"[form_type] save_document_data: documents_current 반영 완료, 전달 form_type={form_type!r}, DB 저장값={repr(row[0]) if row else None}")
                 
                 # 2. 기존 데이터 삭제 (재파싱 시) - current 테이블에서만
                 cursor.execute("""
@@ -194,12 +201,35 @@ class ItemsMixin:
                             updated_at = CURRENT_TIMESTAMP
                     """, (pdf_filename, page_number, page_role, page_meta_json))
                     
-                    # items 저장 (행 단위)
+                    # items 저장 (행 단위). 1→2→3 매핑 확정값을 넣어 DB에 受注先CD/小売先CD/商品CD 저장
+                    _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
                     for item_order, item_dict in enumerate(items, 1):
                         if not isinstance(item_dict, dict):
                             continue
-                        
-                    # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
+                        customer_name = (
+                            item_dict.get("得意先")
+                            or item_dict.get("得意先名")
+                            or item_dict.get("得意先様")
+                            or item_dict.get("取引先")
+                        )
+                        retail_code, dist_code = resolve_retail_dist(
+                            customer_name,
+                            item_dict.get("得意先CD"),
+                        )
+                        if retail_code:
+                            item_dict["小売先CD"] = retail_code
+                        if dist_code:
+                            item_dict["受注先CD"] = dist_code
+                        product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+                        if product_result:
+                            code, shikiri, honbu = product_result
+                            if code:
+                                item_dict["商品CD"] = code
+                            if shikiri is not None:
+                                item_dict["仕切"] = shikiri
+                            if honbu is not None:
+                                item_dict["本部長"] = honbu
+                        # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
                         separated = self._separate_item_fields(item_dict, form_type=form_type)
                         
                         cursor.execute("""
@@ -915,4 +945,42 @@ class ItemsMixin:
             print(f"❌ [delete_item] 아이템 삭제 실패: {e}")
             import traceback
             traceback.print_exc()
+            return False
+
+    def update_item_retail_codes(
+        self,
+        item_id: int,
+        dist_code: Optional[str] = None,
+        retail_code: Optional[str] = None,
+    ) -> bool:
+        """
+        item_data에 受注先CD·小売先CD를 병합 저장. (검토 탭 최초 조회 시 매핑 결과 반영용)
+        item_id는 items_current 또는 items_archive 중 하나에만 존재.
+        """
+        if not dist_code and not retail_code:
+            return False
+        patch = {}
+        if dist_code is not None and str(dist_code).strip():
+            patch["受注先CD"] = str(dist_code).strip()
+        if retail_code is not None and str(retail_code).strip():
+            patch["小売先CD"] = str(retail_code).strip()
+        if not patch:
+            return False
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                patch_json = json.dumps(patch, ensure_ascii=False)
+                cursor.execute(
+                    "UPDATE items_current SET item_data = item_data || %s::jsonb WHERE item_id = %s",
+                    (patch_json, item_id),
+                )
+                if cursor.rowcount == 0:
+                    cursor.execute(
+                        "UPDATE items_archive SET item_data = item_data || %s::jsonb WHERE item_id = %s",
+                        (patch_json, item_id),
+                    )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"⚠️ [update_item_retail_codes] 실패: item_id={item_id}, e={e}")
             return False

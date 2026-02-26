@@ -698,6 +698,15 @@ def build_faiss_db(
             # PDF 캐시 정리
             text_extractor.close_all()
 
+    # 판매처-소매처 RAG 정답지 인덱스 구축 (DB 모드일 때, 루프 종료 후 1회)
+    if getattr(rag_manager, "use_db", False) and getattr(rag_manager, "db", None):
+        try:
+            n = rag_manager.build_retail_rag_answer_index()
+            if n > 0:
+                print(f"✅ 판매처-소매처 RAG 정답지 인덱스 구축: {n}건")
+        except Exception as e:
+            print(f"⚠️ 판매처-소매처 RAG 정답지 인덱스 구축 실패: {e}")
+
 
 if __name__ == "__main__":
     import sys

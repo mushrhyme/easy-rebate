@@ -35,7 +35,6 @@ export const TYPE_OPTIONS_BASE = [
 export interface InitialDocumentForAnswerKey {
   pdf_filename: string
   total_pages: number
-  relative_path: string | null
 }
 
 export interface AnswerKeyTabProps {
