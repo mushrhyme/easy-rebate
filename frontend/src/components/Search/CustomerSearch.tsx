@@ -99,10 +99,11 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     }
   }, [isResizing])
 
-  // 검토 탭·정답지 집합용: 업로드 탭과 동일하게 전체 문서 조회 (모든 파일이 검토 탭에 보이도록)
+  // 검토 탭 전용 문서 목록 (created_by_user_id IS NOT NULL만). 탭 진입 시마다 재조회로 캐시 리키지 방지
   const { data: documentsDataFull, isLoading: documentsLoading, error: documentsError } = useQuery({
-    queryKey: ['documents', 'all'],
+    queryKey: ['documents', 'review'],
     queryFn: () => documentsApi.getList(undefined, { exclude_img_seed: true }),
+    refetchOnMount: 'always',
   })
 
   // 벡터 DB에 학습된(병합된) 문서 목록 — 검토 탭에서는 제외
@@ -444,6 +445,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     mutationFn: (pdfFilename: string) => documentsApi.setAnswerKeyDocument(pdfFilename),
     onSuccess: (_data, pdfFilename) => {
       queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'for-answer-key-tab'] })
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
       queryClient.invalidateQueries({ queryKey: ['form-types'] })

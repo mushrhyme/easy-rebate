@@ -855,6 +855,25 @@ export const searchApi = {
     return response.data
   },
 
+  /** sap_retail에서 대표슈퍼코드로 1건 조회（SAP受注先・SAP小売先 표시용） */
+  getSapRetailRowByRetailCode: async (
+    retailCode: string
+  ): Promise<{
+    retail_code: string
+    row: {
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+    } | null
+    skipped_reason?: string | null
+  }> => {
+    const response = await client.get('/api/search/retail/sap-row-by-retail-code', {
+      params: { retail_code: retailCode },
+    })
+    return response.data
+  },
+
   /** sap_retail.csv 대표슈퍼명·판매처명 유사도 검색（매핑 후보 없을 때 폴백） */
   getRetailCandidatesBySapRetail: async (
     query: string,

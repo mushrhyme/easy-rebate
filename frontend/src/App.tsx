@@ -77,10 +77,10 @@ function AppContent() {
 
   const isSidebarOpen = sidebarOpen
 
-  // 모든 문서 조회 (드롭다운 표시를 위해)
+  // 모든 문서 조회 (드롭다운 표시용, 업로드/검토와 동일하게 img 시드 문서 제외)
   const { data: documentsData } = useQuery({
     queryKey: ['documents', 'all'],
-    queryFn: () => documentsApi.getList(),
+    queryFn: () => documentsApi.getList(undefined, { exclude_img_seed: true }),
     refetchInterval: 30000,
   })
 

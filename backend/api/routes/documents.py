@@ -767,12 +767,13 @@ async def get_documents(
     month: Optional[int] = None,
     is_answer_key_document: Optional[bool] = None,
     exclude_answer_key: Optional[bool] = None,
-    exclude_img_seed: bool = False,
+    exclude_img_seed: bool = True,
     db=Depends(get_db)
 ):
     """
     문서 목록 조회 (current/archive 테이블 사용).
-    exclude_img_seed=True: img/build_faiss_db 전용 문서 제외 (업로드/검토 탭용).
+    exclude_img_seed 기본 True: created_by_user_id IS NULL(img 시드) 문서 제외 (업로드/검토 탭 기본).
+    현황 탭 등 전체 포함 필요 시 exclude_img_seed=false 로 호출.
     """
     try:
         rows = query_documents_table(
