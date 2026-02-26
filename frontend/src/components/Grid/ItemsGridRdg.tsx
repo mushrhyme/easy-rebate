@@ -62,7 +62,6 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const [hoveredRowId, setHoveredRowId] = useState<number | null>(null) // 호버된 행 ID
   const [reviewTooltip, setReviewTooltip] = useState<{ text: string; x: number; y: number } | null>(null) // 1次/2次 증빙 툴팁
   const [unitPriceModalRow, setUnitPriceModalRow] = useState<GridRow | null>(null) // 단가 후보 모달
-  const [hoveredUnitPriceCell, setHoveredUnitPriceCell] = useState<{ itemId: number; columnKey: string } | null>(null) // 단가 셀 호버
   
   // 컨테이너 너비 측정
   useEffect(() => {
@@ -568,8 +567,6 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     getKuLabel,
     createItemPending: createItem.isPending,
     deleteItemPending: deleteItem.isPending,
-    hoveredUnitPriceCell,
-    setHoveredUnitPriceCell,
     onOpenUnitPriceModal: setUnitPriceModalRow,
   })
 

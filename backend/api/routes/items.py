@@ -152,6 +152,18 @@ def _ym_params_list(year: Optional[int], month: Optional[int], count: int = 1) -
     return ()
 
 
+def _excluded_docs_cte() -> str:
+    """검토/현황 집계에서 제외할 문서 CTE: 정답지 + 벡터 DB 학습(병합) 완료 문서."""
+    return """
+                excluded_docs AS (
+                    SELECT pdf_filename FROM documents_current WHERE COALESCE(is_answer_key_document, FALSE) = TRUE
+                    UNION
+                    SELECT pdf_filename FROM documents_archive WHERE COALESCE(is_answer_key_document, FALSE) = TRUE
+                    UNION
+                    SELECT pdf_filename FROM rag_learning_status_current WHERE status = 'merged'
+                ),"""
+
+
 @router.get("/stats/review-by-items")
 async def get_review_stats_by_items(
     year: Optional[int] = Query(None, description="請求年"),
@@ -168,13 +180,16 @@ async def get_review_stats_by_items(
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                WITH non_base_docs AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                non_base_docs AS (
                     SELECT pdf_filename FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION
                     SELECT pdf_filename FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -240,13 +255,16 @@ async def get_review_stats_by_user(
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                WITH non_base_docs AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                non_base_docs AS (
                     SELECT pdf_filename FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION
                     SELECT pdf_filename FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -326,15 +344,18 @@ async def get_detail_summary(
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                WITH doc_info AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                doc_info AS (
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -370,15 +391,18 @@ async def get_detail_summary(
             total_document_count = row[1] or 0
 
             cursor.execute("""
-                WITH doc_info AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                doc_info AS (
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -412,15 +436,18 @@ async def get_detail_summary(
             by_channel = [{"channel": r[0], "item_count": r[1]} for r in cursor.fetchall()]
 
             cursor.execute("""
-                WITH doc_info AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                doc_info AS (
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -454,15 +481,18 @@ async def get_detail_summary(
             by_form_type = [{"form_type": r[0], "item_count": r[1]} for r in cursor.fetchall()]
 
             cursor.execute("""
-                WITH doc_info AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                doc_info AS (
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -498,15 +528,18 @@ async def get_detail_summary(
             by_year_month = [{"year": r[0], "month": r[1], "item_count": r[2]} for r in cursor.fetchall()]
 
             cursor.execute("""
-                WITH doc_info AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                doc_info AS (
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION ALL
                     SELECT pdf_filename, form_type, upload_channel, data_year, data_month
                     FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 detail_items AS (
@@ -575,13 +608,16 @@ async def get_customer_stats(
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                WITH non_base_docs AS (
+                WITH """ + _excluded_docs_cte().strip() + """
+                non_base_docs AS (
                     SELECT pdf_filename FROM documents_current
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                     UNION
                     SELECT pdf_filename FROM documents_archive
                     WHERE data_year IS NOT NULL AND data_month IS NOT NULL
+                    AND pdf_filename NOT IN (SELECT pdf_filename FROM excluded_docs)
                     """ + ym_clause + """
                 ),
                 all_items AS (

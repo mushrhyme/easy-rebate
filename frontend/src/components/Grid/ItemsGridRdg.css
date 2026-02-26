@@ -639,6 +639,11 @@
   color: #ef4444;
 }
 
+.action-menu-unit-price:hover {
+  background-color: #ccfbf1;
+  color: #0d9488;
+}
+
 /* 1次/2次 체크 증빙 툴팁 (마우스 오버 시 바로 표시) */
 .items-grid-review-tooltip {
   padding: 6px 10px;
@@ -741,26 +746,3 @@
   background: #3dbdb5;
 }
 
-/* 단가 셀 호버 시 "단가 후보" 버튼 */
-.rdg-cell-unit-price-hover {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 0;
-}
-.unit-price-cell-btn {
-  flex-shrink: 0;
-  padding: 2px 8px;
-  font-size: 11px;
-  line-height: 1.3;
-  color: #0d9488;
-  background: #ccfbf1;
-  border: 1px solid #99f6e4;
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.unit-price-cell-btn:hover {
-  background: #99f6e4;
-  color: #0f766e;
-}

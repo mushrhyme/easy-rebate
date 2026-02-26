@@ -13,6 +13,7 @@ interface ActionCellWithMenuProps {
   onMouseLeave: () => void
   onAdd: () => void
   onDelete: () => void
+  onUnitPrice: () => void
   createItemPending: boolean
   deleteItemPending: boolean
 }
@@ -26,6 +27,7 @@ export function ActionCellWithMenu({
   onMouseLeave,
   onAdd,
   onDelete,
+  onUnitPrice,
   createItemPending,
   deleteItemPending,
 }: ActionCellWithMenuProps) {
@@ -93,6 +95,17 @@ export function ActionCellWithMenu({
         title={isLockedByOthers ? `編集中: ${lockedBy}` : 'この行の下に行を追加'}
       >
         ➕ 追加
+      </button>
+      <button
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onUnitPrice()
+        }}
+        className="action-menu-item action-menu-unit-price"
+        title="単価候補を表示"
+      >
+        💰 単価
       </button>
       <button
         onClick={(e) => {
