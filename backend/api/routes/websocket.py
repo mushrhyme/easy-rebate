@@ -238,6 +238,11 @@ async def processing_status(websocket: WebSocket, task_id: str):
         if settings.DEBUG:
             print(f"🔌 WebSocket 연결 종료: task_id={task_id}")
         manager.disconnect(websocket, task_id)
+    except (OSError, ConnectionResetError) as e:
+        # WinError 121(세마포어 타임아웃), 연결 끊김 등 — 클라이언트 비정상 종료 시 자주 발생
+        if getattr(e, "winerror", None) != 121 and not isinstance(e, ConnectionResetError):
+            print(f"⚠️ WebSocket OS 오류: task_id={task_id}, error={e}")
+        manager.disconnect(websocket, task_id)
     except Exception as e:
         print(f"⚠️ WebSocket 오류: task_id={task_id}, error={e}")
         import traceback
@@ -378,6 +383,12 @@ async def item_locks(websocket: WebSocket):
                 await websocket.send_json({"type": "ping"})
     
     except WebSocketDisconnect:
+        if pdf_filename and page_number is not None:
+            manager.disconnect(websocket, "")
+    except (OSError, ConnectionResetError) as e:
+        # WinError 121(세마포어 타임아웃) 등 — 클라이언트 비정상 종료 시
+        if getattr(e, "winerror", None) != 121 and not isinstance(e, ConnectionResetError):
+            print(f"⚠️ 락 WebSocket OS 오류: {e}")
         if pdf_filename and page_number is not None:
             manager.disconnect(websocket, "")
     except Exception as e:
