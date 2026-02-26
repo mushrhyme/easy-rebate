@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, Body, Query
 from pydantic import BaseModel
 
 from database.registry import get_db
+from database.db_manager import _similarity_difflib
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
@@ -18,6 +19,64 @@ router = APIRouter()
 # 프로젝트 루트 (items.py: backend/api/routes/items.py -> parent*4 = project_root)
 _ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
+_RETAIL_USER_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "retail_user.csv"
+_DIST_RETAIL_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
+
+# 검토 탭 frozen 컬럼: 取引先一覧과 동일 (유사도 최고 1건, 최소치 없음)
+_frozen_lookup_cache: Optional[tuple] = None
+
+
+def _load_frozen_lookup() -> tuple:
+    """(retail_list: [(대표슈퍼명, 대표슈퍼코드)], retail_to_dist: {대표슈퍼코드: 판매처코드})"""
+    global _frozen_lookup_cache
+    if _frozen_lookup_cache is not None:
+        return _frozen_lookup_cache
+    import pandas as pd
+    retail_list: List[tuple] = []  # (대표슈퍼명, 대표슈퍼코드) 중복 제거
+    seen_names: set = set()
+    retail_to_dist: Dict[str, str] = {}
+    if _RETAIL_USER_CSV.exists():
+        try:
+            df = pd.read_csv(_RETAIL_USER_CSV, dtype=str)
+            for _, r in df.iterrows():
+                name = (r.get("대표슈퍼명") or "").strip()
+                code = (r.get("대표슈퍼코드") or "").strip()
+                if name and code and name not in seen_names:
+                    seen_names.add(name)
+                    retail_list.append((name, code))
+        except Exception:
+            pass
+    if _DIST_RETAIL_CSV.exists():
+        try:
+            df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
+            for _, r in df.iterrows():
+                retail = (r.get("대표슈퍼코드") or "").strip()
+                dist = (r.get("판매처코드") or "").strip()
+                if retail and dist and retail not in retail_to_dist:
+                    retail_to_dist[retail] = dist
+        except Exception:
+            pass
+    _frozen_lookup_cache = (retail_list, retail_to_dist)
+    return _frozen_lookup_cache
+
+
+def _frozen_codes_by_similarity(customer_name: str) -> tuple:
+    """取引先一覧과 동일: 왼쪽(거래처)에 대해 오른쪽(대표슈퍼) 중 유사도 최고 1건만 사용 (최소치 없음)."""
+    customer_name = (customer_name or "").strip()
+    if not customer_name:
+        return (None, None)
+    retail_list, retail_to_dist = _load_frozen_lookup()
+    best_score = 0.0
+    best_retail_code: Optional[str] = None
+    for name, code in retail_list:
+        score = _similarity_difflib(customer_name, name)
+        if score > best_score:
+            best_score = score
+            best_retail_code = code
+    if not best_retail_code:
+        return (None, None)
+    dist_code = retail_to_dist.get(best_retail_code)
+    return (best_retail_code, dist_code)
 
 
 # 통계 API는 반드시 동적 경로보다 먼저 정의해야 함
@@ -690,6 +749,9 @@ class ItemResponse(BaseModel):
     item_data: Dict[str, Any]  # 상품명 등은 item_data['商品名'] 사용
     review_status: Dict[str, Any]
     version: int
+    # 검토 탭 frozen 컬럼: 소매처명→retail_user→소매처코드, dist_retail→판매처코드
+    frozen_retail_code: Optional[str] = None  # 소매처코드(대표슈퍼코드)
+    frozen_dist_code: Optional[str] = None     # 판매처코드
 
 
 @router.get("/{pdf_filename}/pages/{page_number}")
@@ -830,6 +892,14 @@ async def get_page_items(
                         ordered_item_data[k] = item_data[k]
                 item_data = ordered_item_data
 
+            # frozen 컬럼: DB _item_customer_expr과 동일 순서(得意先 우선)로 거래처 추출 후 유사도 매칭
+            customer_name = (
+                (item_data.get("得意先") or item.get("customer") or item_data.get("得意先名")
+                or item_data.get("得意先様") or item_data.get("取引先"))
+            )
+            customer_name = str(customer_name).strip() if customer_name is not None else ""
+            frozen_retail_code, frozen_dist_code = _frozen_codes_by_similarity(customer_name)
+
             item_list.append(
                 ItemResponse(
                     item_id=item['item_id'],
@@ -839,6 +909,8 @@ async def get_page_items(
                     item_data=item_data,
                     review_status=review_status,
                     version=item.get('version', 1),
+                    frozen_retail_code=frozen_retail_code,
+                    frozen_dist_code=frozen_dist_code,
                 )
             )
         return {"items": item_list, "item_data_keys": item_data_keys}

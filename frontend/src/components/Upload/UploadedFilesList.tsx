@@ -29,7 +29,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['documents', 'upload_channel', selectedChannel],
-    queryFn: () => documentsApi.getList(selectedChannel),
+    queryFn: () => documentsApi.getList(selectedChannel, { exclude_img_seed: true }),
   })
 
   const { data: inVectorData } = useQuery({

@@ -103,9 +103,9 @@ export function ActionCellWithMenu({
           onUnitPrice()
         }}
         className="action-menu-item action-menu-unit-price"
-        title="単価候補を表示"
+        title="単価・代表スーパー候補を表示"
       >
-        💰 単価
+        💰 マッピング
       </button>
       <button
         onClick={(e) => {

@@ -49,7 +49,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const [pageRoleEdits, setPageRoleEdits] = useState<Record<number, string>>({})
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'building' | 'done' | 'error'>( 'idle')
   const [saveMessage, setSaveMessage] = useState<string>('')
-  const [showRevokeModal, setShowRevokeModal] = useState(false)
+  const [showLearningRequestModal, setShowLearningRequestModal] = useState(false)
   const [rightView, setRightView] = useState<'kv' | 'json' | 'template'>('kv')
   const [jsonEditText, setJsonEditText] = useState('')
   /** 템플릿 뷰: 첫 행만 キー・値 목록 (키/값 추가·삭제·편집 가능) */
@@ -109,6 +109,18 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     queryFn: () => documentsApi.getListForAnswerKeyTab(),
   })
 
+  const { data: inVectorData } = useQuery({
+    queryKey: ['documents', 'in-vector-index'],
+    queryFn: () => documentsApi.getInVectorIndex(),
+  })
+  const inVectorPdfSet = useMemo(
+    () => new Set((inVectorData?.pdf_filenames ?? []).map((f) => (f ?? '').trim().toLowerCase())),
+    [inVectorData?.pdf_filenames]
+  )
+  const isDocInVector = !!(
+    selectedDoc && inVectorPdfSet.has(selectedDoc.pdf_filename.trim().toLowerCase())
+  )
+
   /** RAG(img) 문서일 때 해당 폴더의 answer.json 전체 (ocr_text는 별도 API) */
   const { data: answerJsonFromImg } = useQuery({
     queryKey: ['answer-json-from-img', selectedDocRelativePath ?? ''],
@@ -121,22 +133,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     queryKey: ['document-answer-json', selectedDoc?.pdf_filename ?? ''],
     queryFn: () => documentsApi.getDocumentAnswerJson(selectedDoc!.pdf_filename),
     enabled: !!selectedDoc?.pdf_filename && !selectedDocRelativePath,
-  })
-
-  const revokeAnswerKeyMutation = useMutation({
-    mutationFn: (pdfFilename: string) => documentsApi.revokeAnswerKeyDocument(pdfFilename),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents', 'for-answer-key-tab'] })
-      setShowRevokeModal(false)
-      setSelectedDoc(null)
-      setRows([])
-      setSaveMessage('解答の指定を解除しました。検索タブで再度確認できます。')
-      onRevokeSuccess?.()
-    },
-    onError: (e: any) => {
-      setSaveMessage(e?.response?.data?.detail || e?.message || '解除に失敗しました。')
-      setSaveStatus('error')
-    },
   })
 
   /** OCR 다시 인식 (Azure 전용) — 결과를 debug2에 저장 후 화면 갱신 */
@@ -1497,23 +1493,25 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         queryClient.invalidateQueries({ queryKey: ['items', selectedDoc.pdf_filename] })
         queryClient.invalidateQueries({ queryKey: ['page-meta', selectedDoc.pdf_filename] })
       }
-      if (isRagMode) {
-        setSaveMessage(hasDirty ? 'JSONファイルを保存しました。ベクターDB登録はDB登録文書のみ対象です。' : '変更がありません。')
-        setSaveStatus('done')
-        return
-      }
       setSaveStatus('building')
-      setSaveMessage('学習フラグを設定し、ベクターDBに登録しています…')
-      for (let p = 1; p <= selectedDoc.total_pages; p++) {
-        await ragAdminApi.setLearningFlag({
-          pdf_filename: selectedDoc.pdf_filename,
-          page_number: p,
-          selected: true,
-        })
+      if (isRagMode) {
+        setSaveMessage('ベクターDBに登録しています…')
+        const formFolder = selectedDocRelativePath?.split('/')[0] ?? ''
+        await ragAdminApi.build(formFolder || undefined)
+      } else {
+        setSaveMessage('学習フラグを設定し、ベクターDBに登録しています…')
+        for (let p = 1; p <= selectedDoc.total_pages; p++) {
+          await ragAdminApi.setLearningFlag({
+            pdf_filename: selectedDoc.pdf_filename,
+            page_number: p,
+            selected: true,
+          })
+        }
+        await ragAdminApi.buildFromLearningPages(undefined)
       }
-      await ragAdminApi.buildFromLearningPages(undefined)
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
       setSaveMessage('解答として保存し、ベクターDBに登録しました。')
       setSaveStatus('done')
     } catch (e: any) {
@@ -1585,14 +1583,25 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
           )}
         </select>
         {selectedDoc && (
-          <button
-            type="button"
-            className="answer-key-revoke-btn"
-            onClick={() => setShowRevokeModal(true)}
-            title="解答指定の解除（検索タブで再表示）"
-          >
-            解答指定を解除
-          </button>
+          <>
+            <button
+              type="button"
+              className="answer-key-revoke-btn"
+              onClick={() => onRevokeSuccess?.()}
+              title="検討タブに切り替えます"
+            >
+              検討タブに戻る
+            </button>
+            <button
+              type="button"
+              className="answer-key-btn answer-key-btn-primary"
+              onClick={() => setShowLearningRequestModal(true)}
+              disabled={isDocInVector || saveStatus === 'saving' || saveStatus === 'building'}
+              title="この文書全体を保存し、ベクターDBに登録します"
+            >
+              学習リクエスト
+            </button>
+          </>
         )}
       </div>
 
@@ -1602,32 +1611,34 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
         </div>
       )}
 
-      {/* 解答指定解除確認モーダル */}
-      {showRevokeModal && selectedDoc && (
-        <div className="answer-key-modal-overlay" onClick={() => !revokeAnswerKeyMutation.isPending && setShowRevokeModal(false)}>
+      {/* 学習リクエスト確認モーダル */}
+      {showLearningRequestModal && selectedDoc && (
+        <div className="answer-key-modal-overlay" onClick={() => saveStatus !== 'building' && setShowLearningRequestModal(false)}>
           <div className="answer-key-modal" onClick={(e) => e.stopPropagation()}>
-            <h3 className="answer-key-modal-title">解答指定の解除</h3>
+            <h3 className="answer-key-modal-title">学習リクエスト</h3>
             <p className="answer-key-modal-desc">
-              この文書の解答作成対象指定を解除しますか？<br />
-              解除すると検索タブで再表示されます。
+              この文書全体が保存され、ベクターDBに登録されます。よろしいですか？
             </p>
             <p className="answer-key-modal-filename">{selectedDoc.pdf_filename}</p>
             <div className="answer-key-modal-actions">
               <button
                 type="button"
                 className="answer-key-btn answer-key-btn-secondary"
-                onClick={() => setShowRevokeModal(false)}
-                disabled={revokeAnswerKeyMutation.isPending}
+                onClick={() => setShowLearningRequestModal(false)}
+                disabled={saveStatus === 'building'}
               >
                 キャンセル
               </button>
               <button
                 type="button"
-                className="answer-key-btn answer-key-btn-revoke"
-                onClick={() => revokeAnswerKeyMutation.mutate(selectedDoc.pdf_filename)}
-                disabled={revokeAnswerKeyMutation.isPending}
+                className="answer-key-btn answer-key-btn-primary"
+                onClick={async () => {
+                  setShowLearningRequestModal(false)
+                  await handleSaveAsAnswerKey()
+                }}
+                disabled={saveStatus === 'building'}
               >
-                {revokeAnswerKeyMutation.isPending ? '処理中…' : '解除'}
+                登録する
               </button>
             </div>
           </div>
@@ -1735,6 +1746,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               handleSaveAsAnswerKey,
               saveStatus,
               saveMessage,
+              readOnly: isDocInVector,
             }}
           />
         </div>

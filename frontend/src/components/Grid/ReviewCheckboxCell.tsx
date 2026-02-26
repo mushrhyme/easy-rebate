@@ -13,6 +13,7 @@ interface ReviewCheckboxCellProps {
   onToggle: (itemId: number, field: ReviewField, checked: boolean) => void
   onTooltip: (text: string, x: number, y: number) => void
   onTooltipClear: () => void
+  disabled?: boolean
 }
 
 export function ReviewCheckboxCell({
@@ -22,6 +23,7 @@ export function ReviewCheckboxCell({
   onToggle,
   onTooltip,
   onTooltipClear,
+  disabled = false,
 }: ReviewCheckboxCellProps) {
   const isChecked = (row[field] as boolean) || false
   const reviewedAt = field === 'first_review_checked' ? row.first_review_reviewed_at : row.second_review_reviewed_at
@@ -45,19 +47,22 @@ export function ReviewCheckboxCell({
     >
       <button
         type="button"
+        disabled={disabled}
         onClick={(e) => {
           e.stopPropagation()
           e.preventDefault()
-          onToggle(row.item_id, field, !isChecked)
+          if (!disabled) onToggle(row.item_id, field, !isChecked)
         }}
         onMouseDown={(e) => e.stopPropagation()}
         onMouseEnter={(e) => {
+          if (disabled) return
           const rect = e.currentTarget.getBoundingClientRect()
           onTooltip(tooltipText, rect.left + rect.width / 2, rect.top)
         }}
         onMouseLeave={onTooltipClear}
         style={{
-          cursor: 'pointer',
+          cursor: disabled ? 'default' : 'pointer',
+          opacity: disabled ? 0.7 : 1,
           width: '20px',
           height: '20px',
           border: '2px solid',

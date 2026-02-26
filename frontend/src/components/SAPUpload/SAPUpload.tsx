@@ -6,7 +6,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sapUploadApi } from '@/api/client'
-import { getApiBaseUrl } from '@/utils/apiConfig'
 import type { SapFormulasConfig, DataInputRule } from '@/types'
 import { DEFAULT_SAP_FORMULAS, dataInputToDescriptionLines, byFormValueToDisplay, parseCondFromText } from '@/config/sapUploadFormulas'
 import { useFormTypes } from '@/hooks/useFormTypes'
@@ -32,11 +31,33 @@ function getColumnIndex(letter: string): number {
   return n - 1
 }
 
+// 템플릿 일본어 컬럼명 → UI 표시용 한글 (없으면 원문)
+const COLUMN_LABEL_KO: Record<string, string> = {
+  条件: '조건',
+  条件小数部: '조건 소수부',
+  未収条件: '미수 조건',
+  未収条件小数部: '미수 조건 소수부',
+  単価: '단가',
+  単価小数部: '단가 소수부',
+  得意先: '거래처',
+  商品名: '상품명',
+  数量: '수량',
+  入数: '입수',
+  金額: '금액',
+  請求金額: '청구금액',
+  請求合計額: '청구합계액',
+}
+
+function getColumnDisplayLabel(name: string): string {
+  return COLUMN_LABEL_KO[name?.trim() ?? ''] ?? (name ?? '')
+}
+
 function getColumnDisplayName(letter: string, columnNames: string[] | undefined): string {
   if (!columnNames?.length) return `${letter}列`
   const idx = getColumnIndex(letter)
   const name = columnNames[idx]?.trim()
-  return name ? `${letter}（${name}）` : `${letter}列`
+  const label = name ? getColumnDisplayLabel(name) : ''
+  return label ? `${letter}（${label}）` : `${letter}列`
 }
 
 export const SAPUpload = () => {
@@ -136,20 +157,39 @@ export const SAPUpload = () => {
     }
   }
 
-  // 현재 연월 계산
-  const currentYearMonth = useMemo(() => {
-    const now = new Date()
-    return {
-      year: now.getFullYear(),
-      month: now.getMonth() + 1
-    }
-  }, [])
+  // SAP 대상 연월 목록 (created_by_user_id IS NOT NULL, detail 있음)
+  const { data: yearMonthsData } = useQuery({
+    queryKey: ['sap-upload', 'available-year-months'],
+    queryFn: () => sapUploadApi.getAvailableYearMonths(),
+  })
+  const yearMonthOptions = useMemo(
+    () => yearMonthsData?.year_months ?? [],
+    [yearMonthsData?.year_months]
+  )
 
-  // SAP 엑셀 미리보기 데이터 조회
+  // 선택 연월: 있으면 유지, 없으면 목록 첫 번째 또는 현재 연월
+  const [selectedYearMonth, setSelectedYearMonth] = useState<{ year: number; month: number } | null>(null)
+  const effectiveYearMonth = useMemo(() => {
+    if (selectedYearMonth) return selectedYearMonth
+    if (yearMonthOptions.length > 0) return yearMonthOptions[0]
+    const now = new Date()
+    return { year: now.getFullYear(), month: now.getMonth() + 1 }
+  }, [selectedYearMonth, yearMonthOptions])
+
+  // 선택 기간의 문서 목록 (양식지별)
+  const { data: documentsData, isLoading: documentsLoading } = useQuery({
+    queryKey: ['sap-upload', 'documents', effectiveYearMonth.year, effectiveYearMonth.month],
+    queryFn: () => sapUploadApi.getDocuments(effectiveYearMonth.year, effectiveYearMonth.month),
+    enabled: true,
+  })
+  const byForm = documentsData?.by_form ?? {}
+  const totalItemsFromDocs = documentsData?.total_items ?? 0
+
+  // SAP 엑셀 미리보기 (선택 연월 기준)
   const { data: previewData, isLoading: previewLoading, refetch: refetchPreview } = useQuery({
-    queryKey: ['sap-upload', 'preview'],
-    queryFn: () => sapUploadApi.preview(),
-    enabled: showPreview, // 미리보기 버튼 클릭 시에만 조회
+    queryKey: ['sap-upload', 'preview', effectiveYearMonth.year, effectiveYearMonth.month],
+    queryFn: () => sapUploadApi.preview({ year: effectiveYearMonth.year, month: effectiveYearMonth.month }),
+    enabled: showPreview,
   })
 
   // 필터링된 미리보기 데이터
@@ -178,48 +218,28 @@ export const SAPUpload = () => {
     }
   }
 
-  // 엑셀 파일 다운로드 핸들러
+  // 엑셀 다운로드: 선택 연월의 파일 목록에 있는 문서 item만 취합
   const handleDownloadExcel = async () => {
     setIsGenerating(true)
-    
     try {
-      const response = await fetch(`${getApiBaseUrl()}/api/sap-upload/download`, {
-        method: 'GET',
-        headers: {
-          'X-Session-ID': localStorage.getItem('sessionId') || '',
-        },
+      const blob = await sapUploadApi.download({
+        year: effectiveYearMonth.year,
+        month: effectiveYearMonth.month,
       })
-      
-      if (!response.ok) {
-        throw new Error('ダウンロードに失敗しました')
-      }
-      
-      const blob = await response.blob()
-      
-      // Content-Disposition 헤더에서 파일명 추출
-      const contentDisposition = response.headers.get('Content-Disposition')
-      let filename = `SAP_Upload_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.xlsx`
-      
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
-        if (filenameMatch && filenameMatch[1]) {
-          filename = filenameMatch[1].replace(/['"]/g, '')
-        }
-      }
-      
-      // Blob을 다운로드 링크로 변환
+      const filename = `SAP_Upload_${effectiveYearMonth.year}${String(effectiveYearMonth.month).padStart(2, '0')}_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.xlsx`
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
       link.download = filename
-      
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('엑셀 파일 다운로드 오류:', error)
-      alert('엑셀 파일 다운로드 중 오류가 발생했습니다.')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        '엑셀 파일 다운로드 중 오류가 발생했습니다。'
+      alert(typeof msg === 'string' ? msg : 'データがありません')
     } finally {
       setIsGenerating(false)
     }
@@ -248,15 +268,35 @@ export const SAPUpload = () => {
 
       {/* 메인 컨텐츠 */}
       <div className="sap-upload-content">
-        {/* 현재 연월 정보 */}
+        {/* 연월 선택 */}
         <div className="sap-upload-period-card">
           <div className="period-label">対象期間</div>
           <div className="period-value">
-            {currentYearMonth.year}年 {currentYearMonth.month}月
+            <select
+              className="sap-upload-period-select"
+              value={effectiveYearMonth ? `${effectiveYearMonth.year}-${String(effectiveYearMonth.month).padStart(2, '0')}` : ''}
+              onChange={(e) => {
+                const v = e.target.value
+                if (!v) return
+                const [y, m] = v.split('-').map(Number)
+                if (!isNaN(y) && !isNaN(m)) setSelectedYearMonth({ year: y, month: m })
+              }}
+            >
+              {yearMonthOptions.length === 0 ? (
+                <option value={effectiveYearMonth ? `${effectiveYearMonth.year}-${String(effectiveYearMonth.month).padStart(2, '0')}` : ''}>
+                  {effectiveYearMonth ? `${effectiveYearMonth.year}年${String(effectiveYearMonth.month).padStart(2, '0')}月` : 'データなし'}
+                </option>
+              ) : null}
+              {yearMonthOptions.map((ym) => (
+                <option key={`${ym.year}-${ym.month}`} value={`${ym.year}-${String(ym.month).padStart(2, '0')}`}>
+                  {ym.year}年{String(ym.month).padStart(2, '0')}月
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
-        {/* 통계 카드 */}
+        {/* 총 건수 + 양식지별 파일 목록 */}
         <div className="sap-upload-stats-grid">
           <div className="stat-card">
             <div className="stat-icon">
@@ -266,10 +306,38 @@ export const SAPUpload = () => {
               </svg>
             </div>
             <div className="stat-content">
-              <div className="stat-value">{previewLoading ? '...' : (previewData?.total_items || 0)}</div>
+              <div className="stat-value">{documentsLoading ? '...' : totalItemsFromDocs}</div>
               <div className="stat-label">総件数（行数）</div>
             </div>
           </div>
+        </div>
+
+        {/* 양식지별 대상ファイル 목록 */}
+        <div className="sap-upload-file-list-section">
+          <h3 className="sap-upload-file-list-title">対象ファイル（様式別）</h3>
+          {documentsLoading ? (
+            <p className="sap-upload-file-list-loading">読み込み中...</p>
+          ) : Object.keys(byForm).length === 0 ? (
+            <p className="sap-upload-file-list-empty">
+              {effectiveYearMonth.year}年{String(effectiveYearMonth.month).padStart(2, '0')}月に、created_by_user_id が設定され detail ページがある文書はありません。
+            </p>
+          ) : (
+            <div className="sap-upload-file-list-by-form">
+              {formKeys.filter((k) => byForm[k]?.length).map((formKey) => (
+                <div key={formKey} className="sap-upload-form-group">
+                  <h4 className="sap-upload-form-group-title">{formTypeLabel(formKey) ?? `様式 ${formKey}`}</h4>
+                  <ul className="sap-upload-file-list">
+                    {(byForm[formKey] ?? []).map((doc) => (
+                      <li key={doc.pdf_filename} className="sap-upload-file-item">
+                        <span className="sap-upload-file-name">{doc.pdf_filename}</span>
+                        <span className="sap-upload-file-count">（{doc.item_count}行）</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 컬럼별 산식 시각화 (양식지별 편집 가능) */}
@@ -444,7 +512,7 @@ export const SAPUpload = () => {
             <button
               className="download-button"
               onClick={handleDownloadExcel}
-              disabled={isGenerating || previewLoading}
+              disabled={isGenerating || previewLoading || totalItemsFromDocs === 0}
             >
               {isGenerating ? (
                 <>
@@ -514,8 +582,7 @@ export const SAPUpload = () => {
                           <th>フォーム</th>
                           {filteredPreviewData.column_names && filteredPreviewData.column_names.length > 0 ? (
                             filteredPreviewData.column_names.map((colName, idx) => (
-                              // 컬럼명이 공란이면 헤더도 공란으로 표시
-                              <th key={idx}>{colName ?? ''}</th>
+                              <th key={idx}>{getColumnDisplayLabel(colName ?? '') || (colName ?? '')}</th>
                             ))
                           ) : (
                             // 컬럼명이 없으면 A~BB까지 표시

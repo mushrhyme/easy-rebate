@@ -67,6 +67,8 @@ export interface AnswerKeyRightPanelCtx {
   handleSaveAsAnswerKey: () => void
   saveStatus: string
   saveMessage: string
+  /** 既にベクターDBに登録済みの文書は編集・学習リクエスト不可 */
+  readOnly?: boolean
 }
 
 export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
@@ -133,10 +135,18 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
     handleSaveAsAnswerKey,
     saveStatus,
     saveMessage,
+    readOnly = false,
   } = ctx
 
   return (
     <div className="answer-key-right">
+      <div
+        style={
+          readOnly
+            ? { pointerEvents: 'none' as const, opacity: 0.85, userSelect: 'none' as const }
+            : undefined
+        }
+      >
       <div className="answer-key-right-tabs">
         <button
           type="button"
@@ -586,25 +596,21 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
           )}
         </div>
       )}
+      </div>
       <div className="answer-key-actions">
-        <button
-          type="button"
-          className="answer-key-btn answer-key-btn-secondary"
-          onClick={handleSaveGrid}
-          disabled={(dirtyIds.size === 0 && pageMetaDirtyPages.size === 0) || saveStatus === 'saving' || saveStatus === 'building'}
-          title="変更をDBにだけ反映します。ベクターDBは作らないので短時間で完了します。"
-        >
-          {saveStatus === 'saving' ? '保存中…' : '保存（DBのみ・ベクターDBなし）'}
-        </button>
-        <button
-          type="button"
-          className="answer-key-btn answer-key-btn-primary"
-          onClick={handleSaveAsAnswerKey}
-          disabled={saveStatus === 'saving' || saveStatus === 'building'}
-          title="DB反映のあと、学習フラグを立ててベクターDBを再構築します。時間がかかります。"
-        >
-          {saveStatus === 'building' ? '登録中…' : '解答として保存（ベクターDBに登録）'}
-        </button>
+        {readOnly ? (
+          <p className="answer-key-status">既にベクターDBに登録された文書です。編集できません。</p>
+        ) : (
+          <button
+            type="button"
+            className="answer-key-btn answer-key-btn-secondary"
+            onClick={handleSaveGrid}
+            disabled={(dirtyIds.size === 0 && pageMetaDirtyPages.size === 0) || saveStatus === 'saving' || saveStatus === 'building'}
+            title="変更をDBにだけ反映します。ベクターDBは作らないので短時間で完了します。"
+          >
+            {saveStatus === 'saving' ? '保存中…' : '保存（DBのみ・ベクターDBなし）'}
+          </button>
+        )}
       </div>
       {saveMessage && (
         <p className={`answer-key-status ${saveStatus === 'error' ? 'answer-key-status-error' : ''}`}>

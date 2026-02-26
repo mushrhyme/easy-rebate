@@ -33,6 +33,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   pageNumber,
   formType: _formType,
   onBulkCheckStateChange,
+  readOnly = false,
 }, ref) {
   const { data, isLoading, error } = useItems(pdfFilename, pageNumber)
   const { data: pageMetaData, isLoading: pageMetaLoading, error: pageMetaError } = usePageMeta(pdfFilename, pageNumber) // page_meta 조회
@@ -163,6 +164,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
+      // 검토 탭 frozen 컬럼 (표시 전용, 저장 제외)
+      row['소매처코드'] = item.frozen_retail_code ?? null
+      row['판매처코드'] = item.frozen_dist_code ?? null
 
       return row
     })
@@ -238,14 +242,16 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
-      // タイプ는 JSON 결과 그대로 사용 (별도 디폴트 없음)
+      // 검토 탭 frozen 컬럼 (표시 전용)
+      row['소매처코드'] = item.frozen_retail_code ?? null
+      row['판매처코드'] = item.frozen_dist_code ?? null
 
       return row
     })
     
     setRows((prevRows) => {
       // 새로운 initialRows와 기존 rows를 병합
-      const newRows = newInitialRows.map((newRow) => {
+      const newRows = newInitialRows.map((newRow: GridRow) => {
         const existingRow = prevRows.find((r) => r.item_id === newRow.item_id)
         if (existingRow) {
           // WebSocket으로 업데이트된 아이템인 경우 WebSocket으로 받은 값 사용 (다른 탭에서 업데이트)
@@ -568,6 +574,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     createItemPending: createItem.isPending,
     deleteItemPending: deleteItem.isPending,
     onOpenUnitPriceModal: setUnitPriceModalRow,
+    readOnly,
   })
 
   // 행 편집 시작 (락 획득)
@@ -636,6 +643,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
   // 셀 더블클릭으로 해당 행 편집 모드 진입
   const handleCellDoubleClick = (args: any) => {
+    if (readOnly) return
     const row: GridRow | undefined = args?.row
     if (!row) return
 
@@ -648,8 +656,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   
   /**
    * 저장 및 락 해제: 현재 rowData를 저장한 후 락 해제
+   * @param skipClearEditing true면 편집 해제는 호출자가 처리 (일괄 저장 시 사용)
    */
-  const handleSaveAndUnlock = async (itemId: number) => {
+  const handleSaveAndUnlock = async (itemId: number, opts?: { skipClearEditing?: boolean }) => {
     // sessionId 확인
     if (!sessionId) {
       console.error('❌ [handleSaveAndUnlock] sessionId가 없습니다!')
@@ -679,7 +688,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       version: updatedItem.version
     })
 
-    // item_data 추출 (공통 필드 제외)
+    // item_data 추출 (공통·표시전용 필드 제외)
     const itemData: any = {}
     Object.keys(rowData).forEach((key) => {
       if (
@@ -687,7 +696,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         key !== 'item_order' &&
         key !== 'customer' &&
         key !== 'first_review_checked' &&
-        key !== 'second_review_checked'
+        key !== 'second_review_checked' &&
+        key !== '소매처코드' &&
+        key !== '판매처코드'
       ) {
         itemData[key] = rowData[key]
       }
@@ -728,12 +739,14 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         }
       }
       
-      // 편집 모드 종료 (저장 성공했으므로)
-      setEditingItemIds((prev) => {
-        const next = new Set(prev)
-        next.delete(itemId)
-        return next
-      })
+      // 편집 모드 종료 (일괄 저장 시에는 호출자가 한 번에 제거)
+      if (!opts?.skipClearEditing) {
+        setEditingItemIds((prev) => {
+          const next = new Set(prev)
+          next.delete(itemId)
+          return next
+        })
+      }
       // rows는 items가 업데이트되면 자동으로 초기화됨 (useEffect)
     } catch (error: any) {
       const errorMessage = error?.response?.data?.detail || error?.message || 'Unknown error'
@@ -867,14 +880,22 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     setSelectedComplexField(null)
   }, [pdfFilename, pageNumber])
 
-  /** 편집 중인 모든 행을 순차 저장 (저장 버튼 / Ctrl+S 공통) */
+  /** 편집 중인 모든 행을 병렬 저장 후 성공한 행만 한 번에 편집 해제 (저장 버튼 / Ctrl+S 공통) */
   const saveAllEditingRows = useCallback(async () => {
     const editingIds = Array.from(editingItemIdsRef.current.values()).filter(
       (id): id is number => typeof id === 'number'
     )
     if (editingIds.length === 0) return
-    for (const itemId of editingIds) {
-      await handleSaveAndUnlock(itemId)
+    const results = await Promise.allSettled(
+      editingIds.map((id) => handleSaveAndUnlock(id, { skipClearEditing: true }))
+    )
+    const succeeded = editingIds.filter((_, i) => results[i].status === 'fulfilled')
+    if (succeeded.length > 0) {
+      setEditingItemIds((prev) => {
+        const next = new Set(prev)
+        succeeded.forEach((id) => next.delete(id))
+        return next
+      })
     }
   }, [handleSaveAndUnlock])
 
@@ -954,6 +975,30 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     [unitPriceModalRow]
   )
 
+  /** 동일 得意先CD or 得意先인 행을 그룹 키로 식별 (페이지 내 일괄 적용용) */
+  const getRetailGroupKey = useCallback((r: GridRow): string => {
+    const code = r['得意先CD'] != null ? String(r['得意先CD']).trim() : ''
+    if (code) return `code:${code}`
+    const name = String(r['得意先'] ?? r['得意先名'] ?? r['customer'] ?? '').trim()
+    return `name:${name}`
+  }, [])
+
+  const handleRetailSelect = useCallback(
+    (match: { 판매처코드: string; 소매처코드: string }) => {
+      if (!unitPriceModalRow) return
+      const groupKey = getRetailGroupKey(unitPriceModalRow)
+      setRows((prev) =>
+        prev.map((r) =>
+          getRetailGroupKey(r) === groupKey
+            ? { ...r, 판매처코드: match.판매처코드, 소매처코드: match.소매처코드 }
+            : r
+        )
+      )
+      setUnitPriceModalRow(null)
+    },
+    [unitPriceModalRow, getRetailGroupKey]
+  )
+
   if (isLoading || pageMetaLoading) {
     return <div className="grid-loading">読み込み中...</div>
   }
@@ -969,12 +1014,13 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
   return (
     <div className="items-grid-rdg">
-      {/* 단가 후보 모달 (셀 우클릭) */}
+      {/* 매핑 모달: 単価 | 代表スーパー 탭 */}
       <UnitPriceMatchModal
         open={!!unitPriceModalRow}
         onClose={() => setUnitPriceModalRow(null)}
-        productName={unitPriceModalRow ? String(unitPriceModalRow['商品名'] ?? '').trim() : ''}
-        onSelect={handleUnitPriceSelect}
+        row={unitPriceModalRow}
+        onSelectUnitPrice={handleUnitPriceSelect}
+        onSelectRetail={handleRetailSelect}
       />
       {/* 복잡한 구조 필드 배지 영역 (좌측) */}
       {/* cover/summary 페이지인 경우 page_meta의 최상위 키들을 배지로 표시 (totals, recipient 등) */}

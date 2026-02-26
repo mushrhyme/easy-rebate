@@ -11,6 +11,8 @@ export interface ItemsGridRdgProps {
   formType: string | null
   /** 현재 페이지 1次/2次 전부 체크·일부 체크 상태 변경 시 호출 (체크박스 표시용) */
   onBulkCheckStateChange?: (state: BulkCheckState) => void
+  /** true면 셀 편집·행 추가/삭제·체크박스 토글 비활성 (벡터 등록 문서 조회 전용) */
+  readOnly?: boolean
 }
 
 export interface ItemsGridRdgHandle {

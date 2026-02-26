@@ -2,6 +2,7 @@
 SAP 업로드 엑셀 파일 생성 API
 - 데이터 입력/수식은 data/sap_upload_formulas.json 설정을 읽어 적용 (단일 소스)
 """
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
@@ -14,7 +15,7 @@ from openpyxl.styles import Font, Alignment
 import json
 
 from database.registry import get_db
-from backend.core.auth import get_current_user
+from backend.core.auth import get_current_user_optional
 from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
@@ -39,7 +40,7 @@ def _safe_eval_expr(expr: str, item_data: Dict[str, Any]) -> Any:
         if t in ("and", "or", "not", "True", "False"):
             continue
         v = item_data.get(t)
-        if v is None or v == "" and t in _FIELD_FALLBACK:
+        if (v is None or v == "") and t in _FIELD_FALLBACK:
             v = item_data.get(_FIELD_FALLBACK[t])
         if v is None or v == "":
             v = 0
@@ -117,20 +118,29 @@ def _get_rule_from_by_form(by_form_value: Any) -> Any:
     return None
 
 
-def get_all_items_current(db) -> List[Dict[str, Any]]:
+def get_all_items_current(
+    db,
+    data_year: Optional[int] = None,
+    data_month: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """
-    items_current 테이블에서 모든 아이템 조회
-    ※ page_data_current.page_role = 'detail' 인 건만 대상
-    
+    items_current에서 아이템 조회.
+    조건: page_role='detail', documents_current.created_by_user_id IS NOT NULL,
+    (선택) data_year/data_month 일치.
     Returns:
-        모든 아이템 리스트 (pdf_filename, page_number, item_data 포함)
+        아이템 리스트 (pdf_filename, page_number, item_data, form_type 등)
     """
     try:
         with db.get_connection() as conn:
             from psycopg2.extras import RealDictCursor
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
-            cursor.execute("""
+            ym_clause = ""
+            params: tuple = ()
+            if data_year is not None and data_month is not None:
+                ym_clause = " AND d.data_year = %s AND d.data_month = %s"
+                params = (data_year, data_month)
+            cursor.execute(
+                """
                 SELECT 
                     i.item_id,
                     i.pdf_filename,
@@ -139,15 +149,18 @@ def get_all_items_current(db) -> List[Dict[str, Any]]:
                     i.item_data::text as item_data,
                     d.form_type
                 FROM items_current i
-                LEFT JOIN documents_current d 
+                INNER JOIN documents_current d 
                     ON i.pdf_filename = d.pdf_filename
+                   AND d.created_by_user_id IS NOT NULL
                 JOIN page_data_current p
                     ON i.pdf_filename = p.pdf_filename
                    AND i.page_number = p.page_number
                 WHERE p.page_role = 'detail'
+                """ + ym_clause + """
                 ORDER BY i.pdf_filename, i.page_number, i.item_order
-            """)
-            
+            """,
+                params,
+            )
             rows = cursor.fetchall()
             result = []
             for row in rows:
@@ -314,20 +327,175 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
     return output
 
 
-@router.get("/preview")
-async def preview_sap_excel(
-    db=Depends(get_db)
+@router.get("/available-year-months")
+async def get_sap_available_year_months(db=Depends(get_db)):
+    """
+    SAP 대상 문서가 있는 연월 목록.
+    documents_current.created_by_user_id IS NOT NULL 이고
+    detail 페이지가 있는 문서의 distinct (data_year, data_month). 최신순.
+    """
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT d.data_year AS y, d.data_month AS m
+                FROM documents_current d
+                WHERE d.created_by_user_id IS NOT NULL
+                  AND d.data_year IS NOT NULL AND d.data_month IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM page_data_current p
+                    WHERE p.pdf_filename = d.pdf_filename AND p.page_role = 'detail'
+                  )
+                ORDER BY y DESC, m DESC
+            """)
+            rows = cursor.fetchall()
+            return {"year_months": [{"year": r[0], "month": r[1]} for r in rows]}
+    except Exception as e:
+        print(f"❌ [get_sap_available_year_months] 오류: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/check-document")
+async def check_sap_document(
+    db=Depends(get_db),
+    pdf: Optional[str] = None,
 ):
     """
-    SAP 엑셀 파일 미리보기 (JSON 형식으로 반환)
-    
+    특정 문서가 SAP 대상 목록에 안 나오는 이유 진단.
+    pdf: 파일명 (예: 三菱食品東日本_2025.01 (2)-1-4.pdf)
+    반환: in_db, created_by_user_id, data_year, data_month, has_detail_page, reason
+    """
+    if not pdf or not pdf.strip():
+        return {"ok": False, "reason": "pdf 파라미터가 비어 있습니다."}
+    pdf = pdf.strip()
+    try:
+        with db.get_connection() as conn:
+            from psycopg2.extras import RealDictCursor
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute(
+                """
+                SELECT pdf_filename, created_by_user_id, data_year, data_month, form_type
+                FROM documents_current
+                WHERE pdf_filename = %s
+                """,
+                (pdf,),
+            )
+            row = cursor.fetchone()
+        if not row:
+            return {
+                "ok": True,
+                "pdf_filename": pdf,
+                "in_db": False,
+                "created_by_user_id": None,
+                "data_year": None,
+                "data_month": None,
+                "has_detail_page": False,
+                "reason": "documents_current에 해당 pdf_filename이 없습니다. (아카이브에 있거나 미등록)",
+            }
+        d = dict(row)
+        created_by = d.get("created_by_user_id")
+        data_year = d.get("data_year")
+        data_month = d.get("data_month")
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT 1 FROM page_data_current
+                WHERE pdf_filename = %s AND page_role = 'detail'
+                LIMIT 1
+                """,
+                (pdf,),
+            )
+            has_detail = cursor.fetchone() is not None
+        reasons = []
+        if created_by is None:
+            reasons.append("created_by_user_id가 NULL입니다. (업로드 시 로그인 사용자로 저장된 문서만 대상)")
+        if data_year is None or data_month is None:
+            reasons.append("data_year 또는 data_month가 NULL입니다. (연월이 지정된 문서만 대상)")
+        if not has_detail:
+            reasons.append("detail 페이지가 없습니다. (page_data_current에 page_role='detail'인 페이지가 없음)")
+        reason = "; ".join(reasons) if reasons else "조건은 모두 만족합니다. 연월 선택이 이 문서의 data_year/data_month와 일치하는지 확인하세요."
+        return {
+            "ok": True,
+            "pdf_filename": pdf,
+            "in_db": True,
+            "created_by_user_id": created_by,
+            "data_year": data_year,
+            "data_month": data_month,
+            "has_detail_page": has_detail,
+            "reason": reason,
+        }
+    except Exception as e:
+        print(f"❌ [check_sap_document] 오류: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/documents")
+async def get_sap_documents(
+    db=Depends(get_db),
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+):
+    """
+    조건 충족 문서 목록을 양식지(form_type)별로 반환.
+    조건: created_by_user_id IS NOT NULL, detail 페이지 있음, (선택) data_year/month 일치.
     Returns:
-        엑셀 데이터의 미리보기 (처음 50행) + 템플릿의 모든 컬럼명
+        by_form: { "01": [{ pdf_filename, item_count }], ... },
+        total_items: 전체 행 수
+    """
+    if year is None or month is None:
+        return {"by_form": {}, "total_items": 0}
+    try:
+        with db.get_connection() as conn:
+            from psycopg2.extras import RealDictCursor
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT d.pdf_filename, d.form_type, COUNT(i.item_id) AS item_count
+                FROM documents_current d
+                INNER JOIN page_data_current p
+                    ON p.pdf_filename = d.pdf_filename AND p.page_role = 'detail'
+                INNER JOIN items_current i
+                    ON i.pdf_filename = d.pdf_filename AND i.page_number = p.page_number
+                WHERE d.created_by_user_id IS NOT NULL
+                  AND d.data_year = %s AND d.data_month = %s
+                GROUP BY d.pdf_filename, d.form_type
+                ORDER BY d.form_type, d.pdf_filename
+            """, (year, month))
+            rows = cursor.fetchall()
+        by_form: Dict[str, List[Dict[str, Any]]] = {}
+        total_items = 0
+        for r in rows:
+            row = dict(r)
+            ft = (row.get("form_type") or "01").strip()
+            if ft not in by_form:
+                by_form[ft] = []
+            by_form[ft].append({
+                "pdf_filename": row.get("pdf_filename", ""),
+                "item_count": int(row.get("item_count", 0)),
+            })
+            total_items += int(row.get("item_count", 0))
+        return {"by_form": by_form, "total_items": total_items}
+    except Exception as e:
+        print(f"❌ [get_sap_documents] 오류: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/preview")
+async def preview_sap_excel(
+    db=Depends(get_db),
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+):
+    """
+    SAP 엑셀 파일 미리보기 (JSON). 연월 지정 시 해당 기간 문서만.
     """
     try:
         from pathlib import Path
-        
-        items = get_all_items_current(db)
+
+        items = get_all_items_current(db, data_year=year, data_month=month)
         
         # 템플릿 파일에서 컬럼명 읽기
         project_root = Path(__file__).parent.parent.parent.parent
@@ -393,35 +561,31 @@ async def preview_sap_excel(
 
 @router.get("/download")
 async def download_sap_excel(
-    current_user: dict = Depends(get_current_user),
-    db=Depends(get_db)
+    db=Depends(get_db),
+    current_user: dict = Depends(get_current_user_optional),
+    year: Optional[int] = None,
+    month: Optional[int] = None,
 ):
     """
-    SAP 업로드용 엑셀 파일 다운로드
-    
-    Returns:
-        엑셀 파일 (StreamingResponse)
+    SAP 업로드용 엑셀 파일 다운로드. year/month 지정 시 해당 기간 문서의 item만 취합.
     """
     try:
-        items = get_all_items_current(db)
-        
+        items = get_all_items_current(db, data_year=year, data_month=month)
+
         if not items:
             raise HTTPException(status_code=404, detail="データがありません")
-        
-        # 템플릿 파일 경로 확인
+
         from pathlib import Path
         project_root = Path(__file__).parent.parent.parent.parent
         template_path = project_root / "static" / "sap_upload.xlsx"
-        
-        # 템플릿 파일이 있으면 사용, 없으면 None
         template_file = str(template_path) if template_path.exists() else None
-        
+
         excel_file = create_sap_excel(items, template_file)
-        
-        # 파일명 생성 (현재 날짜 포함)
+
         from datetime import datetime
         filename = f"SAP_Upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        activity_log(current_user.get("username"), "SAP 엑셀 다운로드")
+        if current_user:
+            activity_log(current_user.get("username"), "SAP 엑셀 다운로드")
         return StreamingResponse(
             excel_file,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -464,8 +628,7 @@ async def get_sap_column_names():
 
 
 # ========== SAP 산식 설정 (양식지별 편집용) ==========
-def _get_formulas_path() -> "Path":
-    from pathlib import Path
+def _get_formulas_path() -> Path:
     project_root = Path(__file__).resolve().parent.parent.parent.parent
     data_dir = project_root / "data"
     data_dir.mkdir(exist_ok=True)
