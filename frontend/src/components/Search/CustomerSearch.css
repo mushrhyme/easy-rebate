@@ -421,6 +421,25 @@
   max-width: 350px;
 }
 
+/* 파일 선택 드롭다운: 특정 문서로 바로 이동 */
+.page-filename-select {
+  color: #333;
+  font-size: 0.9em;
+  font-weight: 500;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  min-width: 120px;
+  max-width: 320px;
+  cursor: pointer;
+}
+.page-filename-select:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
 .page-number-in-file {
   color: #667eea;
   font-size: 0.9em;

@@ -414,6 +414,20 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   const currentPage = displayPages[currentPageIndex] || null
   const totalFilteredPages = displayPages.length
 
+  // 드롭다운용: 표시 중인 페이지 목록에서 파일별 첫 등장 인덱스 (파일 선택 시 해당 파일 1페이지로 이동)
+  const fileNavOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const list: { pdfFilename: string; firstIndex: number }[] = []
+    displayPages.forEach((p, idx) => {
+      const key = (p.pdfFilename ?? '').trim()
+      if (key && !seen.has(key)) {
+        seen.add(key)
+        list.push({ pdfFilename: p.pdfFilename, firstIndex: idx })
+      }
+    })
+    return list
+  }, [displayPages])
+
   // 현재 인덱스/전체 페이지 수 변경 시, 입력창에 현재 페이지 번호 동기화
   useEffect(() => {
     if (totalFilteredPages === 0) {
@@ -799,11 +813,28 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
             )}
           </div>
 
-          {/* 5. 파일명 + 6. 파일 페이지 (p.N) */}
+          {/* 5. 파일 선택 드롭다운 + 6. 파일 내 페이지 (p.N) */}
           <div className="page-filename-container">
-            <span className="page-filename">
-              {currentPage?.pdfFilename || ''}
-            </span>
+            <select
+              className="page-filename-select"
+              value={currentPage?.pdfFilename ?? ''}
+              onChange={(e) => {
+                const pdf = e.target.value
+                const opt = fileNavOptions.find((o) => o.pdfFilename === pdf)
+                if (opt != null) setCurrentPageIndex(opt.firstIndex)
+              }}
+              title="문서 선택 시 해당 파일 1페이지로 이동"
+            >
+              {fileNavOptions.length === 0 && (
+                <option value="">—</option>
+              )}
+              {fileNavOptions.map(({ pdfFilename, firstIndex }) => (
+                <option key={pdfFilename} value={pdfFilename}>
+                  {pdfFilename}
+                  {displayPages[firstIndex] && ` (${displayPages[firstIndex].totalPages}p)`}
+                </option>
+              ))}
+            </select>
             {currentPage && (
               <span className="page-number-in-file">
                 p.{currentPage.pageNumber}
