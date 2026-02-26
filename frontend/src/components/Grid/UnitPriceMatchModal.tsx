@@ -47,7 +47,7 @@ export function UnitPriceMatchModal({
     searchApi
       .getUnitPriceByProduct(productName.trim(), { topK: 15, minSimilarity: 0.2 })
       .then((res) => setMatches(res.matches ?? []))
-      .catch((e: any) => setError(e?.response?.data?.detail ?? e?.message ?? '조회 실패'))
+      .catch((e: any) => setError(e?.response?.data?.detail ?? e?.message ?? '検索に失敗しました'))
       .finally(() => setLoading(false))
   }, [open, productName])
 
@@ -64,27 +64,27 @@ export function UnitPriceMatchModal({
         className="unit-price-match-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="단가 후보 선택"
+        aria-label="単価候補を選択"
       >
         <div className="unit-price-match-modal-header">
-          <h3>단가 후보 (商品名: {productName || '—'})</h3>
+          <h3>単価候補 (商品名: {productName || '—'})</h3>
           <button type="button" className="unit-price-match-modal-close" onClick={onClose}>
             ×
           </button>
         </div>
         <div className="unit-price-match-modal-body">
-          {loading && <p className="unit-price-match-modal-loading">조회 중…</p>}
+          {loading && <p className="unit-price-match-modal-loading">検索中…</p>}
           {error && <p className="unit-price-match-modal-error">{error}</p>}
           {!loading && !error && matches.length === 0 && (
-            <p className="unit-price-match-modal-empty">매칭된 후보가 없습니다.</p>
+            <p className="unit-price-match-modal-empty">該当する候補がありません。</p>
           )}
           {!loading && !error && matches.length > 0 && (
             <table className="unit-price-match-table">
               <thead>
                 <tr>
-                  <th>제품명</th>
-                  <th>제품용량</th>
-                  <th>유사도</th>
+                  <th>商品名</th>
+                  <th>内容量</th>
+                  <th>類似度</th>
                   <th>仕切</th>
                   <th>本部長</th>
                   <th></th>
@@ -103,7 +103,7 @@ export function UnitPriceMatchModal({
                     <td>{m.본부장 != null ? Number(m.본부장).toLocaleString() : '—'}</td>
                     <td>
                       <button type="button" onClick={() => handleSelect(m)}>
-                        적용
+                        適用
                       </button>
                     </td>
                   </tr>
