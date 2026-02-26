@@ -867,7 +867,18 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     setSelectedComplexField(null)
   }, [pdfFilename, pageNumber])
 
-  // Ctrl+S / Cmd+S 로 현재 편집 중인 행 저장
+  /** 편집 중인 모든 행을 순차 저장 (저장 버튼 / Ctrl+S 공통) */
+  const saveAllEditingRows = useCallback(async () => {
+    const editingIds = Array.from(editingItemIdsRef.current.values()).filter(
+      (id): id is number => typeof id === 'number'
+    )
+    if (editingIds.length === 0) return
+    for (const itemId of editingIds) {
+      await handleSaveAndUnlock(itemId)
+    }
+  }, [handleSaveAndUnlock])
+
+  // Ctrl+S / Cmd+S 로 편집 중인 모든 행 저장
   useEffect(() => {
     if (typeof window === 'undefined') return
 
@@ -878,33 +889,24 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
       if (!isSaveShortcut) return
 
-      // 브라우저 기본 저장 단축키 막기
       event.preventDefault()
 
       const editingIds = Array.from(editingItemIdsRef.current.values())
       if (editingIds.length === 0) return
 
-      const firstEditingId = editingIds[0]
-      if (typeof firstEditingId === 'number') {
-        void handleSaveAndUnlock(firstEditingId)
-      }
+      void saveAllEditingRows()
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [handleSaveAndUnlock])
+  }, [saveAllEditingRows])
 
   // 부모에서 저장·일괄 체크 호출용 노출
   useImperativeHandle(ref, () => ({
     save() {
-      const editingIds = Array.from(editingItemIdsRef.current.values())
-      if (editingIds.length === 0) return
-      const firstEditingId = editingIds[0]
-      if (typeof firstEditingId === 'number') {
-        void handleSaveAndUnlock(firstEditingId)
-      }
+      void saveAllEditingRows()
     },
     async checkAllFirst() {
       const currentRows = rowsRef.current
@@ -934,7 +936,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         await handleCheckboxUpdate(row.item_id, 'second_review_checked', false)
       }
     },
-  }), [handleSaveAndUnlock, handleCheckboxUpdate])
+  }), [saveAllEditingRows, handleCheckboxUpdate])
 
   const handleUnitPriceSelect = useCallback(
     (match: { 시키리?: number; 본부장?: number }) => {
