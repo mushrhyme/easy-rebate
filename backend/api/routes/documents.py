@@ -21,6 +21,7 @@ from database.table_selector import get_table_name, get_table_suffix
 from modules.core.processor import PdfProcessor
 from modules.utils.config import rag_config, get_project_root
 from modules.utils.retail_resolve import resolve_retail_dist
+from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from backend.unit_price_lookup import resolve_product_and_prices
 from backend.core.session import SessionManager
 
@@ -1323,6 +1324,8 @@ async def save_document_answer_json(
                             item_dict["仕切"] = shikiri
                         if honbu is not None:
                             item_dict["本部長"] = honbu
+                    upload_channel = doc.get("upload_channel")
+                    apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                     separated = db._separate_item_fields(item_dict, form_type=form_type)
                     item_data = separated.get("item_data") or {}
                     if first_item_keys is None and item_data:
@@ -1874,11 +1877,12 @@ Use the same key names as the template. Fill values from the document for each r
             """, (pdf_filename, page_number, page_role))
 
             cursor.execute(
-                "SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                "SELECT form_type, upload_channel FROM documents_current WHERE pdf_filename = %s LIMIT 1",
                 (pdf_filename,)
             )
             row = cursor.fetchone()
             form_type = row[0] if row and row[0] else None
+            upload_channel = row[1] if row and len(row) > 1 else None
             _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
             for item_order, item_dict in enumerate(items, 1):
                 if not isinstance(item_dict, dict):
@@ -1899,6 +1903,7 @@ Use the same key names as the template. Fill values from the document for each r
                         item_dict["仕切"] = shikiri
                     if honbu is not None:
                         item_dict["本部長"] = honbu
+                apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                 separated = db._separate_item_fields(item_dict, form_type=form_type)
                 item_data = separated.get("item_data") or {}
                 cursor.execute("""
@@ -1978,11 +1983,12 @@ async def create_items_from_answer(
 
             # 3. 공통 필드 분리 후 items INSERT (표준 키 得意先, 商品名)
             cursor.execute(
-                "SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                "SELECT form_type, upload_channel FROM documents_current WHERE pdf_filename = %s LIMIT 1",
                 (pdf_filename,)
             )
             row = cursor.fetchone()
             form_type = row[0] if row and row[0] else None
+            upload_channel = row[1] if row and len(row) > 1 else None
             _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
             for item_order, item_dict in enumerate(items, 1):
                 if not isinstance(item_dict, dict):
@@ -2003,6 +2009,7 @@ async def create_items_from_answer(
                         item_dict["仕切"] = shikiri
                     if honbu is not None:
                         item_dict["本部長"] = honbu
+                apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                 separated = db._separate_item_fields(item_dict, form_type=form_type)
                 item_data = separated.get("item_data") or {}
                 customer = separated.get("customer")

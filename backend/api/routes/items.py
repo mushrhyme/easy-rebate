@@ -737,10 +737,13 @@ async def get_page_items(
         
         # 검토 탭 컬럼 순서: 이 문서가 파싱 시 참조한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
         item_data_keys: Optional[List[str]] = None
+        form_type: Optional[str] = None
+        upload_channel: Optional[str] = None
         try:
             doc = db.get_document(pdf_filename)
             if doc:
                 form_type = doc.get("form_type")
+                upload_channel = doc.get("upload_channel")
                 doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else None
                 if doc_meta and doc_meta.get("item_data_keys"):
                     item_data_keys = doc_meta["item_data_keys"]
@@ -892,7 +895,12 @@ async def get_page_items(
                     frozen_product_code=frozen_product_code,
                 )
             )
-        return {"items": item_list, "item_data_keys": item_data_keys}
+        return {
+            "items": item_list,
+            "item_data_keys": item_data_keys,
+            "form_type": form_type,
+            "upload_channel": upload_channel,
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

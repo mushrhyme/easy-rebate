@@ -11,6 +11,7 @@ from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
 from modules.utils.config import get_project_root
 from modules.utils.retail_resolve import resolve_retail_dist
+from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from backend.unit_price_lookup import resolve_product_and_prices
 
 
@@ -227,8 +228,9 @@ class ItemsMixin:
                                 item_dict["商品CD"] = code
                             if shikiri is not None:
                                 item_dict["仕切"] = shikiri
-                            if honbu is not None:
-                                item_dict["本部長"] = honbu
+                        if honbu is not None:
+                            item_dict["本部長"] = honbu
+                        apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                         # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
                         separated = self._separate_item_fields(item_dict, form_type=form_type)
                         
