@@ -408,11 +408,10 @@ export const itemsApi = {
   getByPage: async (
     pdfFilename: string,
     pageNumber: number
-  ): Promise<{ items: Item[]; item_data_keys?: string[] | null }> => {
-    // URL 인코딩
+  ): Promise<{ items: Item[]; item_data_keys?: string[] | null; form_type?: string | null; upload_channel?: string | null }> => {
     const encodedFilename = encodeURIComponent(pdfFilename)
     const url = `/api/items/${encodedFilename}/pages/${pageNumber}`
-    const response = await client.get<{ items: Item[]; item_data_keys?: string[] | null }>(url)
+    const response = await client.get<{ items: Item[]; item_data_keys?: string[] | null; form_type?: string | null; upload_channel?: string | null }>(url)
     return response.data
   },
 

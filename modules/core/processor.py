@@ -210,6 +210,8 @@ class PdfProcessor:
                                     item_dict["仕切"] = shikiri
                                 if honbu is not None:
                                     item_dict["本部長"] = honbu
+                            from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
+                            apply_finet01_cs_irisu(item_dict, form_type, upload_channel)  # FINET 01 + 数量単位=CS → 仕切・本部長 *= 入数
                 except Exception:
                     pass
 

@@ -1084,11 +1084,21 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     async (match: { 제품코드?: string | number; 시키리?: number; 본부장?: number }) => {
       if (!unitPriceModalRow || !sessionId || !pdfFilename || pageNumber == null) return
       const itemId = unitPriceModalRow.item_id
-      const updatedRow = {
+      let updatedRow: GridRow = {
         ...unitPriceModalRow,
         仕切: match.시키리 ?? unitPriceModalRow['仕切'],
         本部長: match.본부장 ?? unitPriceModalRow['本部長'],
         商品CD: match.제품코드 != null ? String(match.제품코드) : unitPriceModalRow['商品CD'],
+      }
+      // FINET 01 + 数量単位=CS → 仕切・本部長 *= 入数 (매핑 모달에서 단가 적용 시에도 동일 계산)
+      if (data?.form_type === '01' && data?.upload_channel === 'finet' && String(unitPriceModalRow['数量単位'] ?? '').trim() === 'CS') {
+        const irisu = parseCellNum(unitPriceModalRow['入数'])
+        if (irisu != null && irisu > 0) {
+          const shikiri = parseCellNum(updatedRow['仕切'])
+          const honbu = parseCellNum(updatedRow['本部長'])
+          if (shikiri != null) updatedRow = { ...updatedRow, 仕切: Math.round(shikiri * irisu * 100) / 100 }
+          if (honbu != null) updatedRow = { ...updatedRow, 本部長: Math.round(honbu * irisu * 100) / 100 }
+        }
       }
       setRows((prev) =>
         prev.map((r) => (r.item_id === itemId ? updatedRow : r))
@@ -1130,7 +1140,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         alert(`保存に失敗しました: ${msg}`)
       }
     },
-    [unitPriceModalRow, sessionId, pdfFilename, pageNumber, items, updateItem]
+    [unitPriceModalRow, sessionId, pdfFilename, pageNumber, items, updateItem, data?.form_type, data?.upload_channel]
   )
 
   /** 동일 得意先CD or 得意先인 행을 그룹 키로 식별 (페이지 내 일괄 적용용) */
