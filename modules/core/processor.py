@@ -215,6 +215,7 @@ class PdfProcessor:
 
                 # DB에 저장 (이미지 데이터 직접 전달)
                 try:
+                    print(f"[DEBUG] save_document_data 호출: pdf_filename={pdf_filename!r}, pages={len(page_results)}, images={len(image_data_list or [])}")
                     success = db_manager.save_document_data(
                         pdf_filename=pdf_filename,
                         page_results=page_results,
@@ -226,8 +227,9 @@ class PdfProcessor:
                         data_year=data_year,
                         data_month=data_month
                     )
-                    
+                    print(f"[DEBUG] save_document_data 결과: success={success}")
                     if not success:
+                        print("[DEBUG] 문서 저장 실패 (success=False) -> RuntimeError 발생")
                         raise RuntimeError("문서 저장에 실패했습니다.")
                     
                     # 6. 자동으로 img 폴더에 학습 데이터 저장 (설정 활성화 시)

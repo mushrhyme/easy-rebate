@@ -52,6 +52,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
       queryClient.invalidateQueries({ queryKey: ['documents', 'upload_channel', selectedChannel] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
+      queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
     },
     onError: (err: unknown) => {
       const msg = err && typeof err === 'object' && 'response' in err
