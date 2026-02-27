@@ -280,7 +280,10 @@ class ItemsMixin:
                 
                 return True
                 
-        except Exception:
+        except Exception as e:
+            import traceback
+            print("[DEBUG] save_document_data 실패:", type(e).__name__, str(e))
+            traceback.print_exc()
             return False
     
     def get_items(

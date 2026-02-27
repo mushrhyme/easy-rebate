@@ -835,13 +835,14 @@ async def get_documents_in_vector_index(db=Depends(get_db)):
     벡터 DB 등록 문서(pdf_filename) 목록 반환.
     - rag_learning_status_current(status='merged') 와
     - rag_vector_index 메타데이터에 있는 목록을 합쳐서 반환.
-    (한쪽에만 있어도 초록 표시되도록)
+    - status='deleted'(미사용 정답지)인 문서는 제외 → 재업로드 시 초록/readOnly로 잘못 표시되지 않음.
     """
     try:
         names = set()
-        # 1) rag_learning_status_current 에서 merged 문서
+        deleted_names = set()
         with db.get_connection() as conn:
             cursor = conn.cursor()
+            # 1) merged 문서만 포함
             cursor.execute("""
                 SELECT DISTINCT pdf_filename FROM rag_learning_status_current
                 WHERE status = 'merged'
@@ -849,7 +850,18 @@ async def get_documents_in_vector_index(db=Depends(get_db)):
             for r in cursor.fetchall():
                 if r and r[0]:
                     names.add(r[0])
-        # 2) rag_vector_index 메타에서 추출 (벡터에만 있고 status 미등록 문서 포함)
+            # 2) 미사용(deleted) 문서 목록 — 메타에만 남아 있어도 결과에서 제외
+            try:
+                cursor.execute("""
+                    SELECT DISTINCT pdf_filename FROM rag_learning_status_current
+                    WHERE status = 'deleted'
+                """)
+                for r in cursor.fetchall():
+                    if r and r[0]:
+                        deleted_names.add(r[0])
+            except Exception:
+                pass
+        # 3) rag_vector_index 메타에서 추출 (벡터에만 있고 status 미등록 문서 포함)
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -862,6 +874,7 @@ async def get_documents_in_vector_index(db=Depends(get_db)):
             for p in _extract_pdf_filenames_from_index_metadata(row[0]):
                 if p:
                     names.add(p)
+        names -= deleted_names
         return {"pdf_filenames": sorted(names)}
     except Exception:
         return {"pdf_filenames": []}
