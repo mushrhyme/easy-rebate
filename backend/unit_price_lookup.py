@@ -79,6 +79,8 @@ def find_similar_products(
     if not csv_path.exists():
         raise FileNotFoundError(f"파일 없음: {csv_path}")
     df = pd.read_csv(csv_path, encoding="utf-8")
+    # 제품코드·시키리·본부장이 모두 있는 행만 사용 → 매핑 결과에 NaN이 나오지 않도록
+    df = df.dropna(subset=["제품코드", "시키리", "본부장"])
     if col not in df.columns:
         raise KeyError(f"컬럼 없음: {col}. 사용 가능: {list(df.columns)}")
     if sub_col and sub_col not in df.columns:
