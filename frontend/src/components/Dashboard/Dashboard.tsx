@@ -466,7 +466,7 @@ export function Dashboard(_props: DashboardProps = {}) {
                         <th>得意先名</th>
                         <th className="dashboard-th-num">アイテム数</th>
                         <th className="dashboard-th-num">文書数</th>
-                        <th className="dashboard-th-num">ページ数</th>
+                        <th className="dashboard-th-num">p</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -550,7 +550,7 @@ export function Dashboard(_props: DashboardProps = {}) {
                       <th>様式コード</th>
                       <th>表示名</th>
                       <th className="dashboard-th-num">嵌入文書数</th>
-                      <th className="dashboard-th-num">ページ数</th>
+                      <th className="dashboard-th-num">p</th>
                       <th className="dashboard-col-action">{isAdmin ? '操作' : ''}</th>
                     </tr>
                   </thead>

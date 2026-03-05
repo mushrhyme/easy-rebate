@@ -156,7 +156,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
                   ...prev,
                   [message.file_name!]: {
                     status: 'completed' as const,
-                    message: `完了: ${message.pages}ページを${message.elapsed_time?.toFixed(1)}秒で処理しました`,
+                    message: `完了: ${message.pages}pを${message.elapsed_time?.toFixed(1)}秒で処理しました`,
                   },
                 }
               : prev
@@ -255,7 +255,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
               status: 'completed',
               message:
                 result.pages && result.pages > 0
-                  ? `既に登録済みです（${result.pages}ページ）`
+                  ? `既に登録済みです（${result.pages}p）`
                   : '既に登録済みです',
             },
           }))

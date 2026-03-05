@@ -23,12 +23,18 @@ interface Page {
 // 검토 필터 타입: 1次/2次 각각 완료/미완료
 type ReviewFilter = 'all' | 'first_reviewed' | 'first_not_reviewed' | 'second_reviewed' | 'second_not_reviewed'
 
+/** 検討タブに復帰 시 열 문서·양식지 (문서 선택 + 양식지 드롭다운 유지) */
+export type DocumentToOpenOnReturn = { pdf_filename: string; form_type: string | null }
+
 interface CustomerSearchProps {
   /** 정답지 생성 탭으로 이동할 때 지정한 문서의 pdf_filename 전달 */
   onNavigateToAnswerKey?: (pdfFilename: string) => void
+  /** 検討タブに復帰 시 이 문서·양식지로 자동 선택 (설정 시 반영 후 소비) */
+  documentToOpen?: DocumentToOpenOnReturn | null
+  onConsumeDocumentToOpen?: () => void
 }
 
-export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) => {
+export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsumeDocumentToOpen }: CustomerSearchProps) => {
   const queryClient = useQueryClient()
   const { options: formTypeOptions, formTypeLabel } = useFormTypes()
   const [showAnswerKeyModal, setShowAnswerKeyModal] = useState(false)
@@ -45,9 +51,27 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   const [imageHeightPercent, setImageHeightPercent] = useState(50) // 이미지 영역 높이 비율 (20~80)
   const [isResizing, setIsResizing] = useState(false)
   const [pageJumpInput, setPageJumpInput] = useState<string>('') // 원하는 페이지 번호 입력값
+  /** 문서별 보기: 설정 시 해당 문서의 페이지만 표시 (null = 전체 페이지) */
+  const [selectedDocumentPdf, setSelectedDocumentPdf] = useState<string | null>(null)
   const [showCustomerListModal, setShowCustomerListModal] = useState(false)
-  const [selectedCustomerNamesForFilter, setSelectedCustomerNamesForFilter] = useState<string[]>([])
+  const [selectedCustomerNamesForFilter, setSelectedCustomerNamesForFilter] = useState<string[]>(() => {
+    try {
+      const s = localStorage.getItem('customer-list-modal-last-checked')
+      if (s) {
+        const a = JSON.parse(s)
+        return Array.isArray(a) ? a : []
+      }
+    } catch {}
+    return []
+  })
   const [checkedFilterNames, setCheckedFilterNames] = useState<Set<string>>(new Set())
+  const [applyCustomerFilter, setApplyCustomerFilter] = useState<boolean>(() => {
+    try {
+      const s = localStorage.getItem('customer-list-apply-filter')
+      if (s !== null) return s === 'true'
+    } catch {}
+    return true
+  })
   const [bulkCheckType, setBulkCheckType] = useState<'first' | 'second' | null>(null) // 1次/2次 一括 진행 중
   const [bulkCheckState, setBulkCheckState] = useState({
     allFirstChecked: false,
@@ -57,6 +81,28 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
   })
   const bulkFirstCheckboxRef = useRef<HTMLInputElement>(null)
   const bulkSecondCheckboxRef = useRef<HTMLInputElement>(null)
+  const [fileListPanelOpen, setFileListPanelOpen] = useState(false) // 우측 꼭지 호버 시 파일 목록 패널
+  const fileListPanelCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleFileListPanelEnter = useCallback(() => {
+    if (fileListPanelCloseTimerRef.current) {
+      clearTimeout(fileListPanelCloseTimerRef.current)
+      fileListPanelCloseTimerRef.current = null
+    }
+    setFileListPanelOpen(true)
+  }, [])
+  const handleFileListPanelLeave = useCallback(() => {
+    fileListPanelCloseTimerRef.current = setTimeout(() => setFileListPanelOpen(false), 180)
+  }, [])
+
+  // 検討タブに復帰 시 해당 문서·양식지로 자동 선택（復帰先の文書・様式を保持）
+  useEffect(() => {
+    if (!documentToOpen?.pdf_filename?.trim()) return
+    setSelectedDocumentPdf(documentToOpen.pdf_filename.trim())
+    setFormTypeFilter(documentToOpen.form_type ?? null)
+    setCurrentPageIndex(0)
+    onConsumeDocumentToOpen?.()
+  }, [documentToOpen, onConsumeDocumentToOpen])
+
   useEffect(() => {
     if (bulkFirstCheckboxRef.current) {
       bulkFirstCheckboxRef.current.indeterminate = bulkCheckState.someFirstChecked && !bulkCheckState.allFirstChecked
@@ -211,13 +257,6 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     return currentYearMonth
   }, [selectedYearMonth, availableYearMonths, currentYearMonth])
 
-  // 모달 열릴 때 체크 상태를 현재 필터와 동기화
-  useEffect(() => {
-    if (showCustomerListModal) {
-      setCheckedFilterNames(new Set(selectedCustomerNamesForFilter))
-    }
-  }, [showCustomerListModal, selectedCustomerNamesForFilter])
-
   // 거래처 목록 모달: 검토 탭 전체 거래처 (선택 연월 기준)
   const { data: reviewTabCustomersData, isLoading: reviewTabCustomersLoading } = useQuery({
     queryKey: ['search', 'review-tab-customers', effectiveYearMonth.year, effectiveYearMonth.month],
@@ -248,6 +287,17 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
       unmappedRights,
     }
   }, [mappingData, mySupersData?.super_names, mySupersError])
+
+  // 取引先一覧 모달: 마지막 체크 상태 복원(저장 있음) / 없으면 유사도 90% 이상 자동 체크
+  useEffect(() => {
+    if (!showCustomerListModal || !customerMappingRows.mapped.length) return
+    if (selectedCustomerNamesForFilter.length > 0) {
+      setCheckedFilterNames(new Set(selectedCustomerNamesForFilter))
+    } else {
+      const toCheck = customerMappingRows.mapped.filter((r) => r.score >= 0.9).map((r) => r.left)
+      setCheckedFilterNames(new Set(toCheck))
+    }
+  }, [showCustomerListModal, customerMappingRows.mapped, selectedCustomerNamesForFilter])
 
   // 모든 페이지를 평탄화하여 리스트 생성 (검색어가 없을 때 사용)
   // 선택된 연월(또는 기본 최신 연월)의 데이터만 필터링 (정답지 대상 문서 제외)
@@ -312,14 +362,14 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     }))
   }, [filterPagesData])
 
-  // 우선순위: 선택 거래처 필터 > 검색어 > 전체 페이지. 그 다음 참조 양식지 + 검토 필터 적용
+  // 우선순위: 검색어 > 선택 거래처 필터 > 전체 페이지. 그 다음 참조 양식지 + 검토 필터 적용
   // 정답지 문서도 목록에 포함 (업로드 탭과 동일하게 모두 표시, 정답지는 UI에서 초록색으로 구분)
   const displayPages: Page[] = useMemo(() => {
     let pages: Page[]
-    if (selectedCustomerNamesForFilter.length > 0) {
-      pages = filterPages
-    } else if (searchQuery.trim()) {
+    if (searchQuery.trim()) {
       pages = searchPages
+    } else if (selectedCustomerNamesForFilter.length > 0 && applyCustomerFilter) {
+      pages = filterPages
     } else {
       pages = allPages
     }
@@ -357,15 +407,15 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
           return true
       }
     })
-  }, [selectedCustomerNamesForFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewFilter, reviewStats])
+  }, [selectedCustomerNamesForFilter, applyCustomerFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewFilter, reviewStats])
 
   // 검토 드롭다운 괄호 안 페이지 수: 담당자/검색/양식지 적용된 범위만 집계 (검토 필터 적용 전, 정답지 포함)
   const filteredReviewCounts = useMemo(() => {
     let pages: Page[]
-    if (selectedCustomerNamesForFilter.length > 0) {
-      pages = filterPages
-    } else if (searchQuery.trim()) {
+    if (searchQuery.trim()) {
       pages = searchPages
+    } else if (selectedCustomerNamesForFilter.length > 0 && applyCustomerFilter) {
+      pages = filterPages
     } else {
       pages = allPages
     }
@@ -389,13 +439,24 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
       else secondNotReviewed += 1
     })
     return { firstReviewed, firstNotReviewed, secondReviewed, secondNotReviewed }
-  }, [selectedCustomerNamesForFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewStats])
+  }, [selectedCustomerNamesForFilter, applyCustomerFilter, filterPages, searchQuery, searchPages, allPages, formTypeFilter, reviewStats])
 
-  // 현재 페이지 정보
-  const currentPage = displayPages[currentPageIndex] || null
-  const totalFilteredPages = displayPages.length
+  // 문서별 필터: 선택 시 해당 문서 페이지만 (업로드 문서만 목록에 표시)
+  const uploadedPdfSet = useMemo(
+    () => new Set((documentsForReview ?? []).map((d: Document) => (d.pdf_filename ?? '').trim().toLowerCase())),
+    [documentsForReview]
+  )
+  const effectiveDisplayPages = useMemo(() => {
+    const base = displayPages
+    if (!selectedDocumentPdf?.trim()) return base
+    const key = selectedDocumentPdf.trim().toLowerCase()
+    return base.filter((p) => (p.pdfFilename ?? '').trim().toLowerCase() === key)
+  }, [displayPages, selectedDocumentPdf])
 
-  // 드롭다운용: 표시 중인 페이지 목록에서 파일별 첫 등장 인덱스 (파일 선택 시 해당 파일 1페이지로 이동)
+  const currentPage = effectiveDisplayPages[currentPageIndex] ?? null
+  const totalFilteredPages = effectiveDisplayPages.length
+
+  // 표시 중인 페이지 목록에서 파일별 첫 등장 인덱스 (우측 패널·파일 클릭 시 해당 문서만 표시)
   const fileNavOptions = useMemo(() => {
     const seen = new Set<string>()
     const list: { pdfFilename: string; firstIndex: number }[] = []
@@ -408,6 +469,50 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
     })
     return list
   }, [displayPages])
+
+  // 파일별 1次/2次 검토율 (우측 패널 표시용。벡터/解答済는 전용화면에서만 표시)
+  const fileNavOptionsWithStats = useMemo(() => {
+    if (!reviewStats?.page_stats) return fileNavOptions.map((o) => ({ ...o, totalPages: 0, firstReviewed: 0, secondReviewed: 0 }))
+    return fileNavOptions.map((opt) => {
+      const pagesInFile = displayPages.filter((p) => (p.pdfFilename ?? '').trim() === (opt.pdfFilename ?? '').trim())
+      const keySet = new Set(pagesInFile.map((p) => `${p.pdfFilename}_${p.pageNumber}`))
+      let firstReviewed = 0
+      let secondReviewed = 0
+      reviewStats.page_stats.forEach((stat) => {
+        if (!keySet.has(`${stat.pdf_filename}_${stat.page_number}`)) return
+        if (stat.first_reviewed) firstReviewed += 1
+        if (stat.second_reviewed) secondReviewed += 1
+      })
+      const totalPages = pagesInFile.length
+      return {
+        ...opt,
+        totalPages,
+        firstReviewed,
+        secondReviewed,
+      }
+    })
+  }, [fileNavOptions, displayPages, reviewStats?.page_stats])
+
+  // 업로드 문서만 파일 목록에 표시 (img 폴더 시드 문서 제외)
+  const fileNavOptionsWithStatsFiltered = useMemo(
+    () =>
+      fileNavOptionsWithStats.filter((opt) =>
+        uploadedPdfSet.has((opt.pdfFilename ?? '').trim().toLowerCase())
+      ),
+    [fileNavOptionsWithStats, uploadedPdfSet]
+  )
+
+  // 문서별 보기 시 인덱스가 범위를 벗어나면 0으로; 선택 문서가 필터 후 없으면 すべてに戻す
+  // データ未読込で displayPages が空のときは selectedDocumentPdf をクリアしない（検討タブに復帰直後の文書が消えないように）
+  useEffect(() => {
+    if (effectiveDisplayPages.length > 0 && currentPageIndex >= effectiveDisplayPages.length) {
+      setCurrentPageIndex(0)
+    }
+    if (selectedDocumentPdf && effectiveDisplayPages.length === 0 && displayPages.length > 0) {
+      setSelectedDocumentPdf(null)
+      setCurrentPageIndex(0)
+    }
+  }, [effectiveDisplayPages.length, currentPageIndex, selectedDocumentPdf, displayPages.length])
 
   // 현재 인덱스/전체 페이지 수 변경 시, 입력창에 현재 페이지 번호 동기화
   useEffect(() => {
@@ -425,6 +530,14 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
       (stat) => stat.pdf_filename === currentPage.pdfFilename && stat.page_number === currentPage.pageNumber
     )
   }, [currentPage, reviewStats])
+
+  // 解答作成指定可能か：この文書の全ページが1次・2次検討済みのときのみ true
+  const canDesignateAnswerKey = useMemo(() => {
+    if (!currentPage?.pdfFilename || !reviewStats?.page_stats?.length) return false
+    const docPages = reviewStats.page_stats.filter((s) => s.pdf_filename === currentPage.pdfFilename)
+    if (docPages.length === 0) return false
+    return docPages.every((p) => p.first_reviewed && p.second_reviewed)
+  }, [currentPage?.pdfFilename, reviewStats?.page_stats])
 
   // 현재 페이지의 page_role 조회
   const { data: pageImageData } = useQuery({
@@ -750,29 +863,37 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
           >
             {searchLoading && searchQuery.trim() ? '検索中...' : '検索'}
           </button>
-          <button
-            type="button"
-            className="search-button customer-list-btn"
-            onClick={() => setShowCustomerListModal(true)}
-            title="내 담당 거래처 / 검토 탭 전체 거래처 목록"
+          <div
+            className="customer-filter-pill"
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('input[type="checkbox"]')) return
+              setShowCustomerListModal(true)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setShowCustomerListModal(true)
+              }
+            }}
+            title="担当取引先を選択"
           >
-            取引先一覧
-          </button>
-          {selectedCustomerNamesForFilter.length > 0 && (
-            <span className="customer-filter-active-inline">
-              <span className="customer-filter-active-text">{selectedCustomerNamesForFilter.length}件で絞り込み</span>
-              <button
-                type="button"
-                className="customer-filter-clear"
-                onClick={() => {
-                  setSelectedCustomerNamesForFilter([])
-                  setCurrentPageIndex(0)
-                }}
-              >
-                解除
-              </button>
-            </span>
-          )}
+            <span className="customer-filter-pill-text">担当取引先のみ表示</span>
+            <input
+              type="checkbox"
+              checked={applyCustomerFilter}
+              onChange={(e) => {
+                const v = e.target.checked
+                setApplyCustomerFilter(v)
+                try {
+                  localStorage.setItem('customer-list-apply-filter', String(v))
+                } catch {}
+              }}
+              aria-label="担当取引先で絞り込みを適用"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
           {/* 保存 + 解答作成（管理者のみ）：同じトーンで並べる */}
           <div className="nav-action-buttons">
             <button
@@ -788,40 +909,15 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
                 type="button"
                 className="nav-action-btn answer-key-designate-btn"
                 onClick={() => setShowAnswerKeyModal(true)}
-                title="この文書を解答作成対象に指定（検索タブでは非表示）"
+                title="この文書を解答作成対象に指定（解答作成タブで編集・ベクターDB反映が可能）"
               >
                 解答作成
               </button>
             )}
           </div>
 
-          {/* 5. 파일 선택 드롭다운 + 6. 파일 내 페이지 (p.N) */}
+          {/* 1次/2次 一括 · 검토율 (파일 목록은 우측 패널) */}
           <div className="page-filename-container">
-            <select
-              className="page-filename-select"
-              value={currentPage?.pdfFilename ?? ''}
-              onChange={(e) => {
-                const pdf = e.target.value
-                const opt = fileNavOptions.find((o) => o.pdfFilename === pdf)
-                if (opt != null) setCurrentPageIndex(opt.firstIndex)
-              }}
-              title="문서 선택 시 해당 파일 1페이지로 이동"
-            >
-              {fileNavOptions.length === 0 && (
-                <option value="">—</option>
-              )}
-              {fileNavOptions.map(({ pdfFilename, firstIndex }) => (
-                <option key={pdfFilename} value={pdfFilename}>
-                  {pdfFilename}
-                  {displayPages[firstIndex] && ` (${displayPages[firstIndex].totalPages}p)`}
-                </option>
-              ))}
-            </select>
-            {currentPage && (
-              <span className="page-number-in-file">
-                p.{currentPage.pageNumber}
-              </span>
-            )}
             <PageRoleBadge pageRole={currentPageRole} />
             {/* 1次/2次 一括チェックボックス（チェック=全チェック、解除=全解除） */}
             {currentPage && (
@@ -914,8 +1010,13 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
               この文書を解答作成対象に指定しますか？
               <br />
               <span className="answer-key-modal-hint">
-                指定すると検索タブでは非表示になり、解答作成タブでのみ表示されます。
+                指定後は解答作成タブで編集できます。保存すると内容が検討タブに反映されます。ベクターDBへの反映は別画面で行います。
               </span>
+              {!canDesignateAnswerKey && (
+                <span className="answer-key-modal-warn" role="status">
+                  ※1・2次検討が完了していない文書です。
+                </span>
+              )}
             </p>
             <p className="answer-key-modal-current-form">
               現在の様式: <strong>{formTypeLabel(currentPage.formType)}</strong>
@@ -1148,6 +1249,9 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
                 onClick={() => {
                   const names = Array.from(checkedFilterNames)
                   setSelectedCustomerNamesForFilter(names)
+                  try {
+                    localStorage.setItem('customer-list-modal-last-checked', JSON.stringify(names))
+                  } catch {}
                   setCurrentPageIndex(0)
                   setShowCustomerListModal(false)
                 }}
@@ -1159,6 +1263,67 @@ export const CustomerSearch = ({ onNavigateToAnswerKey }: CustomerSearchProps) =
         </div>
       )}
 
+      {/* 우측 꼭지: 이미지 영역 높이만 사용, 호버 시 파일 목록 패널 슬라이드 인 */}
+      {(currentPage || hasNoData) && (
+      <div
+        className="review-files-dock"
+        style={{ height: `${imageHeightPercent}%` }}
+        onMouseEnter={handleFileListPanelEnter}
+        onMouseLeave={handleFileListPanelLeave}
+      >
+        <div className="review-files-tab" aria-label="ファイル一覧" title="ファイル一覧（ホバー）">
+          📁
+        </div>
+        <div className={`review-files-panel ${fileListPanelOpen ? 'open' : ''}`}>
+          <div className="review-files-panel-title">ファイル一覧</div>
+          <ul className="review-files-list">
+            <li className={`review-files-item ${!selectedDocumentPdf ? 'current' : ''}`}>
+              <button
+                type="button"
+                className="review-files-item-btn"
+                onClick={() => {
+                  setSelectedDocumentPdf(null)
+                  setCurrentPageIndex(0)
+                }}
+              >
+                <span className="review-files-item-name">— すべて —</span>
+              </button>
+            </li>
+            {fileNavOptionsWithStatsFiltered.length === 0 && (
+              <li className="review-files-item empty">—</li>
+            )}
+            {fileNavOptionsWithStatsFiltered.map(({ pdfFilename, totalPages, firstReviewed, secondReviewed }) => {
+              const firstPct = totalPages > 0 ? Math.round((firstReviewed / totalPages) * 100) : 0
+              const secondPct = totalPages > 0 ? Math.round((secondReviewed / totalPages) * 100) : 0
+              const rateClass = (pct: number) => (pct >= 100 ? 'full' : pct > 0 ? 'mid' : 'zero')
+              const isCurrentDoc = !!selectedDocumentPdf && (pdfFilename ?? '').trim().toLowerCase() === selectedDocumentPdf.trim().toLowerCase()
+              return (
+                <li
+                  key={pdfFilename}
+                  className={`review-files-item ${isCurrentDoc ? 'current' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="review-files-item-btn"
+                    onClick={() => {
+                      setSelectedDocumentPdf(pdfFilename ?? '')
+                      setCurrentPageIndex(0)
+                    }}
+                  >
+                    <span className="review-files-item-name">{pdfFilename}</span>
+                    <span className="review-files-item-meta">
+                      <span className="review-files-item-pages">{totalPages}p</span>
+                      <span className={`review-files-rate review-files-rate-1st ${rateClass(firstPct)}`} title="1次検討">1次 {firstPct}%</span>
+                      <span className={`review-files-rate review-files-rate-2nd ${rateClass(secondPct)}`} title="2次検討">2次 {secondPct}%</span>
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      </div>
+      )}
       </div>
     </div>
   )

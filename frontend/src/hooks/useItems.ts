@@ -44,6 +44,8 @@ export const useUpdateItem = (pdfFilename?: string, pageNumber?: number) => {
           })
         }
       }
+      // 1次・2次検討 체크 변경 시 검토 통계 갱신 (解答作成 버튼 활성화 반영)
+      queryClient.invalidateQueries({ queryKey: ['review-stats'] })
     },
     onError: (error) => {
       console.error('❌ [useUpdateItem] 에러:', error)

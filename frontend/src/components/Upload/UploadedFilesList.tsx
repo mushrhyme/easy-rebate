@@ -152,7 +152,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
                   <th>ファイル名</th>
                   <th>様式</th>
                   <th>日付</th>
-                  <th>ページ数</th>
+                  <th>p</th>
                   <th></th>
                 </tr>
               </thead>
@@ -192,7 +192,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
                     <td className="uploaded-files-list-cell-date">
                       {formatDocumentDateLabel(doc)}
                     </td>
-                    <td className="uploaded-files-list-cell-pages">{doc.total_pages}ページ</td>
+                    <td className="uploaded-files-list-cell-pages">{doc.total_pages}p</td>
                     <td className="uploaded-files-list-cell-actions">
                       <button
                         type="button"

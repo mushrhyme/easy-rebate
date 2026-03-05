@@ -12,6 +12,7 @@ import { CustomerSearch } from './components/Search/CustomerSearch'
 import { SAPUpload } from './components/SAPUpload/SAPUpload'
 import { RagAdminPanel } from './components/Admin/RagAdminPanel'
 import { AnswerKeyTab } from './components/AnswerKey/AnswerKeyTab'
+import { VectorReflectTab } from './components/VectorReflect/VectorReflectTab'
 import { Dashboard } from './components/Dashboard/Dashboard'
 import { documentsApi } from './api/client'
 import { UPLOAD_CHANNELS } from './config/formConfig'
@@ -22,7 +23,7 @@ import ChangePasswordModal from './components/Auth/ChangePasswordModal'
 import { getDocumentYearMonth } from './utils/documentDate'
 import './App.css'
 
-type Tab = 'dashboard' | 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin'
+type Tab = 'dashboard' | 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin' | 'vector_reflect'
 
 // 문서 인터페이스
 interface Document {
@@ -52,15 +53,20 @@ function AppContent() {
 
   // 비관리자가 관리자(기준정보) 탭이 선택된 상태면 업로드 탭으로 전환. 현황 탭은 모든 사용자 허용
   useEffect(() => {
-    if (!isAdmin && activeTab === 'rag_admin') {
+    if (!isAdmin && (activeTab === 'rag_admin' || activeTab === 'vector_reflect')) {
       setActiveTab('upload')
     }
   }, [isAdmin, activeTab])
 
-  /** 정답지 탭으로 이동 시 선택할 문서 (検索タブの解答作成指定のみ) */
+  /** 정답지 탭으로 이동 시 선택할 문서 (検索タブの解答作成指定만) */
   const [initialDocumentForAnswerKey, setInitialDocumentForAnswerKey] = useState<{
     pdf_filename: string
     total_pages: number
+  } | null>(null)
+  /** 検討タブに復帰 시 검토 탭에서 열 문서·양식지 (해당 문서 자동 선택 + 양식지 드롭다운 유지) */
+  const [documentToOpenOnReturnToSearch, setDocumentToOpenOnReturnToSearch] = useState<{
+    pdf_filename: string
+    form_type: string | null
   } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false) // 사이드바는 기본적으로 닫혀있음
   const [selectedUploadChannel, setSelectedUploadChannel] = useState<UploadChannel | null>(UPLOAD_CHANNELS[0] ?? null)
@@ -201,21 +207,22 @@ function AppContent() {
             >
               SAPアップロード
             </button>
-            <button
-              className={`sidebar-button ${activeTab === 'ocr_test' ? 'active' : ''}`}
-              onClick={() => setActiveTab('ocr_test')}
-            >
-              解答作成
-            </button>
+            {/* 解答作成は請求タブの「解答作成」ボタンからのみ遷移（サイドバーには出さない） */}
             {isAdmin && (
-              <button
-                className={`sidebar-button ${activeTab === 'rag_admin' ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab('rag_admin')
-                }}
-              >
-                管理者画面
-              </button>
+              <>
+                <button
+                  className={`sidebar-button ${activeTab === 'vector_reflect' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('vector_reflect')}
+                >
+                  ベクターDB反映
+                </button>
+                <button
+                  className={`sidebar-button ${activeTab === 'rag_admin' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('rag_admin')}
+                >
+                  管理者画面
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -310,6 +317,8 @@ function AppContent() {
         {activeTab === 'search' && (
           <div className="search-tab">
             <CustomerSearch
+              documentToOpen={documentToOpenOnReturnToSearch}
+              onConsumeDocumentToOpen={() => setDocumentToOpenOnReturnToSearch(null)}
               onNavigateToAnswerKey={(pdfFilename) => {
                 setInitialDocumentForAnswerKey({ pdf_filename: pdfFilename, total_pages: 0 })
                 setActiveTab('ocr_test')
@@ -329,11 +338,19 @@ function AppContent() {
             <AnswerKeyTab
               initialDocument={initialDocumentForAnswerKey}
               onConsumeInitialDocument={() => setInitialDocumentForAnswerKey(null)}
-              onRevokeSuccess={() => setActiveTab('search')}
+              onRevokeSuccess={(doc) => {
+                setDocumentToOpenOnReturnToSearch({ pdf_filename: doc.pdf_filename, form_type: doc.form_type })
+                setActiveTab('search')
+              }}
             />
           </div>
         )}
 
+        {activeTab === 'vector_reflect' && isAdmin && (
+          <div className="sap-upload-tab-wrapper">
+            <VectorReflectTab />
+          </div>
+        )}
         {activeTab === 'rag_admin' && isAdmin && (
           <div className="sap-upload-tab-wrapper">
             <RagAdminPanel />
