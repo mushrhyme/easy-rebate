@@ -287,7 +287,7 @@ def extract_pages_with_rag(
                 ocr_text=ocr_text,
                 question=question,
                 model_name=openai_model,
-                temperature=None,
+                temperature=0,
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
                 progress_callback=rag_progress_wrapper if progress_callback else None,

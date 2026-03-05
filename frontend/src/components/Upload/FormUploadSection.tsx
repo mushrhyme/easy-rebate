@@ -37,7 +37,12 @@ interface FileProgress {
   totalPages?: number
   message?: string
   progress?: number
+  /** processing 상태 진입 시각(ms). 타임아웃 판단용 */
+  processingStartedAt?: number
 }
+
+/** processing 상태로 N분 이상 진행 이벤트 없으면 타임아웃(분) */
+const PROCESSING_TIMEOUT_MINUTES = 10
 
 export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selectedMonth: propMonth, onYearMonthChange, onShowFileList, isListSelected, onUploadProgressChange, onRegisterRemove }: FormUploadSectionProps) => {
   const [files, setFiles] = useState<File[]>([])
@@ -71,6 +76,14 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
 
   // WebSocket 연결 (업로드 시작 시)
   const [taskId, setTaskId] = useState<string | null>(null)
+  /** 업로드 중 WebSocket 끊김 시각(ms). 안내 표시 및 일정 시간 후 isUploading 해제용 */
+  const [connectionClosedAt, setConnectionClosedAt] = useState<number | null>(null)
+
+  // 타임아웃 체크용 최신 값 (setInterval 클로저에서 사용)
+  const filesRef = useRef<File[]>([])
+  const fileProgressesRef = useRef<Record<string, FileProgress>>({})
+  filesRef.current = files
+  fileProgressesRef.current = fileProgresses
 
   // 파일이 이미 DB에 존재하는지 사전 체크
   const checkExistingDocuments = async (targetFiles: File[]) => {
@@ -106,10 +119,50 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
     )
   }
 
+  // processing 상태가 N분 이상 갱신 없으면 타임아웃 → error 처리 후 allCompleted 재계산
+  useEffect(() => {
+    if (!taskId || !isUploading) return
+    const intervalMs = 60_000 // 1분마다 체크
+    const timeoutMs = PROCESSING_TIMEOUT_MINUTES * 60 * 1000
+    const tid = setInterval(() => {
+      const progress = fileProgressesRef.current
+      const fileList = filesRef.current
+      const now = Date.now()
+      let hasTimeout = false
+      const next: Record<string, FileProgress> = { ...progress }
+      for (const fileName of fileList) {
+        const p = progress[fileName]
+        if (p?.status !== 'processing') continue
+        const started = p.processingStartedAt ?? 0
+        if (started > 0 && now - started >= timeoutMs) {
+          next[fileName] = { ...p, status: 'error', message: 'タイムアウト（応答がありません）' }
+          hasTimeout = true
+        }
+      }
+      if (!hasTimeout) return
+      setFileProgresses((prev) => {
+        const merged = { ...prev, ...next }
+        const allDone =
+          fileList.length > 0 &&
+          fileList.every((name) => {
+            const s = merged[name]?.status
+            return s === 'completed' || s === 'error'
+          })
+        if (allDone) {
+          setIsUploading(false)
+          setTaskId(null)
+        }
+        return merged
+      })
+    }, intervalMs)
+    return () => clearInterval(tid)
+  }, [taskId, isUploading])
+
   useWebSocket({
     taskId: taskId,
     enabled: !!taskId,
     onMessage: (message: WebSocketMessage) => {
+      setConnectionClosedAt(null) // 재연결 또는 진행 메시지 수신 시 끊김 경고 해제
       switch (message.type) {
         case 'connected':
           console.log('WebSocket 연결됨:', message.task_id)
@@ -122,13 +175,14 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
               [message.file_name!]: {
                 status: 'processing',
                 message: message.message || '処理を開始しました...',
+                processingStartedAt: Date.now(),
               },
             }))
           }
           break
         case 'progress':
-          // 파일별 진행 상태 업데이트
-          if (message.file_name && message.current_page && message.total_pages) {
+          // 파일별 진행 상태 업데이트 (current_page/total_pages 0 허용: "PDF를 이미지로 변환 중..." 등)
+          if (message.file_name && message.current_page != null && message.total_pages != null) {
             setFileProgresses((prev) => ({
               ...prev,
               [message.file_name!]: {
@@ -136,7 +190,8 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
                 currentPage: message.current_page,
                 totalPages: message.total_pages,
                 message: message.message || '',
-                progress: message.progress || 0,
+                progress: message.progress ?? 0,
+                processingStartedAt: prev[message.file_name!]?.processingStartedAt ?? Date.now(),
               },
             }))
             updateProgress(message.task_id || '', {
@@ -166,6 +221,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
             if (allCompleted) {
               setIsUploading(false)
               setTaskId(null)
+              setConnectionClosedAt(null)
             }
             return next
           })
@@ -184,6 +240,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
           invalidateDocumentLists()
           setIsUploading(false)
           setTaskId(null)
+          setConnectionClosedAt(null)
           break
       }
     },
@@ -192,8 +249,20 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
     },
     onClose: () => {
       console.log('WebSocket 연결 종료')
+      if (taskId) setConnectionClosedAt(Date.now())
     },
   })
+
+  // 연결 끊김 후 30초 동안 재연결/진행 없으면 업로드 상태 해제 (무한 대기 방지)
+  useEffect(() => {
+    if (connectionClosedAt == null) return
+    const t = setTimeout(() => {
+      setIsUploading(false)
+      setTaskId(null)
+      setConnectionClosedAt(null)
+    }, 30_000)
+    return () => clearTimeout(t)
+  }, [connectionClosedAt])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -233,6 +302,19 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
     try {
       const response = await documentsApi.upload(uploadChannel, files, selectedYear, selectedMonth)
 
+      if (response?.session_id == null || !Array.isArray(response?.results)) {
+        console.error('❌ [업로드] 서버 응답 형식 오류:', response)
+        setFileProgresses((prev) => {
+          const next = { ...prev }
+          files.forEach((f) => {
+            next[f.name] = { status: 'error', message: 'サーバー応答の形式が不正です' }
+          })
+          return next
+        })
+        setIsUploading(false)
+        return
+      }
+
       localStorage.setItem(`lastSelectedYear_${uploadChannel}`, selectedYear.toString())
       localStorage.setItem(`lastSelectedMonth_${uploadChannel}`, selectedMonth.toString())
 
@@ -266,6 +348,7 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
             [fileName]: {
               status: 'processing',
               message: '解析待機中...',
+              processingStartedAt: Date.now(),
             },
           }))
         } else if (result.status === 'error') {
@@ -481,6 +564,12 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
         </div>
         </div>
       </div>
+
+      {connectionClosedAt != null && (
+        <div className="form-upload-ws-closed" onClick={(e) => e.stopPropagation()} role="alert">
+          接続が切断されました。一覧で処理結果を確認してください。（30秒後に自動で解除します）
+        </div>
+      )}
 
       {/* 년월 선택 + 분석 개시 버튼 (한 줄, 높이 맞춤) */}
       <div className="form-date-and-actions" onClick={(e) => e.stopPropagation()}>

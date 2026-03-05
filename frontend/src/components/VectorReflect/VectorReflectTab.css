@@ -1,11 +1,169 @@
 .vector-reflect-tab {
-  padding: 1.5rem;
-  max-width: 960px;
-  margin: 0 auto;
+  padding: 1rem 0;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.vector-reflect-body {
+  display: flex;
+  gap: 0;
+  align-items: stretch;
+  min-height: calc(100vh - 220px);
+  width: 100%;
+}
+
+/* 7:3 — 画像エリア 70% */
+.vector-reflect-left {
+  flex: 7;
+  min-width: 0;
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.vector-reflect-left-preview {
+  border: 1px solid #e5e7eb;
+  border-radius: 0;
+  overflow: hidden;
+  background: #f3f4f6;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.vector-reflect-left-preview-label {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  color: #374151;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+  word-break: break-all;
+  flex-shrink: 0;
+}
+
+.vector-reflect-left-preview-img-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.vector-reflect-left-preview-img {
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  max-height: 88vh;
+  object-fit: contain;
+  display: block;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+}
+
+.vector-reflect-left-preview-empty,
+.vector-reflect-left-preview-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  color: #4b5563;
+  font-size: 1rem;
+  text-align: center;
+  padding: 2rem;
+  border: 2px dashed #d1d5db;
+  margin: 1rem;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.vector-reflect-left-preview-msg {
+  margin: 0;
+  font-weight: 500;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.vector-reflect-left-preview-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #6b7280;
+}
+
+.vector-reflect-left-preview-noimage {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.vector-reflect-generate-btn {
+  margin-top: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: filter 0.2s;
+}
+
+.vector-reflect-generate-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.vector-reflect-generate-btn:disabled {
+  opacity: 0.8;
+  cursor: not-allowed;
+}
+
+/* リストエリア 30% */
+.vector-reflect-right {
+  flex: 3;
+  min-width: 0;
+  border-left: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+
+.vector-reflect-right .vector-reflect-table-wrap {
+  flex: 1;
+  overflow: auto;
+  border: none;
+  border-radius: 0;
+}
+
+.vector-reflect-right .vector-reflect-footer {
+  flex-shrink: 0;
+  padding: 0 1rem 1rem;
+}
+
+.vector-reflect-page-row {
+  cursor: pointer;
+}
+
+.vector-reflect-page-row:hover {
+  background: #f3f4f6;
+}
+
+.vector-reflect-page-row.vector-reflect-page-selected {
+  background: #dbeafe;
+  outline: 2px solid #3b82f6;
+  outline-offset: -2px;
 }
 
 .vector-reflect-header {
-  margin-bottom: 1.25rem;
+  margin-bottom: 1rem;
+  padding: 0 1rem;
 }
 
 .vector-reflect-title {
@@ -39,6 +197,7 @@
   gap: 0.75rem;
   align-items: center;
   margin-bottom: 1rem;
+  padding: 0 1rem;
 }
 
 .vector-reflect-btn {
@@ -80,6 +239,8 @@
   font-size: 0.9rem;
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
+  margin-left: 1rem;
+  margin-right: 1rem;
 }
 
 .vector-reflect-status.success {
@@ -118,10 +279,56 @@
   color: #374151;
 }
 
+.vector-reflect-th-expand,
+.vector-reflect-td-expand {
+  width: 2.5rem;
+  text-align: center;
+  padding: 0.4rem !important;
+}
+
+.vector-reflect-expand-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  color: #4b5563;
+}
+
+.vector-reflect-expand-btn:hover {
+  color: #111827;
+}
+
+.vector-reflect-doc-row {
+  background: #f9fafb;
+}
+
+.vector-reflect-page-row .vector-reflect-td-name {
+  padding-left: 2rem;
+}
+
+.vector-reflect-page-name {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.vector-reflect-doc-status {
+  font-size: 0.8rem;
+  color: #4b5563;
+}
+
 .vector-reflect-th-check,
 .vector-reflect-td-check {
   width: 3rem;
   text-align: center;
+}
+
+.vector-reflect-page-row.vector-reflect-page-modified {
+  background: #eff6ff;
+}
+
+.vector-reflect-page-modified .vector-reflect-td-status {
+  font-weight: 600;
 }
 
 .vector-reflect-th-pages,
@@ -165,6 +372,12 @@
 .vector-reflect-badge.not {
   background: #e5e7eb;
   color: #4b5563;
+}
+
+.vector-reflect-badge.modified {
+  background: #dbeafe;
+  color: #1d4ed8;
+  margin-left: 4px;
 }
 
 .vector-reflect-empty {

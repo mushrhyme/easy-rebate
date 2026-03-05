@@ -861,6 +861,59 @@ def _extract_pdf_filenames_from_index_metadata(meta) -> list:
     ]
 
 
+@router.get("/vector-reflect-pages")
+async def get_vector_reflect_pages(
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """
+    ベクターDB反映タブ用: 文書一覧をページ単位で返す。
+    各ページに in_vector(反映済), modified(学習対象指定済み) を付与。
+    """
+    def _fetch_sync(database):
+        rows = query_documents_table(database, exclude_img_seed=True)
+        merged_set = set()
+        with database.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT pdf_filename, page_number FROM rag_learning_status_current WHERE status = 'merged'")
+            for r in cur.fetchall():
+                if r[0] and r[1] is not None:
+                    merged_set.add((r[0], int(r[1])))
+            modified_set = set()
+            try:
+                cur.execute("""
+                    SELECT pdf_filename, page_number FROM page_data_current
+                    WHERE is_rag_candidate = TRUE
+                    UNION
+                    SELECT pdf_filename, page_number FROM page_data_archive
+                    WHERE is_rag_candidate = TRUE
+                """)
+                for r in cur.fetchall():
+                    if r[0] and r[1] is not None:
+                        modified_set.add((r[0], int(r[1])))
+            except Exception:
+                pass
+        result = []
+        for row in rows:
+            pdf_filename = row[0]
+            total_pages = int(row[1]) if row[1] is not None else 0
+            pages = []
+            for p in range(1, total_pages + 1):
+                pages.append({
+                    "page_number": p,
+                    "in_vector": (pdf_filename, p) in merged_set,
+                    "modified": (pdf_filename, p) in modified_set,
+                })
+            result.append({
+                "pdf_filename": pdf_filename,
+                "total_pages": total_pages,
+                "pages": pages,
+            })
+        return {"documents": result}
+
+    return await db.run_sync(_fetch_sync, db)
+
+
 @router.get("/in-vector-index")
 async def get_documents_in_vector_index(db=Depends(get_db)):
     """
@@ -1342,6 +1395,9 @@ async def save_document_answer_json(
                     page_meta["_ocr_text"] = ocr_text.strip()
                 page_meta_json = json.dumps(page_meta, ensure_ascii=False)
                 items = page_obj.get("items") if isinstance(page_obj.get("items"), list) else []
+                # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
+                if not items and page_role == "detail":
+                    page_role = "cover" if page_number == 1 else "summary"
 
                 cursor.execute("""
                     INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
@@ -1598,6 +1654,9 @@ async def generate_answer_with_gemini(
             pass
 
         page_role = result.get("page_role") or "detail"
+        # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
+        if not items and page_role == "detail":
+            page_role = "cover" if page_number == 1 else "summary"
         # page_meta: items, page_role 제외한 나머지 키 (document_ref 등)
         page_meta = {
             k: v for k, v in result.items()
@@ -1656,6 +1715,9 @@ async def generate_answer_with_rag(
         if not isinstance(items, list):
             items = []
         page_role = result.get("page_role") or "detail"
+        # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
+        if not items and page_role == "detail":
+            page_role = "cover" if page_number == 1 else "summary"
         # 정답지 포맷에는 RAG 내부 메타 제외 (answer.json 스타일만)
         exclude_from_page_meta = ("items", "page_role", "_rag_reference")
         page_meta = {
@@ -1776,6 +1838,9 @@ async def generate_answer_with_gpt(
             pass
 
         page_role = result.get("page_role") or "detail"
+        # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
+        if not items and page_role == "detail":
+            page_role = "cover" if page_number == 1 else "summary"
         page_meta = {
             k: v for k, v in result.items()
             if k not in ("items", "page_role") and v is not None
@@ -1812,6 +1877,9 @@ def _create_items_from_answer_sync(
     items: list, page_role: str, page_meta_json: Optional[str]
 ):
     """정답지 결과로 items DB 저장 (run_sync용). 이벤트 루프 블로킹 방지."""
+    # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
+    if not items and page_role == "detail":
+        page_role = "cover" if page_number == 1 else "summary"
     with database.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -2064,6 +2132,8 @@ Use the same key names as the template. Fill values from the document for each r
         if not isinstance(items, list):
             items = []
         page_role = result.get("page_role") or "detail"
+        if not items and page_role == "detail":
+            page_role = "cover" if page_number == 1 else "summary"
 
         return await db.run_sync(
             _create_items_from_template_sync,

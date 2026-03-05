@@ -17,6 +17,8 @@ const PAGE_LEVEL_EXCLUDE_KEYS = new Set(['items', 'page_number', 'page_role'])
 export interface UseAnswerKeyGridParams {
   selectedDoc: { pdf_filename: string; total_pages: number } | null
   currentPage: number
+  /** ブリッジで「この1ページのみ」表示時、その 실제 페이지 번호. 없으면 currentPage 사용 */
+  effectivePageNumber?: number
   answerJsonFromDb: { pages: Array<Record<string, unknown>> } | null | undefined
   pageMetaQueries: Array<{ data?: unknown; isError?: boolean }>
   pageItemsQueries: Array<{ data?: unknown; dataUpdatedAt?: number }>
@@ -26,6 +28,7 @@ export interface UseAnswerKeyGridParams {
 export function useAnswerKeyGrid({
   selectedDoc,
   currentPage,
+  effectivePageNumber,
   answerJsonFromDb,
   pageMetaQueries,
   pageItemsQueries,
@@ -108,7 +111,7 @@ export function useAnswerKeyGrid({
       const res = pageItemsQueries[p].data as { items?: { item_id: number; item_order: number; version?: number; item_data?: Record<string, unknown> }[]; item_data_keys?: string[] } | undefined
       if (!res?.items) continue
       if (res.item_data_keys?.length) serverKeys = res.item_data_keys
-      const pageNum = p + 1
+      const pageNum = effectivePageNumber != null ? effectivePageNumber : p + 1
       res.items.forEach((item) => {
         const row: GridRow = {
           item_id: item.item_id,
@@ -136,14 +139,15 @@ export function useAnswerKeyGrid({
     setDirtyIds(new Set())
     setPageMetaFlatEdits({})
     setPageMetaDirtyPages(new Set())
-  }, [selectedDoc, allDataLoaded, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size])
+  }, [selectedDoc, allDataLoaded, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size, effectivePageNumber])
 
   useEffect(() => {
     rowsRef.current = rows
   }, [rows])
 
+  const pageNumberForCurrentView = effectivePageNumber ?? currentPage
   const currentPageRows = useMemo(() => {
-    const filtered = rows.filter((r) => r.page_number === currentPage)
+    const filtered = rows.filter((r) => r.page_number === pageNumberForCurrentView)
     return filtered.sort((a, b) => {
       const da = (a as Record<string, unknown>)._displayIndex
       const db = (b as Record<string, unknown>)._displayIndex
@@ -154,7 +158,7 @@ export function useAnswerKeyGrid({
       const ob = parseInt(String(b.item_order ?? 0), 10) || 0
       return oa - ob || a.item_id - b.item_id
     })
-  }, [rows, currentPage])
+  }, [rows, pageNumberForCurrentView])
 
   const dataKeysForDisplay = useMemo(() => {
     const fromCurrentPage = new Set<string>()
