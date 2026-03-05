@@ -440,6 +440,13 @@
   color: #9ca3af;
 }
 
+.formulas-edit-readonly {
+  color: #6b7280;
+  font-size: 0.8125rem;
+  padding: 0.4rem 0.6rem;
+  background: #f9fafb;
+}
+
 .formula-input-expr {
   font-family: ui-monospace, monospace;
   font-size: 0.75rem;

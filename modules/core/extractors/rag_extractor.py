@@ -234,7 +234,7 @@ def extract_json_with_rag(
     ocr_text: str,
     question: Optional[str] = None,
     model_name: Optional[str] = None,
-    temperature: Optional[float] = None,  # None이면 API 호출 시 포함하지 않음 (모델 기본값 사용)
+    temperature: float = 0,  # 0: 결정적 출력 (GPT-5.2는 reasoning_effort="none"과 함께 전달)
     top_k: Optional[int] = None,
     similarity_threshold: Optional[float] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
@@ -254,7 +254,7 @@ def extract_json_with_rag(
         ocr_text: OCR 추출 결과 텍스트
         question: 질문 텍스트 (None이면 config에서 가져옴)
         model_name: 사용할 OpenAI 모델명 (None이면 config에서 가져옴)
-        temperature: 모델 temperature (None이면 API 호출 시 포함하지 않음, 모델 기본값 사용)
+        temperature: 모델 temperature (기본 0, 결정적 출력)
         top_k: 검색할 예제 수 (None이면 config에서 가져옴)
         similarity_threshold: 최소 유사도 임계값 (None이면 config에서 가져옴)
         form_type: 양식지 번호 (01, 02, 03, 04, 05). None이면 모든 양식지에서 검색 (하위 호환성)
@@ -486,11 +486,8 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             import google.generativeai as genai
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
-            temperature_str = str(temperature) if temperature is not None else "None (모델 기본값 사용)"
-            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature_str}")
-            gen_config = {"max_output_tokens": 8000}
-            if temperature is not None:
-                gen_config["temperature"] = temperature
+            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature}")
+            gen_config = {"max_output_tokens": 8000, "temperature": temperature}
             response = model.generate_content(prompt, generation_config=gen_config)
             llm_end_time = time.time()
             llm_duration = llm_end_time - llm_start_time
@@ -511,16 +508,15 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         else:
             # GPT (OpenAI) 사용
             client = OpenAI(api_key=api_key)
-            temperature_str = str(temperature) if temperature is not None else "None (모델 기본값 사용)"
-            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature_str}")
+            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature}")
             api_params = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "timeout": 120,
                 "max_completion_tokens": 8000,
+                "temperature": temperature,
+                "reasoning_effort": "none",  # GPT-5.2/5.1: temperature 사용 시 필수
             }
-            if temperature is not None:
-                api_params["temperature"] = temperature
             try:
                 response = call_with_retry(lambda: client.chat.completions.create(**api_params))
                 llm_end_time = time.time()
@@ -654,7 +650,12 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             if not isinstance(result_json.get("items"), list):
                 print(f"  ⚠️ items가 리스트가 아닙니다 ({type(result_json.get('items'))}). 빈 리스트로 변환합니다.")
                 result_json["items"] = []
-            
+            # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
+            items_list = result_json.get("items") or []
+            if len(items_list) == 0 and result_json.get("page_role") == "detail":
+                result_json["page_role"] = "cover" if page_num == 1 else "summary"
+                print(f"  ⚠️ items가 비어 있어 page_role을 '{result_json['page_role']}'로 보정했습니다.")
+
             # items 내부의 각 항목에서 NaN 값 정규화
             if isinstance(result_json.get("items"), list):
                 for item in result_json["items"]:

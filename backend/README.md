@@ -42,6 +42,10 @@ DB_PORT=5432
 DB_NAME=rebate_db
 DB_USER=postgres
 DB_PASSWORD=your_password
+# 연결 풀: 기본 DB_MAX_CONN=20, 풀 대기 초과 시 DB_CONN_TIMEOUT(기본 30초) 후 예외. 0이면 무한대기
+# DB_MIN_CONN=1
+# DB_MAX_CONN=20
+# DB_CONN_TIMEOUT=30
 
 # OpenAI API (RAG 사용 시)
 OPENAI_API_KEY=your_openai_api_key

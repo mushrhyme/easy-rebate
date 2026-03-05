@@ -3,14 +3,17 @@ RAG / 벡터 DB 관리용 관리자 API
 """
 import asyncio
 import csv
+import io
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import json
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from psycopg2.extras import RealDictCursor
 
@@ -557,6 +560,143 @@ async def put_dist_retail_csv(
         logger.exception("dist_retail.csv write failed: %s", e)
         raise HTTPException(status_code=500, detail="CSVの書き込みに失敗しました")
     return {"message": "保存しました", "rows_count": len(body.rows)}
+
+
+# ---- database/csv 汎用: 一覧・取得・上書き・アップロード・Excel ダウンロード ----
+CSV_DIR = get_project_root() / "database" / "csv"
+# ファイル名は英数字・アンダースコア・ハイフンのみ許可（パストラバーサル防止）
+CSV_FILENAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]+$")
+
+
+def _resolve_csv_path(filename: str) -> Path:
+    """filename（拡張子なし可）から database/csv 内の Path を返す。不正な filename は 400。"""
+    base = filename.strip().lower().removesuffix(".csv")
+    if not base or not CSV_FILENAME_PATTERN.match(base):
+        raise HTTPException(status_code=400, detail="invalid filename")
+    return CSV_DIR / f"{base}.csv"
+
+
+@router.get("/csv-list")
+async def get_csv_list(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """database/csv 内の .csv ファイル名一覧（拡張子なし）を返す。"""
+    _ensure_admin(current_user)
+    exists = CSV_DIR.exists()
+    logger.info("csv-list: CSV_DIR=%s exists=%s", str(CSV_DIR), exists)
+    if not exists:
+        return {"files": []}
+    names = sorted(
+        p.stem for p in CSV_DIR.iterdir() if p.suffix.lower() == ".csv" and p.is_file()
+    )
+    logger.info("csv-list: found %d files: %s", len(names), names)
+    return {"files": names}
+
+
+@router.get("/csv/{filename}")
+async def get_csv(
+    filename: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """CSV をそのまま読み、headers と rows（元の列名キー）を返す。"""
+    _ensure_admin(current_user)
+    path = _resolve_csv_path(filename)
+    if not path.exists():
+        return {"headers": [], "rows": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            headers = reader.fieldnames or []
+            rows = [dict(row) for row in reader]
+        return {"headers": list(headers), "rows": rows}
+    except Exception as e:
+        logger.exception("csv read failed: %s", e)
+        raise HTTPException(status_code=500, detail="CSVの読み込みに失敗しました")
+
+
+class CsvPutBody(BaseModel):
+    headers: List[str]
+    rows: List[Dict[str, str]]
+
+
+@router.put("/csv/{filename}")
+async def put_csv(
+    filename: str,
+    body: CsvPutBody,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """CSV を指定内容で上書き。"""
+    _ensure_admin(current_user)
+    path = _resolve_csv_path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(body.headers)
+            for r in body.rows:
+                row = [str(r.get(h, "")).strip() for h in body.headers]
+                writer.writerow(row)
+    except Exception as e:
+        logger.exception("csv write failed: %s", e)
+        raise HTTPException(status_code=500, detail="CSVの書き込みに失敗しました")
+    return {"message": "保存しました", "rows_count": len(body.rows)}
+
+
+@router.post("/csv/{filename}/upload")
+async def upload_csv(
+    filename: str,
+    file: UploadFile = File(...),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """CSV または Excel をアップロードし、database/csv/{filename}.csv を上書き。"""
+    _ensure_admin(current_user)
+    path = _resolve_csv_path(filename)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = (file.filename or "").lower().split(".")[-1]
+    try:
+        content = await file.read()
+        if suffix == "xlsx":
+            import pandas as pd
+            df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
+            df = df.astype(str).fillna("")
+            df.to_csv(path, index=False, encoding="utf-8", lineterminator="\n")
+        else:
+            # csv or default
+            with open(path, "wb") as f:
+                f.write(content)
+    except Exception as e:
+        logger.exception("csv upload failed: %s", e)
+        raise HTTPException(status_code=500, detail="アップロードの処理に失敗しました")
+    return {"message": "上書きしました", "path": str(path)}
+
+
+@router.get("/csv/{filename}/download")
+async def download_csv_excel(
+    filename: str,
+    format: str = Query("xlsx", alias="format"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """CSV を Excel 形式でダウンロード。"""
+    _ensure_admin(current_user)
+    path = _resolve_csv_path(filename)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="ファイルがありません")
+    if format.lower() != "xlsx":
+        raise HTTPException(status_code=400, detail="format=xlsx のみ対応")
+    try:
+        import pandas as pd
+        df = pd.read_csv(path, encoding="utf-8")
+        buf = io.BytesIO()
+        df.to_excel(buf, index=False, engine="openpyxl")
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={path.stem}.xlsx"},
+        )
+    except Exception as e:
+        logger.exception("csv download xlsx failed: %s", e)
+        raise HTTPException(status_code=500, detail="Excel の生成に失敗しました")
 
 
 # ---- 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先コード / 小売先コード ----

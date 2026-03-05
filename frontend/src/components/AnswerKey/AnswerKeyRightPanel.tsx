@@ -77,6 +77,8 @@ export interface AnswerKeyGenerateCtx {
   setAnswerProvider: (v: 'gemini' | 'gpt-5.2') => void
   generateAnswerMutation: { mutate: (arg: unknown) => void; isPending: boolean }
   selectedDoc: { pdf_filename: string; total_pages: number } | null
+  /** API 호출 시 사용할 페이지 번호（ブリッジ単一ページ時は 그 페이지만） */
+  effectivePageNumber?: number
 }
 
 /** 保存状態・メッセージ・読取専用（保存はヘッダの「保存」で実行） */
@@ -150,7 +152,7 @@ export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx
     setNewPageMetaValue,
     onPageMetaKeyAdd,
   } = pageMetaCtx
-  const { answerProvider, setAnswerProvider, generateAnswerMutation, selectedDoc } = generateCtx
+  const { answerProvider, setAnswerProvider, generateAnswerMutation, selectedDoc, effectivePageNumber } = generateCtx
   const { saveStatus, saveMessage, readOnly = false } = saveCtx
 
   const typeOptions = gridCtx.typeOptions
@@ -205,7 +207,7 @@ export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx
               selectedDoc &&
               generateAnswerMutation.mutate({
                 pdfFilename: selectedDoc.pdf_filename,
-                pageNumber: currentPage,
+                pageNumber: effectivePageNumber ?? currentPage,
                 currentRows: rows,
                 currentItemDataKeys: itemDataKeys,
                 provider: answerProvider,

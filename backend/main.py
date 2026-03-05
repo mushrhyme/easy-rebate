@@ -41,6 +41,7 @@ from contextlib import asynccontextmanager
 
 # .env 로드 후 DB 연결되도록 config를 routes보다 먼저 import
 from backend.core.config import settings
+from database.db_manager import ConnectionPoolTimeoutError
 from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test, settings as settings_routes, form_types as form_types_routes, attachments as attachments_routes
 from backend.core.scheduler import setup_archive_scheduler
 from database.registry import close_db
@@ -178,6 +179,15 @@ async def root():
 async def health_check():
     """헬스 체크 엔드포인트"""
     return {"status": "healthy"}
+
+
+@app.exception_handler(ConnectionPoolTimeoutError)
+async def db_pool_timeout_handler(request, exc: ConnectionPoolTimeoutError):
+    """DB 연결 풀 타임아웃 → 503 Service Unavailable"""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": str(exc)}
+    )
 
 
 @app.exception_handler(Exception)

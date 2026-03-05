@@ -985,6 +985,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   // summary 페이지도 page_meta(totals, recipient 등) 배지를 표시
   const isSummaryPage = pageMetaData?.page_role === 'summary'
   const showPageMetaBadges = isCoverPage || isSummaryPage
+  // page_meta가 있으면 "아이템 없음" 메시지 숨김 (解答作成에서 메타만 있는 페이지와 동일한 데이터)
+  const hasPageMeta = !!(pageMetaData?.page_meta && typeof pageMetaData.page_meta === 'object' && Object.keys(pageMetaData.page_meta).length > 0)
 
   // 디버깅: cover/summary 페이지 및 page_meta 확인 - hooks는 조건부 return 이전에 호출되어야 함
   useEffect(() => {
@@ -1280,8 +1282,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         </div>
       )}
       
-      {/* items가 비어있고 page_meta 배지도 없을 때만 메시지 표시 */}
-      {isEmpty && !showPageMetaBadges && (
+      {/* items가 비어있고, page_meta 배지도 없고, page_meta 자체도 없을 때만 메시지 표시 (page_meta만 있는 페이지는 解答作成에서 확인 가능) */}
+      {isEmpty && !showPageMetaBadges && !hasPageMeta && (
         <div className="grid-empty-message">
           <p>このページにはアイテムがありません。</p>
         </div>

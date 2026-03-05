@@ -57,6 +57,15 @@
   gap: 0.5rem;
 }
 
+.form-upload-ws-closed {
+  padding: 0.5rem 0.75rem;
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  color: #92400e;
+}
+
 .form-header-list-btn {
   padding: 0.25rem 0.625rem;
   background: #f1f5f9;

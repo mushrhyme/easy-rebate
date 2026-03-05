@@ -27,8 +27,8 @@ type ReviewFilter = 'all' | 'first_reviewed' | 'first_not_reviewed' | 'second_re
 export type DocumentToOpenOnReturn = { pdf_filename: string; form_type: string | null }
 
 interface CustomerSearchProps {
-  /** 정답지 생성 탭으로 이동할 때 지정한 문서의 pdf_filename 전달 */
-  onNavigateToAnswerKey?: (pdfFilename: string) => void
+  /** 정답지 생성 탭으로 이동 시 (문서명, 현재 페이지 번호) 전달 — 브릿지에서 해당 페이지만 표시 */
+  onNavigateToAnswerKey?: (pdfFilename: string, pageNumber: number) => void
   /** 検討タブに復帰 시 이 문서·양식지로 자동 선택 (설정 시 반영 후 소비) */
   documentToOpen?: DocumentToOpenOnReturn | null
   onConsumeDocumentToOpen?: () => void
@@ -555,15 +555,16 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
 
   const setAnswerKeyDocumentMutation = useMutation({
     mutationKey: ['documents', 'answer-key-designate'],
-    mutationFn: (pdfFilename: string) => documentsApi.setAnswerKeyDocument(pdfFilename),
-    onSuccess: (_data, pdfFilename) => {
+    mutationFn: ({ pdfFilename }: { pdfFilename: string; pageNumber: number }) =>
+      documentsApi.setAnswerKeyDocument(pdfFilename),
+    onSuccess: (_data, { pdfFilename, pageNumber }) => {
       queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
       queryClient.invalidateQueries({ queryKey: ['documents', 'for-answer-key-tab'] })
       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'learning-pages'] })
       queryClient.invalidateQueries({ queryKey: ['form-types'] })
       setShowAnswerKeyModal(false)
-      onNavigateToAnswerKey?.(pdfFilename)
+      onNavigateToAnswerKey?.(pdfFilename, pageNumber)
     },
   })
 
@@ -581,6 +582,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
   const handleAnswerKeyConfirm = async () => {
     if (!currentPage) return
     const pdfFilename = currentPage.pdfFilename
+    const pageNumber = currentPage.pageNumber
 
     try {
       if (answerKeyFormChoice === 'new' && answerKeyNewFormDisplayName.trim()) {
@@ -592,7 +594,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
       } else if (answerKeyFormChoice === 'change' && answerKeyFormChangeTo) {
         await documentsApi.updateFormType(pdfFilename, answerKeyFormChangeTo)
       }
-      await setAnswerKeyDocumentMutation.mutateAsync(pdfFilename)
+      await setAnswerKeyDocumentMutation.mutateAsync({ pdfFilename, pageNumber })
     } catch (err: unknown) {
       const msg = err && typeof err === 'object' && 'response' in err
         ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail

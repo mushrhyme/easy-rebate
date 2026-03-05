@@ -159,10 +159,25 @@
   box-shadow: 0 0 0 1px rgba(102, 126, 234, 0.3);
 }
 
+/* 画面には表示せずアクセシビリティ用（例: file input） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .rag-admin-button {
   padding: 0.5rem 0.9rem;
   border-radius: 0.5rem;
-  border: none;
+  border: 1px solid #cbd5e1;
+  background-color: #f1f5f9;
+  color: #334155;
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
@@ -170,12 +185,18 @@
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.rag-admin-button:hover {
+  background-color: #e2e8f0;
+  border-color: #94a3b8;
 }
 
 .rag-admin-button.primary {
   background-color: #3182ce;
   color: #ffffff;
+  border-color: #3182ce;
 }
 
 .rag-admin-button.primary:hover {
@@ -186,6 +207,7 @@
 .rag-admin-button.success {
   background-color: #38a169;
   color: #ffffff;
+  border-color: #38a169;
 }
 
 .rag-admin-button.success:hover {
@@ -196,6 +218,7 @@
 .rag-admin-button.secondary {
   background-color: #805ad5;
   color: #ffffff;
+  border-color: #805ad5;
 }
 
 .rag-admin-button.secondary:hover {
@@ -206,6 +229,7 @@
 .rag-admin-button.rag-admin-button-danger {
   background-color: #c53030;
   color: #fff;
+  border-color: #c53030;
 }
 
 .rag-admin-button.rag-admin-button-danger:hover {
@@ -215,6 +239,7 @@
 
 .rag-admin-button:disabled {
   background-color: #a0aec0;
+  border-color: #a0aec0;
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -341,6 +366,10 @@
 .rag-admin-master-actions-top {
   margin-top: 1rem;
   margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .rag-admin-subtab-button {

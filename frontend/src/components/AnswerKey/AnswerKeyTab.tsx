@@ -39,6 +39,8 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const queryClient = useQueryClient()
   const [selectedDoc, setSelectedDoc] = useState<{ pdf_filename: string; total_pages: number } | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
+  /** 検索タブから「このページのみ」で開いた場合の 실제 페이지 번호. 있으면 브릿지는 이 1페이지만 표시·저장 */
+  const [bridgeSinglePageNumber, setBridgeSinglePageNumber] = useState<number | null>(null)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'done' | 'error'>('idle')
   const [saveMessage, setSaveMessage] = useState<string>('')
   const [rightView, setRightView] = useState<'kv' | 'template'>('kv')
@@ -257,61 +259,95 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     return Array.isArray(raw) ? raw : []
   }, [documentsData])
 
-  // 검토 탭에서 넘어온 경우 해당 문서 자동 선택 (解答作成 지정 문서만)
+  // 검토 탭에서 넘어온 경우 해당 문서 자동 선택 (解答作成 지정 문서만). initialPage 있으면 해당 1페이지만 표시
   useEffect(() => {
     if (!initialDocument || !onConsumeInitialDocument) return
     const doc = documents.find((d) => d.pdf_filename === initialDocument.pdf_filename)
     if (doc) {
-      setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
-      setCurrentPage(1)
+      const singlePage = initialDocument.initialPage != null && initialDocument.initialPage >= 1
+      if (singlePage) {
+        setBridgeSinglePageNumber(initialDocument.initialPage!)
+        setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: 1 })
+        setCurrentPage(1)
+      } else {
+        setBridgeSinglePageNumber(null)
+        setSelectedDoc({ pdf_filename: doc.pdf_filename, total_pages: doc.total_pages })
+        setCurrentPage(1)
+      }
       onConsumeInitialDocument()
     }
   }, [initialDocument, onConsumeInitialDocument, documents])
 
-  // 문서 변경 시 1페이지로 초기화, page_role 로컬 편집 초기화
+  const effectivePageNumber = bridgeSinglePageNumber ?? currentPage
+
+  // 문서 변경 시 1페이지로 초기화, page_role 로컬 편집 초기화 (단일 페이지 모드 해제 시)
   useEffect(() => {
-    if (selectedDoc) setCurrentPage(1)
-    setPageRoleEdits({})
-  }, [selectedDoc?.pdf_filename])
+    if (selectedDoc && bridgeSinglePageNumber == null) setCurrentPage(1)
+    if (selectedDoc) setPageRoleEdits({})
+  }, [selectedDoc?.pdf_filename, bridgeSinglePageNumber])
 
   const pageImageQueries = useQueries({
     queries: selectedDoc
-      ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
-          queryKey: ['answer-key-page-image', selectedDoc.pdf_filename, i + 1],
-          queryFn: () => searchApi.getPageImage(selectedDoc.pdf_filename, i + 1),
-          enabled: true,
-        }))
+      ? Array.from(
+          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          (_, i) => {
+            const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
+            return {
+              queryKey: ['answer-key-page-image', selectedDoc.pdf_filename, pageNum],
+              queryFn: () => searchApi.getPageImage(selectedDoc.pdf_filename, pageNum),
+              enabled: true,
+            }
+          }
+        )
       : [],
   })
 
   const pageItemsQueries = useQueries({
     queries: selectedDoc
-      ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
-          queryKey: ['items', selectedDoc.pdf_filename, i + 1],
-          queryFn: () => itemsApi.getByPage(selectedDoc.pdf_filename, i + 1),
-          enabled: true,
-        }))
+      ? Array.from(
+          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          (_, i) => {
+            const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
+            return {
+              queryKey: ['items', selectedDoc.pdf_filename, pageNum],
+              queryFn: () => itemsApi.getByPage(selectedDoc.pdf_filename, pageNum),
+              enabled: true,
+            }
+          }
+        )
       : [],
   })
 
   const pageMetaQueries = useQueries({
     queries: selectedDoc
-      ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
-          queryKey: ['page-meta', selectedDoc.pdf_filename, i + 1],
-          queryFn: () => documentsApi.getPageMeta(selectedDoc.pdf_filename, i + 1),
-          enabled: true,
-          retry: false,
-        }))
+      ? Array.from(
+          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          (_, i) => {
+            const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
+            return {
+              queryKey: ['page-meta', selectedDoc.pdf_filename, pageNum],
+              queryFn: () => documentsApi.getPageMeta(selectedDoc.pdf_filename, pageNum),
+              enabled: true,
+              retry: false,
+            }
+          }
+        )
       : [],
   })
 
   const pageOcrTextQueries = useQueries({
     queries: selectedDoc
-      ? Array.from({ length: selectedDoc.total_pages }, (_, i) => ({
-          queryKey: ['page-ocr-text', selectedDoc.pdf_filename, i + 1],
-          queryFn: () => searchApi.getPageOcrText(selectedDoc.pdf_filename, i + 1),
-          enabled: !!selectedDoc,
-        }))
+      ? Array.from(
+          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          (_, i) => {
+            const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
+            return {
+              queryKey: ['page-ocr-text', selectedDoc.pdf_filename, pageNum],
+              queryFn: () => searchApi.getPageOcrText(selectedDoc.pdf_filename, pageNum),
+              enabled: !!selectedDoc,
+            }
+          }
+        )
       : [],
   })
 
@@ -320,10 +356,19 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const allDataLoaded = allItemsLoaded && allPageMetaLoaded
   const allImagesLoaded = pageImageQueries.every((q) => !q.isLoading && q.data != null)
 
+  const answerJsonForGrid = useMemo(() => {
+    if (bridgeSinglePageNumber == null || !answerJsonFromDb?.pages?.length) return answerJsonFromDb ?? null
+    const filtered = answerJsonFromDb.pages.filter(
+      (pg: Record<string, unknown>) => Number(pg.page_number) === bridgeSinglePageNumber
+    )
+    return filtered.length ? { pages: filtered } : null
+  }, [answerJsonFromDb, bridgeSinglePageNumber])
+
   const grid = useAnswerKeyGrid({
     selectedDoc,
     currentPage,
-    answerJsonFromDb: answerJsonFromDb ?? null,
+    effectivePageNumber: bridgeSinglePageNumber ?? undefined,
+    answerJsonFromDb: answerJsonForGrid,
     pageMetaQueries,
     pageItemsQueries,
     allDataLoaded,
@@ -349,8 +394,10 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   /** page_meta 조회 실패(404 등) 페이지 번호 목록 */
   const pageMetaErrorPageNumbers = useMemo(() => {
     if (!selectedDoc) return []
-    return pageMetaQueries.map((q, i) => (q.isError ? i + 1 : 0)).filter((p) => p > 0)
-  }, [selectedDoc, pageMetaQueries])
+    return pageMetaQueries
+      .map((q, i) => (q.isError ? (bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1) : 0))
+      .filter((p) => p > 0)
+  }, [selectedDoc, pageMetaQueries, bridgeSinglePageNumber])
 
   /** 첫 행에서 템플릿 엔트리 초기값 생성 (시스템·frozen 제외) */
   const firstRowToTemplateEntries = useCallback((row: GridRow | undefined) => {
@@ -411,7 +458,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       if (Object.keys(templateItem).length === 0) throw new Error('テンプレートにキーを1つ以上入力してください。')
       return documentsApi.generateItemsFromTemplate(
         selectedDoc.pdf_filename,
-        currentPage,
+        effectivePageNumber,
         templateItem,
         answerProvider
       )
@@ -453,13 +500,26 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setSaveStatus('saving')
     setSaveMessage('')
     try {
-      const pages = buildPagesPayload(
-        selectedDoc.total_pages,
-        latestRows,
-        pageMetaFlatEdits,
-        getPageRoleForSave,
-        (p) => buildPageMetaFromEdits(p) as Record<string, unknown>
-      )
+      const pages =
+        bridgeSinglePageNumber != null
+          ? (() => {
+              const pageRows = latestRows.filter((r) => r.page_number === bridgeSinglePageNumber)
+              const single = buildPagesPayload(
+                1,
+                pageRows.map((r) => ({ ...r, page_number: 1 })),
+                pageMetaFlatEdits,
+                () => getPageRoleForSave(bridgeSinglePageNumber),
+                () => buildPageMetaFromEdits(bridgeSinglePageNumber) as Record<string, unknown>
+              )[0]
+              return single ? [{ ...single, page_number: bridgeSinglePageNumber }] : []
+            })()
+          : buildPagesPayload(
+              selectedDoc.total_pages,
+              latestRows,
+              pageMetaFlatEdits,
+              getPageRoleForSave,
+              (p) => buildPageMetaFromEdits(p) as Record<string, unknown>
+            )
       attachOcrToPages(pages, selectedDoc.pdf_filename, queryClient)
       await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
       skipNextSyncRef.current = true
@@ -480,7 +540,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       setSaveMessage(e?.response?.data?.detail || e?.message || '保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, dirtyIds.size, pageMetaDirtyPages, pageMetaFlatEdits, getPageRoleForSave, buildPageMetaFromEdits, rowsRef, skipNextSyncRef, setDirtyIds, setPageMetaFlatEdits, setPageMetaDirtyPages, setPageRoleEdits, queryClient])
+  }, [selectedDoc, dirtyIds.size, pageMetaDirtyPages, pageMetaFlatEdits, getPageRoleForSave, buildPageMetaFromEdits, rowsRef, skipNextSyncRef, setDirtyIds, setPageMetaFlatEdits, setPageMetaDirtyPages, setPageRoleEdits, queryClient, bridgeSinglePageNumber])
 
   const imageUrls = useMemo(() => {
     return pageImageQueries.map((q) => {
@@ -633,6 +693,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               setAnswerProvider,
               generateAnswerMutation: generateAnswerMutation as { mutate: (arg: unknown) => void; isPending: boolean },
               selectedDoc,
+              effectivePageNumber,
             }}
             saveCtx={{
               saveStatus,

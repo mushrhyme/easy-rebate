@@ -35,3 +35,12 @@
 - `ocr_request_delay`는 현재 미사용(Upstage용 예비).
 
 요약: **Azure·OpenAI 모두 동시 호출 가능**하고, **OpenAI(RAG+LLM)는 이미 병렬**, **Azure OCR도 `max_parallel_workers`로 병렬** 처리됩니다.
+
+---
+
+## DB 연결 풀 (병렬 처리 시 참고)
+
+- OCR·LLM 병렬 처리 시 결과 저장 등으로 **동시에 DB 접근**이 늘어남. 모든 DB 접근은 단일 연결 풀을 공유함.
+- **기본값**: `DB_MAX_CONN=20`, `DB_CONN_TIMEOUT=30`(초). 풀 대기 초과 시 `RuntimeError`로 실패(무한 대기 방지).
+- **튜닝**: 동시 워커 수가 많거나 다른 API와 DB를 많이 쓰면 `.env`에서 `DB_MAX_CONN=30` 등으로 상향. `DB_CONN_TIMEOUT=0`이면 타임아웃 없이 대기.
+- 자세한 설정·모니터링: `docs/concurrent_analysis_performance.md`의 "DB 연결 풀 설정·모니터링" 참고.

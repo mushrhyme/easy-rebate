@@ -191,6 +191,26 @@ export const documentsApi = {
   },
 
   /**
+   * ベクターDB反映タブ用: 文書ごとにページ単位の in_vector / modified 一覧
+   */
+  getVectorReflectPages: async (): Promise<{
+    documents: Array<{
+      pdf_filename: string
+      total_pages: number
+      pages: Array<{ page_number: number; in_vector: boolean; modified: boolean }>
+    }>
+  }> => {
+    const response = await client.get<{
+      documents: Array<{
+        pdf_filename: string
+        total_pages: number
+        pages: Array<{ page_number: number; in_vector: boolean; modified: boolean }>
+      }>
+    }>('/api/documents/vector-reflect-pages')
+    return response.data
+  },
+
+  /**
    * 現在のRAGベクトルインデックスに含まれる文書(pdf_filename)一覧。アップロード一覧のハイライト用。
    */
   getInVectorIndex: async (): Promise<{ pdf_filenames: string[] }> => {
@@ -1321,6 +1341,48 @@ export const ragAdminApi = {
     person_name: string
   }>): Promise<{ message: string; rows_count: number }> => {
     const response = await client.put('/api/rag-admin/dist-retail-csv', { rows })
+    return response.data
+  },
+
+  /** database/csv 内 .csv ファイル一覧（拡張子なし） */
+  getCsvList: async (): Promise<{ files: string[] }> => {
+    const response = await client.get('/api/rag-admin/csv-list')
+    return response.data
+  },
+
+  /** CSV 1件取得（headers + rows、元の列名のまま） */
+  getCsv: async (filename: string): Promise<{ headers: string[]; rows: Record<string, string>[] }> => {
+    const response = await client.get(`/api/rag-admin/csv/${encodeURIComponent(filename)}`)
+    return response.data
+  },
+
+  /** CSV 上書き保存 */
+  putCsv: async (
+    filename: string,
+    body: { headers: string[]; rows: Record<string, string>[] }
+  ): Promise<{ message: string; rows_count: number }> => {
+    const response = await client.put(`/api/rag-admin/csv/${encodeURIComponent(filename)}`, body)
+    return response.data
+  },
+
+  /** CSV/Excel アップロード → database/csv/{filename}.csv を上書き */
+  uploadCsv: async (filename: string, file: File): Promise<{ message: string; path: string }> => {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await client.post(
+      `/api/rag-admin/csv/${encodeURIComponent(filename)}/upload`,
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return response.data
+  },
+
+  /** CSV を Excel 形式でダウンロード（Blob） */
+  downloadCsvExcel: async (filename: string): Promise<Blob> => {
+    const response = await client.get(
+      `/api/rag-admin/csv/${encodeURIComponent(filename)}/download?format=xlsx`,
+      { responseType: 'blob' }
+    )
     return response.data
   },
 

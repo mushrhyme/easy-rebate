@@ -45,13 +45,14 @@
 - **generate_page_images**: PDF→이미지 생성·파일 저장·DB INSERT를 `_generate_all_page_images_sync`로 묶고 `asyncio.to_thread()`로 실행해, 해당 API 호출 중에도 이벤트 루프가 블로킹되지 않도록 함.
 - **인증 의존성**: `get_current_user` / `get_current_user_optional` 등은 async로 변경하고 `db.get_session_user`를 `run_sync`로 호출.
 - **동시 PDF 분석 제한**: 사용자별 세마포어(1인당 동시 1건, `MAX_CONCURRENT_ANALYSES_PER_USER`) + 전역 상한(기본 20, `MAX_CONCURRENT_ANALYSES`). 10명이 동시 업로드해도 각자 1건씩 병렬 처리되고, 한 사용자가 다수 업로드 시에는 해당 사용자만 순차 대기.
-- **DB 연결 풀**: `acquire_item_lock` 등에서 연결 블록을 하나로 합쳐 풀 점유 시간 단축. 동시 사용자 증가 시 `.env`에서 `DB_MAX_CONN=20` 등으로 상향 가능 (PostgreSQL `max_connections`와 맞출 것).
+- **DB 연결 풀**: `acquire_item_lock` 등에서 연결 블록을 하나로 합쳐 풀 점유 시간 단축. 기본 `DB_MAX_CONN=20`. 동시 사용자 증가 시 `.env`에서 `DB_MAX_CONN=30` 등으로 상향 가능 (PostgreSQL `max_connections`와 맞출 것).
+- **풀 대기 타임아웃**: `get_connection()`에서 연결을 받을 때 `DB_CONN_TIMEOUT`(기본 30초)을 초과하면 `ConnectionPoolTimeoutError` 발생. API 전역 핸들러에서 **503 Service Unavailable**로 응답. 무한 대기 방지. `DB_CONN_TIMEOUT=0`이면 타임아웃 없이 대기(기존 동작).
 
 ### DB 연결 풀 설정·모니터링
 
-- **설정**: `.env`의 `DB_MIN_CONN`, `DB_MAX_CONN`으로 풀 크기 지정. 기본 `DB_MAX_CONN=10`. API·백그라운드·WebSocket 등 모든 DB 접근이 이 풀을 공유하므로, 동시 요청이 많으면 풀 포화로 대기 시간이 늘어날 수 있음.
-- **튜닝**: PostgreSQL `max_connections`를 넘지 않게 `DB_MAX_CONN`을 설정. 부하가 큰 경우 20~30으로 상향 검토. 앱 기동 시 로그에 `min_conn`/`max_conn`이 출력되므로 확인 가능.
-- **모니터링 권장**: 풀 포화 시 요청 지연이 발생하므로, 필요 시 DB 연결 대기 시간·활성 연결 수 등을 메트릭으로 수집하는 것을 권장.
+- **설정**: `.env`의 `DB_MIN_CONN`, `DB_MAX_CONN`으로 풀 크기 지정. 기본 `DB_MAX_CONN=20`. `DB_CONN_TIMEOUT`(기본 30초)으로 풀 대기 초과 시 예외 발생. API·백그라운드·WebSocket 등 모든 DB 접근이 이 풀을 공유함.
+- **튜닝**: PostgreSQL `max_connections`를 넘지 않게 `DB_MAX_CONN` 설정. 부하가 큰 경우 30 등으로 상향 검토. 풀 포화 시 무한 대기 대신 타임아웃 후 실패하므로, 필요 시 `DB_MAX_CONN` 상향 또는 `DB_CONN_TIMEOUT=0`(무한대기)로 변경. 앱 기동 시 로그에 `min_conn`/`max_conn`/`conn_timeout`이 출력됨.
+- **모니터링 권장**: 풀 포화 시 타임아웃 예외 또는 요청 지연이 발생할 수 있으므로, 필요 시 DB 연결 대기 시간·활성 연결 수 등을 메트릭으로 수집 권장.
 - **LLM 429 재시도**: `modules.utils.llm_retry.call_with_retry()`로 OpenAI `chat.completions.create` 호출을 래핑. 429/rate limit 시 지수 백오프+jitter로 최대 4회 재시도. RAG 추출(`rag_extractor.py`) 및 정답지·템플릿 GPT 호출(`documents.py`)에 적용됨.
 
 ## 추가로 할 수 있는 것 (비시급)
@@ -71,7 +72,8 @@
 | 이벤트 루프 블로킹 (generate_page_images) | `_generate_all_page_images_sync` + `asyncio.to_thread()` |
 | 이벤트 루프 블로킹 (정답지 탭 목록) | `_ensure_answer_key_designated_by_column` 호출을 `run_sync` 내부로만 이동 |
 | 동시 PDF 분석 제한 | 사용자별 세마포어(1인당 1건) + 전역 상한(기본 20). `MAX_CONCURRENT_ANALYSES_PER_USER`, `MAX_CONCURRENT_ANALYSES` |
-| DB 풀 가시성 | 기동 시 `min_conn`/`max_conn` 로깅, 문서화 보강 |
+| DB 풀 가시성 | 기동 시 `min_conn`/`max_conn`/`conn_timeout` 로깅, 문서화 보강 |
+| DB 풀 포화 시 무한 대기 | 기본 `DB_MAX_CONN=20`, `DB_CONN_TIMEOUT=30`으로 풀 대기 초과 시 `ConnectionPoolTimeoutError` → API 503 응답 |
 | LLM 429 대응 | `call_with_retry()` 적용 (RAG 추출 + 정답지/GPT 템플릿 호출) |
 
 ### 남은 이슈 (우선순위 낮음)

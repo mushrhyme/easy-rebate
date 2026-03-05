@@ -7,7 +7,7 @@ import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sapUploadApi } from '@/api/client'
 import type { SapFormulasConfig, DataInputRule } from '@/types'
-import { DEFAULT_SAP_FORMULAS, dataInputToDescriptionLines, byFormValueToDisplay, parseCondFromText } from '@/config/sapUploadFormulas'
+import { EMPTY_SAP_FORMULAS, dataInputToDescriptionLines, byFormValueToDisplay, parseCondFromText } from '@/config/sapUploadFormulas'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import './SAPUpload.css'
 
@@ -31,33 +31,28 @@ function getColumnIndex(letter: string): number {
   return n - 1
 }
 
-// 템플릿 일본어 컬럼명 → UI 표시용 한글 (없으면 원문)
-const COLUMN_LABEL_KO: Record<string, string> = {
-  条件: '조건',
-  条件小数部: '조건 소수부',
-  未収条件: '미수 조건',
-  未収条件小数部: '미수 조건 소수부',
-  単価: '단가',
-  単価小数部: '단가 소수부',
-  得意先: '거래처',
-  商品名: '상품명',
-  数量: '수량',
-  入数: '입수',
-  金額: '금액',
-  請求金額: '청구금액',
-  請求合計額: '청구합계액',
-}
-
-function getColumnDisplayLabel(name: string): string {
-  return COLUMN_LABEL_KO[name?.trim() ?? ''] ?? (name ?? '')
-}
-
 function getColumnDisplayName(letter: string, columnNames: string[] | undefined): string {
   if (!columnNames?.length) return `${letter}列`
   const idx = getColumnIndex(letter)
   const name = columnNames[idx]?.trim()
-  const label = name ? getColumnDisplayLabel(name) : ''
-  return label ? `${letter}（${label}）` : `${letter}列`
+  return name ? `${letter}（${name}）` : `${letter}列`
+}
+
+/** 양식과 무관하게 고정 매핑되는 열 → 편집 불가, 기준만 표시 */
+const EDITABLE_DATA_COLUMNS = ['P', 'R', 'T', 'AL']
+
+/** 읽기 전용 열 설명 (sap_upload.md 기준) */
+const READONLY_COLUMN_DESCRIPTIONS: Record<string, string> = {
+  B: 'C列 受注先コード → sap_retail 販売先名',
+  C: '受注先コード',
+  D: 'J列 小売先コード → retail_user 担当者名',
+  J: '小売先コード',
+  K: 'J列 小売先コード → sap_retail 小売先名',
+  L: 'M列 商品コード → sap_product 商品名',
+  M: '商品コード',
+  N: 'M列 商品コード → unit_price 2合換算値',
+  O: 'M列 商品コード → unit_price 単一箱換算値',
+  W: '対象期間で選択した年月（例: 2026.02）',
 }
 
 export const SAPUpload = () => {
@@ -71,14 +66,12 @@ export const SAPUpload = () => {
   const [isEditFormulas, setIsEditFormulas] = useState(false)
   const [editFormulas, setEditFormulas] = useState<SapFormulasConfig | null>(null)
 
-  // SAP 산식 설정 조회 (서버 또는 기본값)
+  // SAP 산식 설정: 단일 소스 = 백엔드 GET (파일 또는 _default_formulas)
   const { data: formulasData, isLoading: formulasLoading } = useQuery({
     queryKey: ['sap-upload', 'formulas'],
     queryFn: () => sapUploadApi.getFormulas(),
-    placeholderData: DEFAULT_SAP_FORMULAS,
   })
-
-  const formulas: SapFormulasConfig = formulasData ?? DEFAULT_SAP_FORMULAS
+  const formulas: SapFormulasConfig = formulasData ?? EMPTY_SAP_FORMULAS
 
   // 템플릿 컬럼명 (실제 컬럼명 표시용)
   const { data: columnNamesData } = useQuery({
@@ -238,7 +231,7 @@ export const SAPUpload = () => {
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        '엑셀 파일 다운로드 중 오류가 발생했습니다。'
+        'エクセルダウンロード中にエラーが発生しました。'
       alert(typeof msg === 'string' ? msg : 'データがありません')
     } finally {
       setIsGenerating(false)
@@ -345,11 +338,11 @@ export const SAPUpload = () => {
           <div className="formulas-section-header">
             <h2 className="formulas-section-title">列ごとの計算式</h2>
             <p className="formulas-section-note">
-              ※ 空欄＝未入力（아직 입력이 안 된 값）。양식지(01~05)에 따라 입력·계산이 달라집니다。
+              ※ 空欄＝未入力。
             </p>
             {!isEditFormulas ? (
               <button type="button" className="formulas-edit-btn" onClick={enterEditFormulas}>
-                編集（양식지별 수정）
+                編集
               </button>
             ) : (
               <div className="formulas-edit-actions">
@@ -374,9 +367,9 @@ export const SAPUpload = () => {
             /* 편집 모드: 양식지(01~05)별 입력 */
             <div className="formulas-edit-grid">
               <div className="formulas-block">
-                <h3 className="formulas-block-title">データ入力列（양식지별）</h3>
+                <h3 className="formulas-block-title">データ入力列</h3>
                 <p className="formulas-edit-hint">
-                  필드명 / 수식(예: 単価+単価小数部×0.01) / 분기(예: if 数量単位=個 then 数量 else if 数量単位=CS then 入数×数量) 등을 입력 후 保存하면 백엔드 규칙으로 반영됩니다. 분기는 if·else if·then만 사용하며 / 는 수식의 나누기로만 씁니다.
+                  項目名・数式(例: 単価+単価小数部×0.01)・分岐(例: if 数量単位=個 then 数量 else if 数量単位=CS then 入数×数量)を入力し保存すると反映。分岐は if・else if・then のみ。/ は除算。
                 </p>
                 <div className="formulas-edit-table-wrap">
                   <table className="formulas-edit-table">
@@ -392,17 +385,23 @@ export const SAPUpload = () => {
                       {editFormulas.dataInputColumns.map((row, idx) => (
                         <tr key={row.column}>
                           <td className="formulas-edit-col-letter">{getColumnDisplayName(row.column, columnNames)}</td>
-                          {formKeys.map((formKey) => (
-                            <td key={formKey}>
-                              <input
-                                type="text"
-                                className="formulas-edit-input"
-                                value={byFormValueToDisplay(row.byForm[formKey])}
-                                onChange={(e) => updateDataInput(idx, formKey, e.target.value)}
-                                placeholder="未入力"
-                              />
+                          {EDITABLE_DATA_COLUMNS.includes(row.column) ? (
+                            formKeys.map((formKey) => (
+                              <td key={formKey}>
+                                <input
+                                  type="text"
+                                  className="formulas-edit-input"
+                                  value={byFormValueToDisplay(row.byForm[formKey])}
+                                  onChange={(e) => updateDataInput(idx, formKey, e.target.value)}
+                                  placeholder="未入力"
+                                />
+                              </td>
+                            ))
+                          ) : (
+                            <td colSpan={formKeys.length} className="formulas-edit-readonly">
+                              {READONLY_COLUMN_DESCRIPTIONS[row.column] ?? '（固定）'}
                             </td>
-                          ))}
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -440,19 +439,21 @@ export const SAPUpload = () => {
               </div>
             </div>
           ) : (
-            /* 표시 모드: 실제 컬럼명 + 설명만 */
+            /* 표시 모드: B~O,W는 기준 설명만, P/R/T/AL은 양식별 내용 */
             <div className="formulas-grid">
               <div className="formulas-block">
                 <div className="formulas-cards">
                   {formulas.dataInputColumns.map((item) => {
-                    const lines = dataInputToDescriptionLines(item.byForm, formKeys, formKeyToLabel)
+                    const isEditable = EDITABLE_DATA_COLUMNS.includes(item.column)
+                    const desc = READONLY_COLUMN_DESCRIPTIONS[item.column]
+                    const lines = isEditable ? dataInputToDescriptionLines(item.byForm, formKeys, formKeyToLabel) : []
                     return (
                       <div key={item.column} className="formula-card">
                         <div className="formula-card-header">
                           <span className="formula-column-name">{getColumnDisplayName(item.column, columnNames)}</span>
                         </div>
                         <ul className="formula-description">
-                          {lines.length > 0 ? lines.map((line, i) => <li key={i}>{line}</li>) : <li className="formula-empty">（空欄＝未入力）</li>}
+                          {desc ? <li>{desc}</li> : lines.length > 0 ? lines.map((line, i) => <li key={i}>{line}</li>) : <li className="formula-empty">（空欄＝未入力）</li>}
                         </ul>
                       </div>
                     )
@@ -475,14 +476,7 @@ export const SAPUpload = () => {
 
         {/* 다운로드 버튼 섹션 */}
         <div className="sap-upload-download-section">
-          <div className="download-info">
-            <p className="download-description">
-              document_currentに保存されているすべての分析結果を、SAPアップロード用のExcelファイル形式でダウンロードします。
-            </p>
-            <p className="download-note">
-              ※ ファイルとページの区別なく、すべての情報を統合して処理します。
-            </p>
-          </div>
+          
           
           <div className="button-group">
             <button
@@ -577,15 +571,11 @@ export const SAPUpload = () => {
                     <table className="preview-table">
                       <thead>
                         <tr>
-                          <th>ファイル名</th>
-                          <th>p</th>
-                          <th>フォーム</th>
                           {filteredPreviewData.column_names && filteredPreviewData.column_names.length > 0 ? (
                             filteredPreviewData.column_names.map((colName, idx) => (
-                              <th key={idx}>{getColumnDisplayLabel(colName ?? '') || (colName ?? '')}</th>
+                              <th key={idx}>{colName ?? ''}</th>
                             ))
                           ) : (
-                            // 컬럼명이 없으면 A~BB까지 표시
                             Array.from({ length: 54 }, (_, i) => (
                               <th key={i}>{getColumnLetter(i + 1)}</th>
                             ))
@@ -596,9 +586,6 @@ export const SAPUpload = () => {
                         {filteredPreviewData.preview_rows.length > 0 ? (
                           filteredPreviewData.preview_rows.map((row, index) => (
                             <tr key={index}>
-                              <td className="filename-cell">{row.pdf_filename}</td>
-                              <td>{row.page_number}</td>
-                              <td>{formTypeLabel(row.form_type)}</td>
                               {filteredPreviewData.column_names && filteredPreviewData.column_names.length > 0 ? (
                                 filteredPreviewData.column_names.map((_, idx) => {
                                   const colLetter = getColumnLetter(idx + 1)
@@ -622,7 +609,7 @@ export const SAPUpload = () => {
                           ))
                         ) : (
                           <tr>
-                            <td colSpan={filteredPreviewData.column_names?.length ? filteredPreviewData.column_names.length + 3 : 57} className="no-data-cell">
+                            <td colSpan={filteredPreviewData.column_names?.length ?? 54} className="no-data-cell">
                               該当するデータがありません
                             </td>
                           </tr>

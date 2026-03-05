@@ -41,6 +41,8 @@ export const TYPE_OPTIONS_BASE = [
 export interface InitialDocumentForAnswerKey {
   pdf_filename: string
   total_pages: number
+  /** 検索タブで「解答作成」押下時の表示ページ → ブリッジではこの1ページのみ表示 */
+  initialPage?: number
 }
 
 export interface AnswerKeyTabProps {

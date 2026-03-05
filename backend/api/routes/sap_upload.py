@@ -4,7 +4,7 @@ SAP 업로드 엑셀 파일 생성 API
 """
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import StreamingResponse
 from io import BytesIO
 import csv
@@ -27,9 +27,20 @@ def _get_project_root() -> Path:
 
 
 _RETAIL_USER_CSV = _get_project_root() / "database" / "csv" / "retail_user.csv"
+_SAP_RETAIL_CSV = _get_project_root() / "database" / "csv" / "sap_retail.csv"
+_SAP_PRODUCT_CSV = _get_project_root() / "database" / "csv" / "sap_product.csv"
+_UNIT_PRICE_CSV = _get_project_root() / "database" / "csv" / "unit_price.csv"
 
-# 소매처코드 → 담당자명 캐시 (D열 매핑용). retail_user.csv 컬럼: 소매처코드, 소매처명, 담당자ID, 담당자명, ID
+# 소매처코드 → 담당자명 캐시 (D열). retail_user.csv: 소매처코드, 소매처명, 담당자ID, 담당자명, ID
 _retail_code_to_담당자명: Optional[Dict[str, str]] = None
+# 판매처코드 → 판매처명 (B열). sap_retail: C열 受注先コード=판매처코드 → 판매처명
+_판매처코드_to_판매처명: Optional[Dict[str, str]] = None
+# 소매처코드 → 소매처명 (K열). sap_retail: J열 小売先コード → 소매처명
+_소매처코드_to_소매처명: Optional[Dict[str, str]] = None
+# 제품코드 → 제품명 (L열). sap_product: M열 商品コード → 제품명
+_제품코드_to_제품명: Optional[Dict[str, str]] = None
+# 제품코드 → (2합환산값, 단일상자환산값) (N,O열). unit_price.csv
+_제품코드_to_단가: Optional[Dict[str, tuple]] = None
 
 
 def _get_담당자명_by_小売先コード(retail_code: str) -> str:
@@ -53,9 +64,96 @@ def _get_담당자명_by_小売先コード(retail_code: str) -> str:
     return (_retail_code_to_담당자명 or {}).get(code, "")
 
 
+def _get_판매처명_by_受注先コード(code: str) -> str:
+    """B열: C열 受注先コード를 sap_retail의 판매처코드와 매핑 → 판매처명."""
+    global _판매처코드_to_판매처명
+    code = (code or "").strip()
+    if not code:
+        return ""
+    if _판매처코드_to_판매처명 is None:
+        _판매처코드_to_판매처명 = {}
+        if _SAP_RETAIL_CSV.exists():
+            try:
+                with open(_SAP_RETAIL_CSV, "r", encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        pc = (row.get("판매처코드") or "").strip()
+                        pn = (row.get("판매처명") or "").strip()
+                        if pc and pc not in _판매처코드_to_판매처명:
+                            _판매처코드_to_판매처명[pc] = pn
+            except Exception as e:
+                print(f"❌ [sap_retail] 읽기 오류: {e}")
+    return (_판매처코드_to_판매처명 or {}).get(code, "")
+
+
+def _get_소매처명_by_小売先コード(code: str) -> str:
+    """K열: J열 小売先コード를 sap_retail의 소매처코드와 매핑 → 소매처명."""
+    global _소매처코드_to_소매처명
+    code = (code or "").strip()
+    if not code:
+        return ""
+    if _소매처코드_to_소매처명 is None:
+        _소매처코드_to_소매처명 = {}
+        if _SAP_RETAIL_CSV.exists():
+            try:
+                with open(_SAP_RETAIL_CSV, "r", encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        rc = (row.get("소매처코드") or "").strip()
+                        rn = (row.get("소매처명") or "").strip()
+                        if rc and rc not in _소매처코드_to_소매처명:
+                            _소매처코드_to_소매처명[rc] = rn
+            except Exception as e:
+                print(f"❌ [sap_retail] 읽기 오류: {e}")
+    return (_소매처코드_to_소매처명 or {}).get(code, "")
+
+
+def _get_제품명_by_商品コード(code: str) -> str:
+    """L열: M열 商品コード를 sap_product의 제품코드와 매핑 → 제품명."""
+    global _제품코드_to_제품명
+    code = (code or "").strip()
+    if not code:
+        return ""
+    if _제품코드_to_제품명 is None:
+        _제품코드_to_제품명 = {}
+        if _SAP_PRODUCT_CSV.exists():
+            try:
+                with open(_SAP_PRODUCT_CSV, "r", encoding="utf-8") as f:
+                    for row in csv.DictReader(f):
+                        c = (row.get("제품코드") or "").strip()
+                        n = (row.get("제품명") or "").strip()
+                        if c and c not in _제품코드_to_제품명:
+                            _제품코드_to_제품명[c] = n
+            except Exception as e:
+                print(f"❌ [sap_product] 읽기 오류: {e}")
+    return (_제품코드_to_제품명 or {}).get(code, "")
+
+
+def _get_unit_price_by_商品コード(code: str) -> tuple:
+    """N,O열: M열 商品コード를 unit_price의 제품코드와 매핑 → (2합환산값, 단일상자환산값)."""
+    global _제품코드_to_단가
+    code = (code or "").strip()
+    if not code:
+        return ("", "")
+    if _제품코드_to_단가 is None:
+        _제품코드_to_단가 = {}
+        if _UNIT_PRICE_CSV.exists():
+            try:
+                with open(_UNIT_PRICE_CSV, "r", encoding="utf-8-sig") as f:
+                    reader = csv.DictReader(f)
+                    reader.fieldnames = [c.strip().lstrip("\ufeff") for c in (reader.fieldnames or [])]
+                    for row in reader:
+                        c = (row.get("제품코드") or "").strip()
+                        n = (row.get("2합환산값") or "").strip()
+                        o = (row.get("단일상자환산값") or "").strip()
+                        if c and c not in _제품코드_to_단가:
+                            _제품코드_to_단가[c] = (n, o)
+            except Exception as e:
+                print(f"❌ [unit_price] 읽기 오류: {e}")
+    t = (_제품코드_to_단가 or {}).get(code, ("", ""))
+    return t if isinstance(t, tuple) else ("", "")
+
+
 # ---------- 설정 기반 규칙 해석 (rule → 값) ----------
-# 필드별 대체 키 (예: 得意先名 없으면 得意先 사용)
-_FIELD_FALLBACK = {"得意先名": "得意先"}
+_FIELD_FALLBACK = {"得意先名": "得意先", "ケース入数": "入数"}
 
 
 def _safe_eval_expr(expr: str, item_data: Dict[str, Any]) -> Any:
@@ -77,6 +175,8 @@ def _safe_eval_expr(expr: str, item_data: Dict[str, Any]) -> Any:
         if v is None or v == "":
             v = 0
         try:
+            if isinstance(v, str):
+                v = v.replace(",", "").replace("，", "").strip()
             v = float(v)
         except (TypeError, ValueError):
             v = str(v) if v else ""
@@ -226,6 +326,21 @@ def _load_formulas_config() -> Dict[str, Any]:
     return _default_formulas()
 
 
+def _strip_numeric_unit(val: Any) -> str:
+    """
+    T열 등 연산에 쓰는 값에서 '48個', '1,234円' 같은 단위 제거.
+    반환: 숫자만 있는 문자열 (빈 문자열 또는 '48', '1234.5' 등)
+    """
+    if val is None or val == "":
+        return ""
+    if isinstance(val, (int, float)):
+        return str(val)
+    s = str(val).strip()
+    s = re.sub(r"[,，\s]", "", s)  # 천단위 콤마·공백 제거
+    m = re.match(r"^[\d.]+", s)
+    return m.group(0) if m else ""
+
+
 def process_item_for_sap(
     item: Dict[str, Any],
     form_type: Optional[str],
@@ -268,7 +383,34 @@ def process_item_for_sap(
             val = ""
         result[col] = val
 
+    # T열은 U열 수식(P×N+R×O+T)에 사용되므로 단위(個, 円 등) 제거
+    if result.get("T") not in (None, ""):
+        result["T"] = _strip_numeric_unit(result["T"])
+
     return result
+
+
+def _safe_float(val: Any) -> float:
+    """null/빈 문자열이면 0, 아니면 float 변환 (변환 실패 시 0)."""
+    if val is None or val == "":
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        s = str(val).strip()
+        return float(s) if s else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _compute_u_row(processed: Dict[str, Any]) -> float:
+    """U열(個数計) = P×N + R×O + T. null/빈 값은 0으로 계산."""
+    p = _safe_float(processed.get("P"))
+    n = _safe_float(processed.get("N"))
+    r = _safe_float(processed.get("R"))
+    o = _safe_float(processed.get("O"))
+    t = _safe_float(processed.get("T"))
+    return p * n + r * o + t
 
 
 def get_column_letters_a_to_bb() -> List[str]:
@@ -285,16 +427,15 @@ def get_column_letters_a_to_bb() -> List[str]:
     return columns
 
 
-def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] = None) -> BytesIO:
+def create_sap_excel(
+    items: List[Dict[str, Any]],
+    template_path: Optional[str] = None,
+    data_year: Optional[int] = None,
+    data_month: Optional[int] = None,
+) -> BytesIO:
     """
-    SAP 업로드용 엑셀 파일 생성
-    
-    Args:
-        items: 모든 아이템 리스트
-        template_path: 템플릿 파일 경로 (선택사항)
-    
-    Returns:
-        엑셀 파일 바이트 스트림
+    SAP 업로드용 엑셀 파일 생성.
+    data_year/data_month 있으면 W열(発生月)에 "YYYY.MM" 형식으로 채움.
     """
     from pathlib import Path
     
@@ -336,7 +477,7 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
     for item in items:
         form_type = item.get("form_type", "01")
         processed = process_item_for_sap(item, form_type, config)
-        # D열: item_data에 없음. J열(小売先コード)로 retail_user.csv 매핑 담당자명으로 항상 채움
+        # lookup 열: item_data 없이 CSV 매핑으로 채움
         item_data = item.get("item_data") or {}
         if isinstance(item_data, str):
             try:
@@ -345,6 +486,13 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
                 item_data = {}
         retail_cd = (processed.get("J") or item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
         processed["D"] = _get_담당자명_by_小売先コード(retail_cd)
+        processed["B"] = _get_판매처명_by_受注先コード(processed.get("C") or "")
+        processed["K"] = _get_소매처명_by_小売先コード(processed.get("J") or "")
+        processed["L"] = _get_제품명_by_商品コード(processed.get("M") or "")
+        n_val, o_val = _get_unit_price_by_商品コード(processed.get("M") or "")
+        processed["N"], processed["O"] = n_val, o_val
+        if data_year is not None and data_month is not None:
+            processed["W"] = f"{data_year}.{data_month:02d}"
 
         for col in data_columns:
             val = processed.get(col)
@@ -353,9 +501,22 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
                     ws[f"{col}{row_num}"] = val
                 except Exception:
                     pass
+        # W열(発生月): 대상기간으로 무조건 기록 (data_columns 순서와 무관)
+        if data_year is not None and data_month is not None:
+            try:
+                ws[f"W{row_num}"] = f"{data_year}.{data_month:02d}"
+            except Exception:
+                pass
+        # U열(個数計): P×N + R×O + T (null/빈 값은 0으로 계산)
+        try:
+            ws[f"U{row_num}"] = _compute_u_row(processed)
+        except Exception:
+            pass
 
         for fc in formula_columns:
             col = fc.get("column")
+            if col == "U":
+                continue  # U는 위에서 계산값으로 이미 기록
             formula_tpl = fc.get("formula")
             if col and formula_tpl:
                 ws[f"{col}{row_num}"] = formula_for_row(formula_tpl, row_num)
@@ -495,8 +656,8 @@ async def get_sap_documents(
 @router.get("/preview")
 async def preview_sap_excel(
     db=Depends(get_db),
-    year: Optional[int] = None,
-    month: Optional[int] = None,
+    year: Optional[int] = Query(None, description="対象年"),
+    month: Optional[int] = Query(None, description="対象月"),
 ):
     """
     SAP 엑셀 파일 미리보기 (JSON). 연월 지정 시 해당 기간 문서만.
@@ -543,7 +704,7 @@ async def preview_sap_excel(
         for item in preview_items:
             form_type = item.get("form_type", "01")
             processed = process_item_for_sap(item, form_type, config)
-            # D열: 小売先コード → retail_user 매핑 담당자명
+            # lookup 열: D,B,K,L,N,O
             item_data = item.get("item_data") or {}
             if isinstance(item_data, str):
                 try:
@@ -552,6 +713,14 @@ async def preview_sap_excel(
                     item_data = {}
             retail_cd = (processed.get("J") or item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
             processed["D"] = _get_담당자명_by_小売先コード(retail_cd)
+            processed["B"] = _get_판매처명_by_受注先コード(processed.get("C") or "")
+            processed["K"] = _get_소매처명_by_小売先コード(processed.get("J") or "")
+            processed["L"] = _get_제품명_by_商品コード(processed.get("M") or "")
+            n_val, o_val = _get_unit_price_by_商品コード(processed.get("M") or "")
+            processed["N"], processed["O"] = n_val, o_val
+            if year is not None and month is not None:
+                processed["W"] = f"{year}.{month:02d}"
+            processed["U"] = _compute_u_row(processed)
 
             row_data: Dict[str, Any] = {
                 "pdf_filename": item.get("pdf_filename", ""),
@@ -581,8 +750,8 @@ async def preview_sap_excel(
 async def download_sap_excel(
     db=Depends(get_db),
     current_user: dict = Depends(get_current_user_optional),
-    year: Optional[int] = None,
-    month: Optional[int] = None,
+    year: Optional[int] = Query(None, description="対象年"),
+    month: Optional[int] = Query(None, description="対象月"),
 ):
     """
     SAP 업로드용 엑셀 파일 다운로드. year/month 지정 시 해당 기간 문서의 item만 취합.
@@ -598,7 +767,7 @@ async def download_sap_excel(
         template_path = project_root / "static" / "sap_upload.xlsx"
         template_file = str(template_path) if template_path.exists() else None
 
-        excel_file = create_sap_excel(items, template_file)
+        excel_file = create_sap_excel(items, template_file, data_year=year, data_month=month)
 
         from datetime import datetime
         filename = f"SAP_Upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -655,13 +824,21 @@ def _default_formulas() -> Dict[str, Any]:
     """
     sap_upload.md 기반 기본 산식 (파일 없을 때 fallback).
     byForm: 문자열=필드명, 객체=rule(field/cond/expr). 백엔드가 해석해 적용.
+    B/K/L/N/O/W: lookup 또는 메타는 별도 처리·공란.
     """
     return {
         "dataInputColumns": [
+            {"column": "B", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # C열→sap_retail 판매처명 lookup
             {"column": "C", "byForm": {"01": {"field": "受注先コード"}, "02": {"field": "受注先コード"}, "03": {"field": "受注先コード"}, "04": {"field": "受注先コード"}, "05": {"field": "受注先コード"}}},
-            {"column": "D", "byForm": {"01": {"field": "담당자명"}, "02": {"field": "담당자명"}, "03": {"field": "담당자명"}, "04": {"field": "담당자명"}, "05": {"field": "담당자명"}}},
+            {"column": "D", "byForm": {"01": {"field": "담당자명"}, "02": {"field": "담당자명"}, "03": {"field": "담당자명"}, "04": {"field": "담당자명"}, "05": {"field": "담당자명"}}},  # J열→retail_user 담당자명은 create_sap_excel에서 덮어씀
             {"column": "J", "byForm": {"01": {"field": "小売先コード"}, "02": {"field": "小売先コード"}, "03": {"field": "小売先コード"}, "04": {"field": "小売先コード"}, "05": {"field": "小売先コード"}}},
+            {"column": "K", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # C열→sap_retail 소매처명 lookup
+            {"column": "L", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # M열→sap_product 제품명 lookup
             {"column": "M", "byForm": {"01": {"field": "商品コード"}, "02": {"field": "商品コード"}, "03": {"field": "商品コード"}, "04": {"field": "商品コード"}, "05": {"field": "商品コード"}}},
+            {"column": "N", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # unit_price 2합환산 lookup
+            {"column": "O", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # unit_price 단일상자환산 lookup
+            {"column": "P", "byForm": {"01": "", "02": "", "03": {"field": "ケース"}, "04": "", "05": ""}},
+            {"column": "R", "byForm": {"01": "", "02": "", "03": {"field": "バラ"}, "04": "", "05": ""}},
             {
                 "column": "T",
                 "byForm": {
@@ -672,7 +849,8 @@ def _default_formulas() -> Dict[str, Any]:
                     "05": "",
                 },
             },
-            {"column": "AL", "byForm": {"01": {"field": "金額"}, "02": {"field": "金額（税別）"}, "03": {"field": "請求金額"}, "04": {"field": "金額"}, "05": {"field": "請求合計額"}}},
+            {"column": "W", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # 연월 메타
+            {"column": "AL", "byForm": {"01": {"field": "金額"}, "02": {"field": "金額"}, "03": {"field": "請求金額"}, "04": {"expr": "金額+金額2"}, "05": {"field": "請求合計額"}}},
         ],
         "excelFormulaColumns": [
             {"column": "U", "formula": "=P3*N3 + R3*O3 + T3", "description": "P×N + R×O + T"},

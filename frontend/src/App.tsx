@@ -58,10 +58,11 @@ function AppContent() {
     }
   }, [isAdmin, activeTab])
 
-  /** 정답지 탭으로 이동 시 선택할 문서 (検索タブの解答作成指定만) */
+  /** 정답지 탭으로 이동 시 선택할 문서 + 현재 페이지 (해당 페이지만 브릿지에 표시) */
   const [initialDocumentForAnswerKey, setInitialDocumentForAnswerKey] = useState<{
     pdf_filename: string
     total_pages: number
+    initialPage?: number
   } | null>(null)
   /** 検討タブに復帰 시 검토 탭에서 열 문서·양식지 (해당 문서 자동 선택 + 양식지 드롭다운 유지) */
   const [documentToOpenOnReturnToSearch, setDocumentToOpenOnReturnToSearch] = useState<{
@@ -319,8 +320,8 @@ function AppContent() {
             <CustomerSearch
               documentToOpen={documentToOpenOnReturnToSearch}
               onConsumeDocumentToOpen={() => setDocumentToOpenOnReturnToSearch(null)}
-              onNavigateToAnswerKey={(pdfFilename) => {
-                setInitialDocumentForAnswerKey({ pdf_filename: pdfFilename, total_pages: 0 })
+              onNavigateToAnswerKey={(pdfFilename, pageNumber) => {
+                setInitialDocumentForAnswerKey({ pdf_filename: pdfFilename, total_pages: 0, initialPage: pageNumber })
                 setActiveTab('ocr_test')
               }}
             />
