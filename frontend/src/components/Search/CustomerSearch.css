@@ -7,6 +7,144 @@
   /* 상위는 고정 레이아웃, 스크롤은 뷰어 / 그리드 각각에서 */
   height: 100%;
   overflow: hidden;
+  position: relative;
+}
+
+/* 우측 꼭지(이미지 영역만) + 호버 시 파일 목록 패널 */
+.review-files-dock {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%; /* 부모에서 imageHeightPercent%로 제한 */
+  display: flex;
+  align-items: center; /* 꼭지만 세로 중앙에 작게 */
+  z-index: 30;
+  pointer-events: none;
+}
+.review-files-dock > * {
+  pointer-events: auto;
+}
+.review-files-tab {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 0.9rem;
+  border-radius: 6px 0 0 6px;
+  box-shadow: -2px 0 6px rgba(0, 0, 0, 0.2);
+  cursor: default;
+  transition: box-shadow 0.2s ease;
+}
+.review-files-tab:hover {
+  box-shadow: -2px 0 10px rgba(102, 126, 234, 0.45);
+}
+.review-files-panel {
+  width: 0;
+  overflow: hidden;
+  background: #fff;
+  border-left: 1px solid #e0e0e0;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  transition: width 0.25s ease-out;
+}
+.review-files-panel.open {
+  width: 260px;
+  min-width: 260px;
+}
+.review-files-panel-title {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #374151;
+  border-bottom: 1px solid #e5e7eb;
+}
+.review-files-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+}
+.review-files-item {
+  margin: 0;
+  padding: 0;
+}
+.review-files-item-btn {
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-size: 0.8rem;
+  color: #374151;
+  cursor: pointer;
+  transition: background 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: stretch;
+}
+.review-files-item-name {
+  white-space: normal;
+  word-break: break-all;
+  font-size: 0.8rem;
+}
+.review-files-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  margin-top: 4px;
+}
+.review-files-item.current .review-files-item-meta {
+  color: inherit;
+}
+.review-files-item-pages {
+  color: #6b7280;
+  margin-right: 2px;
+}
+.review-files-rate {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+.review-files-rate-1st.zero,
+.review-files-rate-2nd.zero {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.review-files-rate-1st.mid,
+.review-files-rate-2nd.mid {
+  background: #fef3c7;
+  color: #b45309;
+}
+.review-files-rate-1st.full,
+.review-files-rate-2nd.full {
+  background: #d1fae5;
+  color: #047857;
+}
+.review-files-item-btn:hover {
+  background: #f3f4f6;
+}
+.review-files-item.current .review-files-item-btn {
+  background: #eef2ff;
+  color: #4f46e5;
+  font-weight: 500;
+}
+.review-files-item.empty {
+  padding: 8px 12px;
+  color: #9ca3af;
+  font-size: 0.85rem;
 }
 
 /* 리사이저블 스플릿: 이미지 + 경계선 + 내비 + 그리드 */
@@ -387,6 +525,15 @@
   background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
 }
 
+.page-navigation-section .nav-action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #9ca3af;
+}
+.page-navigation-section .nav-action-btn:disabled:hover {
+  background: #9ca3af;
+}
+
 /* 保存：보라 그라데이션과 톤 맞춘 붉은색 그라데이션 */
 .page-navigation-section .nav-action-btn.nav-save-btn {
   background: linear-gradient(135deg, #ef5350 0%, #c62828 100%);
@@ -419,25 +566,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 350px;
-}
-
-/* 파일 선택 드롭다운: 특정 문서로 바로 이동 */
-.page-filename-select {
-  color: #333;
-  font-size: 0.9em;
-  font-weight: 500;
-  padding: 0.35rem 0.6rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
-  min-width: 120px;
-  max-width: 320px;
-  cursor: pointer;
-}
-.page-filename-select:focus {
-  outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
 }
 
 .page-number-in-file {
@@ -1047,6 +1175,12 @@
   font-size: 0.85rem;
   color: #6b7280;
 }
+.answer-key-modal-warn {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #b45309;
+}
 .answer-key-modal-filename {
   margin: 0 0 1rem 0;
   font-size: 0.8rem;
@@ -1213,10 +1347,54 @@
   border-radius: 6px;
 }
 
-/* 取引先一覧モーダル */
-.customer-list-btn {
-  margin-left: 0;
+/* 担当取引先のみ: ピル（検索ボタンと同トーン）、1行＋選択＋チェック */
+.customer-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: var(--nav-control-height, 2.25rem);
+  padding: 0 1rem 0 1.25rem;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, #e0e7ff 0%, #ddd6fe 100%);
+  border: 1px solid #a5b4fc;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #4338ca;
 }
+.customer-filter-pill:hover {
+  background: linear-gradient(135deg, #c7d2fe 0%, #c4b5fd 100%);
+  border-color: #818cf8;
+}
+.customer-filter-pill:has(input:checked) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+}
+.customer-filter-pill:has(input:checked):hover {
+  background: linear-gradient(135deg, #764ba2 0%, #5b4b8a 100%);
+}
+.customer-filter-pill-text {
+  display: inline-flex;
+  align-items: center;
+}
+.customer-filter-pill input[type="checkbox"] {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #6366f1;
+}
+.customer-filter-pill:has(input:checked) input[type="checkbox"] {
+  accent-color: #fff;
+}
+
+/* 取引先一覧モーダル */
 .customer-list-modal .customer-list-modal-desc {
   margin: 0 0 0.75rem 0;
   font-size: 0.85rem;

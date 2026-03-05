@@ -578,7 +578,7 @@ export const SAPUpload = () => {
                       <thead>
                         <tr>
                           <th>ファイル名</th>
-                          <th>ページ</th>
+                          <th>p</th>
                           <th>フォーム</th>
                           {filteredPreviewData.column_names && filteredPreviewData.column_names.length > 0 ? (
                             filteredPreviewData.column_names.map((colName, idx) => (

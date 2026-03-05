@@ -400,6 +400,38 @@ export const documentsApi = {
   },
 }
 
+/** 문서별 PDF 첨부: static/attachments/{pdf_filename}/ 에 저장·목록 조회 */
+export const attachmentsApi = {
+  list: async (pdfFilename: string): Promise<{ files: Array<{ name: string; url: string }> }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.get<{ files: Array<{ name: string; url: string }> }>(
+      `/api/documents/${encoded}/attachments/list`
+    )
+    return response.data
+  },
+  upload: async (
+    pdfFilename: string,
+    file: File
+  ): Promise<{ name: string; url: string }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await client.post<{ name: string; url: string }>(
+      `/api/documents/${encoded}/attachments/upload`,
+      formData
+    )
+    return response.data
+  },
+  delete: async (pdfFilename: string, fileName: string): Promise<{ message: string }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.delete<{ message: string }>(
+      `/api/documents/${encoded}/attachments/delete`,
+      { params: { file_name: fileName } }
+    )
+    return response.data
+  },
+}
+
 // 아이템 API
 export const itemsApi = {
   /**
@@ -769,7 +801,7 @@ export const searchApi = {
       제품용량?: number | string
       시키리?: number
       본부장?: number
-      JANCD?: string | number
+      JANコード?: string | number
       제품명_similarity?: number
       제품용량_similarity?: number
       similarity?: number
@@ -806,7 +838,7 @@ export const searchApi = {
     return response.data
   },
 
-  /** 得意先CD(도매소매처코드)로 domae_retail_1 조회 → 소매처코드 1건 (판매처는 dist_retail) */
+  /** 得意先コード(도매소매처코드)로 domae_retail_1 조회 → 소매처코드 1건 (판매처는 dist_retail) */
   getRetailByCustomerCode: async (
     customerCode: string
   ): Promise<{
@@ -1293,10 +1325,10 @@ export const ragAdminApi = {
   },
 
   /**
-   * 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先CD / 小売先CD
+   * 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先コード / 小売先コード
    */
   getRetailRagAnswerItems: async (): Promise<{
-    items: Array<{ 得意先: string; 受注先CD: string; 小売先CD: string }>
+    items: Array<{ 得意先: string; 受注先コード: string; 小売先コード: string }>
   }> => {
     const response = await client.get('/api/rag-admin/retail-rag-answer-items')
     return response.data

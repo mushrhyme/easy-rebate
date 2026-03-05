@@ -35,7 +35,7 @@ export interface Item {
   frozen_retail_code?: string | null
   /** 검토 탭 frozen 컬럼: dist_retail 소매처코드→판매처코드 */
   frozen_dist_code?: string | null
-  /** 검토 탭 frozen 컬럼: 단가리스트(商品名) 매칭 商品CD */
+  /** 검토 탭 frozen 컬럼: 단가리스트(商品名) 매칭 商品コード */
   frozen_product_code?: string | null
 }
 

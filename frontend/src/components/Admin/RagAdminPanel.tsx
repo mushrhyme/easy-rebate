@@ -67,8 +67,8 @@ export const RagAdminPanel = () => {
   })
   const retailRagAnswerItems = (retailRagAnswerData?.items ?? []) as Array<{
     得意先: string
-    受注先CD: string
-    小売先CD: string
+    受注先コード: string
+    小売先コード: string
   }>
 
   const rebuildRetailRagIndexMutation = useMutation({
@@ -358,7 +358,7 @@ export const RagAdminPanel = () => {
         <section className="rag-admin-card rag-admin-card-wide">
           <h3 className="rag-admin-section-title">판매처-소매처 RAG 정답지</h3>
           <p className="rag-admin-helper">
-            created_by_user_id가 null이 아닌 문서에 속한 item의 得意先 / 受注先CD / 小売先CD 목록입니다. 아래 목록으로 벡터 인덱스를 구축하면 매핑 모달 4번(得意先 RAG 정답지 類似度)에서 검색됩니다.
+            created_by_user_id가 null이 아닌 문서에 속한 item의 得意先 / 受注先コード / 小売先コード 목록입니다. 아래 목록으로 벡터 인덱스를 구축하면 매핑 모달 4번(得意先 RAG 정답지 類似度)에서 검색됩니다.
           </p>
           <p className="rag-admin-helper">
             <button
@@ -378,8 +378,8 @@ export const RagAdminPanel = () => {
                 <thead>
                   <tr>
                     <th>得意先</th>
-                    <th>受注先CD</th>
-                    <th>小売先CD</th>
+                    <th>受注先コード</th>
+                    <th>小売先コード</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -391,8 +391,8 @@ export const RagAdminPanel = () => {
                     retailRagAnswerItems.map((row, idx) => (
                       <tr key={idx}>
                         <td>{row.得意先 || '—'}</td>
-                        <td>{row.受注先CD || '—'}</td>
-                        <td>{row.小売先CD || '—'}</td>
+                        <td>{row.受注先コード || '—'}</td>
+                        <td>{row.小売先コード || '—'}</td>
                       </tr>
                     ))
                   )}
