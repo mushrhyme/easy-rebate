@@ -139,28 +139,14 @@ async def build_vector_db(
     rag_manager = get_rag_manager()
     total_vectors = rag_manager.count_examples()
 
+    def _fetch_per_form(db):
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT form_type, SUM(vector_count) AS total_vectors FROM rag_vector_index GROUP BY form_type ORDER BY form_type")
+            return [{"form_type": row[0], "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
     db = get_db()
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT form_type, SUM(vector_count) AS total_vectors
-            FROM rag_vector_index
-            GROUP BY form_type
-            ORDER BY form_type
-            """
-        )
-        per_form = [
-            {"form_type": row[0], "vector_count": int(row[1] or 0)}
-            for row in cursor.fetchall()
-        ]
-
-    return {
-        "success": True,
-        "message": "벡터 DB 생성이 완료되었습니다.",
-        "total_vectors": int(total_vectors),
-        "per_form_type": per_form,
-    }
+    per_form = await db.run_sync(_fetch_per_form, db)
+    return {"success": True, "message": "벡터 DB 생성이 완료되었습니다.", "total_vectors": int(total_vectors), "per_form_type": per_form}
 
 
 @router.get("/status")
@@ -179,49 +165,27 @@ async def get_vector_db_status(
     rag_manager = get_rag_manager()
     total_vectors = rag_manager.count_examples()
 
+    def _fetch_status_sync(database, y, m):
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT form_type, SUM(vector_count) AS total_vectors FROM rag_vector_index GROUP BY form_type ORDER BY form_type")
+            per_form = [{"form_type": row[0], "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
+            cursor.execute("SELECT COUNT(*) FROM rag_learning_status_current WHERE status = 'merged'")
+            merged_pages = int(cursor.fetchone()[0] or 0)
+            answer_key_pages_in_period = None
+            if y is not None and m is not None:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM rag_learning_status_current r
+                    WHERE r.status = 'merged' AND r.updated_at >= date_trunc('month', make_date(%s, %s, 1))
+                      AND r.updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
+                      AND (EXISTS (SELECT 1 FROM documents_current d WHERE d.pdf_filename = r.pdf_filename AND d.created_by_user_id IS NOT NULL)
+                           OR EXISTS (SELECT 1 FROM documents_archive a WHERE a.pdf_filename = r.pdf_filename AND a.created_by_user_id IS NOT NULL))
+                """, (y, m, y, m))
+                answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
+        return per_form, merged_pages, answer_key_pages_in_period
     db = get_db()
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT form_type, SUM(vector_count) AS total_vectors
-            FROM rag_vector_index
-            GROUP BY form_type
-            ORDER BY form_type
-            """
-        )
-        per_form = [
-            {"form_type": row[0], "vector_count": int(row[1] or 0)}
-            for row in cursor.fetchall()
-        ]
-
-        # 사용 중인 정답지: rag_learning_status_current에서 status='merged' 페이지 수
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM rag_learning_status_current WHERE status = 'merged'
-            """
-        )
-        merged_pages = int(cursor.fetchone()[0] or 0)
-        unused_pages = max(0, total_vectors - merged_pages)
-
-        # 선택 연월에 merged된 정답지 수 (updated_at 기준). base DB(created_by_user_id IS NULL) 제외
-        answer_key_pages_in_period: Optional[int] = None
-        if year is not None and month is not None:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM rag_learning_status_current r
-                WHERE r.status = 'merged'
-                  AND r.updated_at >= date_trunc('month', make_date(%s, %s, 1))
-                  AND r.updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
-                  AND (
-                    EXISTS (SELECT 1 FROM documents_current d WHERE d.pdf_filename = r.pdf_filename AND d.created_by_user_id IS NOT NULL)
-                    OR EXISTS (SELECT 1 FROM documents_archive a WHERE a.pdf_filename = r.pdf_filename AND a.created_by_user_id IS NOT NULL)
-                  )
-                """,
-                (year, month, year, month),
-            )
-            answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
-
+    per_form, merged_pages, answer_key_pages_in_period = await db.run_sync(_fetch_status_sync, db, year, month)
+    unused_pages = max(0, total_vectors - merged_pages)
     return {
         "total_vectors": int(total_vectors),
         "per_form_type": per_form,
@@ -248,22 +212,16 @@ async def get_learning_flag(
     """
     _ensure_admin(current_user)
 
+    def _get_flag_sync(database, pdf: str, page: int):
+        _ensure_rag_candidate_column(database)
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT is_rag_candidate FROM page_data_current WHERE pdf_filename = %s AND page_number = %s", (pdf, page))
+            row = cursor.fetchone()
+        return bool(row[0]) if row else False
     db = get_db()
-    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
-    
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT is_rag_candidate
-            FROM page_data_current
-            WHERE pdf_filename = %s AND page_number = %s
-            """,
-            (pdf_filename, page_number),
-        )
-        row = cursor.fetchone()
-
-    return {"selected": bool(row[0]) if row else False}
+    selected = await db.run_sync(_get_flag_sync, db, pdf_filename, page_number)
+    return {"selected": selected}
 
 
 class LearningFlagRequest(BaseModel):
@@ -282,22 +240,18 @@ async def set_learning_flag(
     """
     _ensure_admin(current_user)
 
+    def _set_flag_sync(database):
+        _ensure_rag_candidate_column(database)
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE page_data_current SET is_rag_candidate = %s, updated_at = CURRENT_TIMESTAMP WHERE pdf_filename = %s AND page_number = %s",
+                (request.selected, request.pdf_filename, request.page_number),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Page not found")
     db = get_db()
-    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
-    
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            UPDATE page_data_current
-            SET is_rag_candidate = %s, updated_at = CURRENT_TIMESTAMP
-            WHERE pdf_filename = %s AND page_number = %s
-            """,
-            (request.selected, request.pdf_filename, request.page_number),
-        )
-        if cursor.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Page not found")
-
+    await db.run_sync(_set_flag_sync, db)
     return {"success": True}
 
 
@@ -310,22 +264,14 @@ async def get_learning_pages(
     """
     _ensure_admin(current_user)
 
+    def _get_learning_pages_sync(database):
+        _ensure_rag_candidate_column(database)
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT pdf_filename, page_number FROM page_data_current WHERE is_rag_candidate = TRUE ORDER BY pdf_filename, page_number")
+            return [{"pdf_filename": r[0], "page_number": r[1]} for r in cursor.fetchall()]
     db = get_db()
-    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
-    
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT pdf_filename, page_number
-            FROM page_data_current
-            WHERE is_rag_candidate = TRUE
-            ORDER BY pdf_filename, page_number
-            """
-        )
-        rows = cursor.fetchall()
-
-    pages = [{"pdf_filename": r[0], "page_number": r[1]} for r in rows]
+    pages = await db.run_sync(_get_learning_pages_sync, db)
     return {"count": len(pages), "pages": pages}
 
 
@@ -339,37 +285,21 @@ async def build_vector_from_learning_pages(
     """
     _ensure_admin(current_user)
 
+    def _fetch_learning_rows_sync(database):
+        _ensure_rag_candidate_column(database)
+        with database.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT p.pdf_filename, p.page_number, p.page_role, p.page_meta, i.item_id, i.item_order, i.item_data, d.form_type, d.data_year, d.data_month
+                FROM page_data_current p
+                LEFT JOIN items_current i ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+                LEFT JOIN documents_current d ON p.pdf_filename = d.pdf_filename
+                WHERE p.is_rag_candidate = TRUE
+                ORDER BY p.pdf_filename, p.page_number, i.item_order NULLS LAST
+            """)
+            return cursor.fetchall()
     db = get_db()
-    _ensure_rag_candidate_column(db)  # 컬럼이 없으면 자동 추가
-    
-    with db.get_connection() as conn:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        # LEFT JOIN: items 없는 페이지(cover 전용)도 포함
-        cursor.execute(
-            """
-            SELECT 
-                p.pdf_filename,
-                p.page_number,
-                p.page_role,
-                p.page_meta,
-                i.item_id,
-                i.item_order,
-                i.item_data,
-                d.form_type,
-                d.data_year,
-                d.data_month
-            FROM page_data_current p
-            LEFT JOIN items_current i
-              ON i.pdf_filename = p.pdf_filename
-             AND i.page_number = p.page_number
-            LEFT JOIN documents_current d
-              ON p.pdf_filename = d.pdf_filename
-            WHERE p.is_rag_candidate = TRUE
-            ORDER BY p.pdf_filename, p.page_number, i.item_order NULLS LAST
-            """
-        )
-        rows: List[Dict[str, Any]] = cursor.fetchall()
-
+    rows: List[Dict[str, Any]] = await db.run_sync(_fetch_learning_rows_sync, db)
     if not rows:
         raise HTTPException(status_code=400, detail="학습 대상으로 선택된 페이지가 없습니다.")
 
@@ -477,48 +407,29 @@ async def build_vector_from_learning_pages(
     await asyncio.to_thread(rag_manager.reload_index)
     total_vectors = rag_manager.count_examples()
 
+    def _update_status_and_per_form(database, pages: list, shard_id: str):
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            for sp in pages:
+                pdf_name = (sp.get("metadata") or {}).get("pdf_name") or ""
+                page_num = (sp.get("metadata") or {}).get("page_num")
+                page_hash_val = sp.get("page_hash") or ""
+                if not pdf_name or page_num is None:
+                    continue
+                pdf_filename = pdf_name if pdf_name.lower().endswith(".pdf") else f"{pdf_name}.pdf"
+                cursor.execute(
+                    """
+                    INSERT INTO rag_learning_status_current (pdf_filename, page_number, status, page_hash, shard_id)
+                    VALUES (%s, %s, 'merged', %s, %s)
+                    ON CONFLICT (pdf_filename, page_number) DO UPDATE SET status = 'merged', page_hash = EXCLUDED.page_hash, shard_id = EXCLUDED.shard_id, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (pdf_filename, page_num, page_hash_val, shard_id),
+                )
+            conn.commit()
+            cursor.execute("SELECT form_type, SUM(vector_count) AS total_vectors FROM rag_vector_index GROUP BY form_type ORDER BY form_type")
+            return [{"form_type": row[0], "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
     db = get_db()
-    # 登録済みを rag_learning_status_current に反映（管理画面で一覧できるように）
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        for sp in shard_pages:
-            pdf_name = (sp.get("metadata") or {}).get("pdf_name") or ""
-            page_num = (sp.get("metadata") or {}).get("page_num")
-            page_hash_val = sp.get("page_hash") or ""
-            if not pdf_name or page_num is None:
-                continue
-            pdf_filename = pdf_name if pdf_name.lower().endswith(".pdf") else f"{pdf_name}.pdf"
-            cursor.execute(
-                """
-                INSERT INTO rag_learning_status_current (
-                    pdf_filename, page_number, status, page_hash, shard_id
-                ) VALUES (%s, %s, 'merged', %s, %s)
-                ON CONFLICT (pdf_filename, page_number)
-                DO UPDATE SET
-                    status = 'merged',
-                    page_hash = EXCLUDED.page_hash,
-                    shard_id = EXCLUDED.shard_id,
-                    updated_at = CURRENT_TIMESTAMP
-                """,
-                (pdf_filename, page_num, page_hash_val, shard_identifier),
-            )
-        conn.commit()
-
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT form_type, SUM(vector_count) AS total_vectors
-            FROM rag_vector_index
-            GROUP BY form_type
-            ORDER BY form_type
-            """
-        )
-        per_form = [
-            {"form_type": row[0], "vector_count": int(row[1] or 0)}
-            for row in cursor.fetchall()
-        ]
-
+    per_form = await db.run_sync(_update_status_and_per_form, db, shard_pages, shard_identifier)
     return {
         "success": True,
         "message": "선택된 페이지들로부터 벡터 DB를 생성했습니다.",
@@ -648,40 +559,29 @@ async def put_dist_retail_csv(
     return {"message": "保存しました", "rows_count": len(body.rows)}
 
 
-# ---- 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先CD / 小売先CD ----
+# ---- 판매처-소매처 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 得意先 / 受注先コード / 小売先コード ----
 @router.get("/retail-rag-answer-items")
 async def get_retail_rag_answer_items(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """
     documents_current.created_by_user_id IS NOT NULL 인 문서에 속한 item만 조회.
-    item_data에서 得意先, 受注先CD, 小売先CD 를 꺼내 중복 제거 후 반환 (RAG 정답지 후보).
+    item_data에서 得意先, 受注先コード, 小売先コード 를 꺼내 중복 제거 후 반환 (RAG 정답지 후보).
     """
     _ensure_admin(current_user)
-    db = get_db()
-    try:
-        with db.get_connection() as conn:
+    def _fetch_retail_rag_items_sync(database):
+        with database.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            # (得意先, 受注先CD, 小売先CD) 조합 기준 중복 제거
             cursor.execute("""
-                SELECT DISTINCT
-                    i.item_data->>'得意先' AS "得意先",
-                    i.item_data->>'受注先CD' AS "受注先CD",
-                    i.item_data->>'小売先CD' AS "小売先CD"
-                FROM items_current i
-                INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
-                WHERE d.created_by_user_id IS NOT NULL
-                ORDER BY "得意先", "受注先CD", "小売先CD"
+                SELECT DISTINCT i.item_data->>'得意先' AS "得意先", i.item_data->>'受注先コード' AS "受注先コード", i.item_data->>'小売先コード' AS "小売先コード"
+                FROM items_current i INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                WHERE d.created_by_user_id IS NOT NULL ORDER BY "得意先", "受注先コード", "小売先コード"
             """)
             rows = cursor.fetchall()
-        items = [
-            {
-                "得意先": (r.get("得意先") or "").strip(),
-                "受注先CD": (r.get("受注先CD") or "").strip(),
-                "小売先CD": (r.get("小売先CD") or "").strip(),
-            }
-            for r in rows
-        ]
+        return [{"得意先": (r.get("得意先") or "").strip(), "受注先コード": (r.get("受注先コード") or "").strip(), "小売先コード": (r.get("小売先コード") or "").strip()} for r in rows]
+    try:
+        db = get_db()
+        items = await db.run_sync(_fetch_retail_rag_items_sync, db)
         return {"items": items}
     except Exception as e:
         logger.exception("retail-rag-answer-items failed: %s", e)
@@ -692,7 +592,7 @@ async def get_retail_rag_answer_items(
 async def rebuild_retail_rag_answer_index(
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
-    """판매처-소매처 RAG 정답지(得意先→受注先CD/小売先CD) 벡터 인덱스를 재구축해 DB에 저장."""
+    """판매처-소매처 RAG 정답지(得意先→受注先コード/小売先コード) 벡터 인덱스를 재구축해 DB에 저장."""
     _ensure_admin(current_user)
     try:
         rag = get_rag_manager()

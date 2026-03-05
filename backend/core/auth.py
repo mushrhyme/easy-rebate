@@ -6,29 +6,20 @@ from fastapi import HTTPException, Depends, Header
 from database.registry import get_db
 
 
-def get_current_user(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
+async def get_current_user(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
     """
-    현재 로그인한 사용자를 가져오는 의존성 함수
-
-    Args:
-        session_id: 헤더에서 추출한 세션 ID
-
-    Returns:
-        사용자 정보 딕셔너리
-
-    Raises:
-        HTTPException: 세션이 유효하지 않거나 사용자가 인증되지 않은 경우
+    현재 로그인한 사용자를 가져오는 의존성 함수 (DB 호출을 스레드 풀에서 실행해 이벤트 루프 블로킹 방지)
     """
     if not session_id:
         raise HTTPException(status_code=401, detail="세션 ID가 필요합니다")
     db = get_db()
-    user_info = db.get_session_user(session_id)
+    user_info = await db.run_sync(db.get_session_user, session_id)
     if not user_info:
         raise HTTPException(status_code=401, detail="유효하지 않은 세션입니다")
     return user_info
 
 
-def get_current_user_id(session_id: Optional[str] = Header(None, alias="X-Session-ID")) -> int:
+async def get_current_user_id(session_id: Optional[str] = Header(None, alias="X-Session-ID")) -> int:
     """
     현재 로그인한 사용자의 ID를 가져오는 의존성 함수
 
@@ -41,33 +32,24 @@ def get_current_user_id(session_id: Optional[str] = Header(None, alias="X-Sessio
     Raises:
         HTTPException: 세션이 유효하지 않거나 사용자가 인증되지 않은 경우
     """
-    user_info = get_current_user(session_id)
+    user_info = await get_current_user(session_id)
     return user_info['user_id']
 
 
-def get_current_user_optional(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
+async def get_current_user_optional(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
     """
     현재 로그인한 사용자를 가져오는 의존성 함수 (선택적).
     세션이 없거나 유효하지 않으면 None 반환.
-
-    Returns:
-        사용자 정보 딕셔너리 또는 None
     """
     if not session_id:
         return None
     db = get_db()
-    return db.get_session_user(session_id)
+    return await db.run_sync(db.get_session_user, session_id)
 
 
-def require_auth(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
+async def require_auth(session_id: Optional[str] = Header(None, alias="X-Session-ID")):
     """
     인증이 필요한 엔드포인트에서 사용할 의존성 함수
     세션 검증만 수행하고 사용자 정보를 반환하지 않음
-
-    Args:
-        session_id: 헤더에서 추출한 세션 ID
-
-    Raises:
-        HTTPException: 세션이 유효하지 않은 경우
     """
-    get_current_user(session_id)  # 검증만 수행
+    await get_current_user(session_id)  # 검증만 수행

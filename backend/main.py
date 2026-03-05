@@ -41,7 +41,7 @@ from contextlib import asynccontextmanager
 
 # .env 로드 후 DB 연결되도록 config를 routes보다 먼저 import
 from backend.core.config import settings
-from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test, settings as settings_routes, form_types as form_types_routes
+from backend.api.routes import documents, items, search, websocket, auth, performance, sap_upload, rag_admin, ocr_test, settings as settings_routes, form_types as form_types_routes, attachments as attachments_routes
 from backend.core.scheduler import setup_archive_scheduler
 from database.registry import close_db
 
@@ -153,8 +153,9 @@ static_dir = project_root / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-# 라우터 등록
+# 라우터 등록 (attachments를 documents보다 먼저 — /.../attachments/list 가 /{pdf_filename} 보다 먼저 매칭되도록)
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(attachments_routes.router, prefix="/api/documents", tags=["attachments"])
 app.include_router(documents.router, prefix="/api/documents", tags=["documents"])
 app.include_router(items.router, prefix="/api/items", tags=["items"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])

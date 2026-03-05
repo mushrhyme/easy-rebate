@@ -71,6 +71,10 @@ def is_allowed_origin(origin: str) -> bool:
     return False
 
 
+# 진행률 메시지 버퍼: 연결 전에 온 메시지를 보관했다가 첫 연결 시 전달 (레이스 컨디션 방지)
+_MAX_PROGRESS_BUFFER = int(os.getenv("WS_PROGRESS_BUFFER_SIZE", "200"))
+
+
 # 연결된 WebSocket 클라이언트 관리
 class ConnectionManager:
     """WebSocket 연결 관리자"""
@@ -80,15 +84,28 @@ class ConnectionManager:
         self.active_connections: Dict[str, list] = {}
         # {page_key: [websocket1, websocket2, ...]} - 페이지별 락 구독
         self.page_subscriptions: Dict[str, list] = {}
+        # {task_id: [msg, ...]} — 구독자 없을 때 쌓아두었다가 첫 연결 시 전송
+        self.progress_buffers: Dict[str, list] = {}
     
     async def connect(self, websocket: WebSocket, task_id: str):
-        """WebSocket 연결"""
+        """WebSocket 연결. 연결 직후 해당 task_id 버퍼 메시지를 전송한 뒤 버퍼 삭제."""
         await websocket.accept()
         
         if task_id not in self.active_connections:
             self.active_connections[task_id] = []
         
         self.active_connections[task_id].append(websocket)
+        
+        # 연결 전에 온 진행률 메시지가 있으면 새 클라이언트에 전송
+        if task_id in self.progress_buffers:
+            for msg in self.progress_buffers[task_id]:
+                try:
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(msg)
+                except Exception as e:
+                    print(f"⚠️ WebSocket 버퍼 전송 실패: {e}")
+                    break
+            del self.progress_buffers[task_id]
     
     def disconnect(self, websocket: WebSocket, task_id: str):
         """WebSocket 연결 해제"""
@@ -116,25 +133,29 @@ class ConnectionManager:
             self.page_subscriptions[page_key].append(websocket)
     
     async def send_progress(self, task_id: str, message: dict):
-        """진행률 메시지 전송"""
-        if task_id not in self.active_connections:
-            return
-        
-        # 연결된 모든 클라이언트에 전송
-        disconnected = []
-        for websocket in self.active_connections[task_id]:
-            try:
-                if websocket.client_state == WebSocketState.CONNECTED:
-                    await websocket.send_json(message)
-                else:
+        """진행률 메시지 전송. 구독자 없으면 버퍼에 저장 후 첫 연결 시 전송."""
+        if task_id in self.active_connections:
+            # 연결된 모든 클라이언트에 전송
+            disconnected = []
+            for websocket in self.active_connections[task_id]:
+                try:
+                    if websocket.client_state == WebSocketState.CONNECTED:
+                        await websocket.send_json(message)
+                    else:
+                        disconnected.append(websocket)
+                except Exception as e:
+                    print(f"⚠️ WebSocket 전송 실패: {e}")
                     disconnected.append(websocket)
-            except Exception as e:
-                print(f"⚠️ WebSocket 전송 실패: {e}")
-                disconnected.append(websocket)
-        
-        # 연결이 끊어진 소켓 제거
-        for ws in disconnected:
-            self.disconnect(ws, task_id)
+            for ws in disconnected:
+                self.disconnect(ws, task_id)
+        else:
+            # 구독자 없음 → 버퍼에 저장 (최대 _MAX_PROGRESS_BUFFER개)
+            if task_id not in self.progress_buffers:
+                self.progress_buffers[task_id] = []
+            buf = self.progress_buffers[task_id]
+            buf.append(message)
+            if len(buf) > _MAX_PROGRESS_BUFFER:
+                self.progress_buffers[task_id] = buf[-_MAX_PROGRESS_BUFFER:]
     
     async def broadcast_lock_update(self, pdf_filename: str, page_number: int, message: dict):
         """페이지 락 상태 브로드캐스트"""
@@ -309,36 +330,25 @@ async def item_locks(websocket: WebSocket):
                 # print(f"✅ [구독] 페이지 구독 완료: pdf_filename={pdf_filename}, page_number={page_number}")
                 # print(f"   page_key: {pdf_filename}::{page_number}")
                 
-                # 현재 활성 락 목록 조회
+                # 현재 활성 락 목록 조회 (스레드 풀에서 실행)
                 from database.registry import get_db
                 current_locks = []
                 try:
+                    def _fetch_active_locks(database, pdf: str, page: int):
+                        with database.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                SELECT il.item_id, il.locked_by_user_id
+                                FROM item_locks_current il JOIN items_current i ON il.item_id = i.item_id
+                                WHERE i.pdf_filename = %s AND i.page_number = %s AND il.expires_at > NOW()
+                                UNION ALL
+                                SELECT il.item_id, il.locked_by_user_id
+                                FROM item_locks_archive il JOIN items_archive i ON il.item_id = i.item_id
+                                WHERE i.pdf_filename = %s AND i.page_number = %s AND il.expires_at > NOW()
+                            """, (pdf, page, pdf, page))
+                            return [{"item_id": r[0], "locked_by": r[1]} for r in cursor.fetchall()]
                     db = get_db()
-                    with db.get_connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            SELECT il.item_id, il.locked_by_user_id
-                            FROM item_locks_current il
-                            JOIN items_current i ON il.item_id = i.item_id
-                            WHERE i.pdf_filename = %s 
-                              AND i.page_number = %s
-                              AND il.expires_at > NOW()
-                            UNION ALL
-                            SELECT il.item_id, il.locked_by_user_id
-                            FROM item_locks_archive il
-                            JOIN items_archive i ON il.item_id = i.item_id
-                            WHERE i.pdf_filename = %s 
-                              AND i.page_number = %s
-                              AND il.expires_at > NOW()
-                        """, (pdf_filename, page_number, pdf_filename, page_number))
-                        active_locks = cursor.fetchall()
-                        
-                        # 활성 락 목록 구성
-                        current_locks = [
-                            {"item_id": lock[0], "locked_by": lock[1]}
-                            for lock in active_locks
-                        ]
-                    # print(f"📋 [구독] 현재 활성 락: {len(current_locks)}개")
+                    current_locks = await db.run_sync(_fetch_active_locks, db, pdf_filename, page_number)
                 except Exception as e:
                     print(f"⚠️ [구독] 활성 락 조회 실패: {e}")
                     import traceback
