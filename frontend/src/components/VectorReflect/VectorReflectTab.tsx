@@ -85,10 +85,15 @@ function LeftPagePreview({
     )
   }
   return (
-    <div className="vector-reflect-left-preview">
+    <div className="vector-reflect-left-preview" key={`preview-${pdfFilename}-${pageNumber}`}>
       <p className="vector-reflect-left-preview-label">{label}</p>
       <div className="vector-reflect-left-preview-img-wrap">
-        <img src={src!} alt={label} className="vector-reflect-left-preview-img" />
+        <img
+          key={`img-${pdfFilename}-${pageNumber}`}
+          src={src!}
+          alt={label}
+          className="vector-reflect-left-preview-img"
+        />
       </div>
     </div>
   )
