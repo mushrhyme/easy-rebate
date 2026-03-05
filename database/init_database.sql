@@ -448,39 +448,38 @@ $$ LANGUAGE plpgsql;
 -- ============================================
 -- 로그인ID.xlsx → users 반영 (CSV 있으면 실행)
 -- ============================================
--- CSV 8열: 빈열, ID, 이름(한글), 名前, 부서명(한글), 部署, 권한, 분류
+-- CSV 7열: ID, 이름(한글), 名前, 부서명(한글), 部署, 권한, 분류
 -- 기본 경로는 프로젝트 루트 기준. 경로 오류 시: psql ... -v csvfile="C:/Rebate/easy-rebate/database/csv/users_import.csv" (절대경로로 지정)
 
 CREATE TEMP TABLE _users_csv (
-    col_1 TEXT,
-    col_2 TEXT,
-    col_3 TEXT,
-    col_4 TEXT,
-    col_5 TEXT,
-    col_6 TEXT,
-    col_7 TEXT,
-    col_8 TEXT
+    col_1 TEXT,  -- ID (username)
+    col_2 TEXT,  -- 이름(한글)
+    col_3 TEXT,  -- 名前(日本語)
+    col_4 TEXT,  -- 부서명(한글)
+    col_5 TEXT,  -- 部署(日本語)
+    col_6 TEXT,  -- 권한
+    col_7 TEXT   -- 분류
 );
 
 -- \copy에서 변수(:'csvfile') 치환이 Windows/일부 psql에서 실패하므로, 기본은 고정 경로 사용
 \if :{?csvfile}
-\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8) FROM :'csvfile' WITH (FORMAT csv, HEADER true);
+\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7) FROM :'csvfile' WITH (FORMAT csv, HEADER true);
 \else
-\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7, col_8) FROM 'database/csv/users_import.csv' WITH (FORMAT csv, HEADER true);
+\copy _users_csv (col_1, col_2, col_3, col_4, col_5, col_6, col_7) FROM 'database/csv/users_import.csv' WITH (FORMAT csv, HEADER true);
 \endif
 
 INSERT INTO users (username, display_name, display_name_ja, department_ko, department_ja, role, category, is_active)
 SELECT
-    trim(col_2),
-    COALESCE(NULLIF(trim(col_3), ''), NULLIF(trim(col_4), ''), trim(col_2)),
+    trim(col_1),
+    COALESCE(NULLIF(trim(col_2), ''), trim(col_1)),
+    NULLIF(trim(col_3), ''),
     NULLIF(trim(col_4), ''),
     NULLIF(trim(col_5), ''),
     NULLIF(trim(col_6), ''),
     NULLIF(trim(col_7), ''),
-    NULLIF(trim(col_8), ''),
     TRUE
 FROM _users_csv
-WHERE col_2 IS NOT NULL AND trim(col_2) <> ''
+WHERE col_1 IS NOT NULL AND trim(col_1) <> ''
 ON CONFLICT (username) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     display_name_ja = EXCLUDED.display_name_ja,

@@ -48,20 +48,26 @@
 
 .vector-reflect-left-preview-img-wrap {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  min-height: 0;
+  min-height: 60vh;
+  min-width: 0;
+  padding: 0.75rem;
   overflow: auto;
+  display: block;
+  background: #e5e7eb;
+  position: relative;
 }
 
 .vector-reflect-left-preview-img {
-  max-width: 100%;
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
   width: auto;
   height: auto;
-  max-height: 88vh;
+  max-width: calc(100% - 1.5rem);
+  max-height: calc(100% - 1.5rem);
   object-fit: contain;
+  object-position: top center;
   display: block;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
 }
