@@ -8,10 +8,8 @@ import os
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Callable
-from PIL import Image
 
 # PdfRegistry 제거됨 - DB와 st.session_state로 대체
-from .storage import PageStorage
 
 
 class PdfProcessor:
@@ -134,8 +132,13 @@ class PdfProcessor:
                 pass
             print(f"[form_type] save_document_data 호출 직전: pdf_filename={pdf_filename_for_log!r}, form_type={form_type!r}")
             
-            # 3.5. 빈값 채우기 (직전 페이지에서 관리번호/거래처명/摘要, 다음 페이지에서 세액)
-            # form_type 별 config 매핑이 있으면 해당 필드만 채움. 없으면(get→None) 스킵.
+            # 3.4a. 상동기호(//, 11 등) → null (프롬프트로 해결 안 된 경우, 빈값 채우기 직전)
+            try:
+                from modules.utils.fill_empty_values_utils import normalize_ditto_like_values_in_page_results
+                page_results = normalize_ditto_like_values_in_page_results(page_results)
+            except Exception:
+                pass
+            # 3.5. 빈값 채우기 (직전 페이지에서 관리번호/거래처명/摘要, 다음 페이지에서 세액 + 商品名等 이전 행)
             try:
                 from modules.utils.fill_empty_values_utils import fill_empty_values_in_page_results
                 page_results = fill_empty_values_in_page_results(page_results, form_type=form_type)
@@ -177,7 +180,7 @@ class PdfProcessor:
                         else:
                             image_data_list.append(None)
 
-                # 분석 직후·DB 저장 전: 1→2→3 매핑 선적용 (受注先CD/小売先CD/商品CD를 page_results에 넣어서 저장)
+                # 분석 직후·DB 저장 전: 1→2→3 매핑 선적용 (受注先コード/小売先コード/商品コード를 page_results에 넣어서 저장)
                 try:
                     from modules.utils.retail_resolve import resolve_retail_dist
                     from modules.utils.config import get_project_root
@@ -195,17 +198,17 @@ class PdfProcessor:
                                 or item_dict.get("得意先様")
                                 or item_dict.get("取引先")
                             )
-                            customer_code = item_dict.get("得意先CD")
+                            customer_code = item_dict.get("得意先コード")
                             retail_code, dist_code = resolve_retail_dist(customer_name, customer_code)
                             if retail_code:
-                                item_dict["小売先CD"] = retail_code
+                                item_dict["小売先コード"] = retail_code
                             if dist_code:
-                                item_dict["受注先CD"] = dist_code
+                                item_dict["受注先コード"] = dist_code
                             product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
                             if product_result:
                                 code, shikiri, honbu = product_result
                                 if code:
-                                    item_dict["商品CD"] = code
+                                    item_dict["商品コード"] = code
                                 if shikiri is not None:
                                     item_dict["仕切"] = shikiri
                                 if honbu is not None:
@@ -234,30 +237,6 @@ class PdfProcessor:
                         print("[DEBUG] 문서 저장 실패 (success=False) -> RuntimeError 발생")
                         raise RuntimeError("문서 저장에 실패했습니다.")
                     
-                    # 6. 자동으로 img 폴더에 학습 데이터 저장 (설정 활성화 시)
-                    try:
-                        from modules.utils.config import rag_config
-                        if getattr(rag_config, 'auto_save_to_training_folder', True):  # 기본값: True (자동 저장 활성화)
-                            from modules.core.training_manager import TrainingManager
-                            
-                            # PDF 바이트 데이터 준비 (이미 메모리에 있으면 재사용)
-                            pdf_bytes = None
-                            if pdf_path and os.path.exists(pdf_path):
-                                with open(pdf_path, 'rb') as f:
-                                    pdf_bytes = f.read()
-                            
-                            success, message = TrainingManager.save_to_training_folder(
-                                pdf_name=pdf_name,
-                                pdf_path=Path(pdf_path) if pdf_path else None,
-                                form_type=form_type,
-                                upload_channel=upload_channel,
-                                data_year=data_year,
-                                data_month=data_month,
-                                pdf_bytes=pdf_bytes
-                            )
-                    except Exception:
-                        pass
-                    
                 except Exception as save_error:
                     import traceback
                     traceback.print_exc()
@@ -266,21 +245,8 @@ class PdfProcessor:
                 # DB 저장 실패 시 에러 반환
                 raise RuntimeError(f"DB 저장 실패: {db_error}")
             
-            # 5. 진행률 업데이트 및 썸네일 생성
+            # 5. 진행률 업데이트
             for page_num, page_json in enumerate(page_results, 1):
-                if page_json:
-                    # 썸네일 생성 (선택적) - PIL Image에서 직접 생성
-                    try:
-                        if pil_images and page_num <= len(pil_images) and pil_images[page_num - 1]:
-                            image = pil_images[page_num - 1]
-                            # 썸네일 생성 (200x200)
-                            thumbnail = image.copy()
-                            thumbnail.thumbnail((200, 200), Image.Resampling.LANCZOS)
-                            SessionManager.save_thumbnail(pdf_name, page_num, thumbnail)
-                    except Exception:
-                        pass  # 썸네일 생성 실패해도 계속 진행
-                
-                # 진행률 콜백 호출
                 if progress_callback:
                     progress_callback(page_num, len(page_results), f"ページ {page_num}/{len(page_results)} 処理完了")
                 

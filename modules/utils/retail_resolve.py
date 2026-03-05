@@ -1,6 +1,6 @@
 """
-판매처·소매처 매핑 해소: 1) 得意先CD→domae_retail_1, 2) retail_user 유사도, 3) domae_retail_2 유사도.
-得意先CD 있으면 1 시도 후 실패 시 2·3 중 유사도 높은 쪽 사용. 없으면 2·3만.
+판매처·소매처 매핑 해소: 1) 得意先コード→domae_retail_1, 2) retail_user 유사도, 3) domae_retail_2 유사도.
+得意先コード 있으면 1 시도 후 실패 시 2·3 중 유사도 높은 쪽 사용. 없으면 2·3만.
 """
 from pathlib import Path
 from typing import Optional, Tuple
@@ -44,7 +44,7 @@ def _dist_for_retail(retail_code: str) -> Tuple[str, str]:
 
 
 def _match_by_customer_code(customer_code: str) -> Optional[Tuple[str, str]]:
-    """1) 得意先CD → domae_retail_1. 성공 시 (소매처코드, 판매처코드) 반환."""
+    """1) 得意先コード → domae_retail_1. 성공 시 (소매처코드, 판매처코드) 반환."""
     code = (customer_code or "").strip()
     if not code or not _DOMAE_RETAIL_1_CSV.exists():
         return None
@@ -127,10 +127,10 @@ def resolve_retail_dist(
     customer_code: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
-    得意先(명)과 得意先CD(있으면)로 소매처코드·판매처코드 확정.
-    - 得意先CD 있음: 1 시도 → 성공 시 그대로 반환. 실패 시 2·3 중 유사도 높은 쪽.
-    - 得意先CD 없음: 2·3 중 유사도 높은 쪽.
-    반환: (小売先CD=소매처코드, 受注先CD=판매처코드). 없으면 (None, None).
+    得意先(명)과 得意先コード(있으면)로 소매처코드·판매처코드 확정.
+    - 得意先コード 있음: 1 시도 → 성공 시 그대로 반환. 실패 시 2·3 중 유사도 높은 쪽.
+    - 得意先コード 없음: 2·3 중 유사도 높은 쪽.
+    반환: (小売先コード=소매처코드, 受注先コード=판매처코드). 없으면 (None, None).
     """
     name = (customer_name or "").strip()
     code = (customer_code or "").strip() if customer_code else ""

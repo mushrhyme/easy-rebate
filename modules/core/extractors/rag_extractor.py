@@ -16,6 +16,7 @@ import numpy as np
 
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.config import get_project_root, load_rag_prompt
+from modules.utils.llm_retry import call_with_retry
 
 
 def _normalize_amount_colon(value: Any) -> Any:
@@ -521,7 +522,7 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             if temperature is not None:
                 api_params["temperature"] = temperature
             try:
-                response = client.chat.completions.create(**api_params)
+                response = call_with_retry(lambda: client.chat.completions.create(**api_params))
                 llm_end_time = time.time()
                 llm_duration = llm_end_time - llm_start_time
                 result_text = response.choices[0].message.content or ""

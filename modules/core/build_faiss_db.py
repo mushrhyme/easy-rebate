@@ -18,6 +18,7 @@ import fitz  # PyMuPDF
 
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.config import get_project_root, get_extraction_method_for_upload_channel, folder_name_to_upload_channel
+from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
 from modules.utils.hash_utils import compute_page_hash, get_page_key, compute_file_fingerprint
 from modules.utils.db_manifest_manager import DBManifestManager
 from modules.utils.pdf_utils import PdfTextExtractor
@@ -302,6 +303,7 @@ def sync_img_pages_to_documents_db(
                     for item_order, item_dict in enumerate(items, 1):
                         if not isinstance(item_dict, dict):
                             continue
+                        apply_form04_mishu_decimal(item_dict, form_type_default)
                         separated = db._separate_item_fields(item_dict, form_type=form_type_default)
                         cursor.execute(
                             """
