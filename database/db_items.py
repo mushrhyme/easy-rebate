@@ -12,6 +12,7 @@ from database.table_selector import get_table_name, get_table_suffix
 from modules.utils.config import get_project_root
 from modules.utils.retail_resolve import resolve_retail_dist
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
+from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
 from backend.unit_price_lookup import resolve_product_and_prices
 
 
@@ -182,10 +183,10 @@ class ItemsMixin:
                     if not isinstance(items, list):
                         items = []
                     
-                    # page_meta 구성 (items 제외)
+                    # page_meta 구성 (items, RAG 내부 메타 제외 — 정답지에 불필요)
                     page_meta = {}
                     for key, value in page_json.items():
-                        if key not in ["items", "page_role", "page_number"]:
+                        if key not in ["items", "page_role", "page_number", "_rag_reference"]:
                             page_meta[key] = value
                     
                     # page_data 저장 (메타데이터만)
@@ -202,7 +203,7 @@ class ItemsMixin:
                             updated_at = CURRENT_TIMESTAMP
                     """, (pdf_filename, page_number, page_role, page_meta_json))
                     
-                    # items 저장 (행 단위). 1→2→3 매핑 확정값을 넣어 DB에 受注先CD/小売先CD/商品CD 저장
+                    # items 저장 (행 단위). 1→2→3 매핑 확정값을 넣어 DB에 受注先コード/小売先コード/商品コード 저장
                     _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
                     for item_order, item_dict in enumerate(items, 1):
                         if not isinstance(item_dict, dict):
@@ -215,22 +216,23 @@ class ItemsMixin:
                         )
                         retail_code, dist_code = resolve_retail_dist(
                             customer_name,
-                            item_dict.get("得意先CD"),
+                            item_dict.get("得意先コード"),
                         )
                         if retail_code:
-                            item_dict["小売先CD"] = retail_code
+                            item_dict["小売先コード"] = retail_code
                         if dist_code:
-                            item_dict["受注先CD"] = dist_code
+                            item_dict["受注先コード"] = dist_code
                         product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
                         if product_result:
                             code, shikiri, honbu = product_result
                             if code:
-                                item_dict["商品CD"] = code
+                                item_dict["商品コード"] = code
                             if shikiri is not None:
                                 item_dict["仕切"] = shikiri
                         if honbu is not None:
                             item_dict["本部長"] = honbu
                         apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
+                        apply_form04_mishu_decimal(item_dict, form_type)
                         # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
                         separated = self._separate_item_fields(item_dict, form_type=form_type)
                         
@@ -959,16 +961,16 @@ class ItemsMixin:
         retail_code: Optional[str] = None,
     ) -> bool:
         """
-        item_data에 受注先CD·小売先CD를 병합 저장. (검토 탭 최초 조회 시 매핑 결과 반영용)
+        item_data에 受注先コード·小売先コード를 병합 저장. (검토 탭 최초 조회 시 매핑 결과 반영용)
         item_id는 items_current 또는 items_archive 중 하나에만 존재.
         """
         if not dist_code and not retail_code:
             return False
         patch = {}
         if dist_code is not None and str(dist_code).strip():
-            patch["受注先CD"] = str(dist_code).strip()
+            patch["受注先コード"] = str(dist_code).strip()
         if retail_code is not None and str(retail_code).strip():
-            patch["小売先CD"] = str(retail_code).strip()
+            patch["小売先コード"] = str(retail_code).strip()
         if not patch:
             return False
         try:
