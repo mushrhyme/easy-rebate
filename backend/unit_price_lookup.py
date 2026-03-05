@@ -124,8 +124,8 @@ def find_similar_products(
 
 def resolve_product_code(product_name: Optional[str], csv_path: Path) -> Optional[str]:
     """
-    商品名으로 unit_price.csv 유사도 1위 매칭 후 商品CD(제품코드) 반환.
-    최초 분석/DB 저장 전 商品CD 매핑용.
+    商品名으로 unit_price.csv 유사도 1위 매칭 후 商品コード(제품코드) 반환.
+    최초 분석/DB 저장 전 商品コード 매핑용.
     """
     result = resolve_product_and_prices(product_name, csv_path)
     return result[0] if result else None
@@ -135,9 +135,9 @@ def resolve_product_and_prices(
     product_name: Optional[str], csv_path: Path
 ) -> Optional[Tuple[Optional[str], Optional[float], Optional[float]]]:
     """
-    商品名으로 unit_price.csv 유사도 1위 매칭 후 (商品CD, 仕切, 本部長) 반환.
-    최초 분석/DB 저장 전 商品CD·仕切·本部長 매핑용. NET는 仕切−条件로 계산하므로 별도 저장 안 함.
-    반환: (商品CD, 仕切, 本部長) 또는 None
+    商品名으로 unit_price.csv 유사도 1위 매칭 후 (商品コード, 仕切, 本部長) 반환.
+    최초 분석/DB 저장 전 商品コード·仕切·本部長 매핑용. NET는 仕切−条件로 계산하므로 별도 저장 안 함.
+    반환: (商品コード, 仕切, 本部長) 또는 None
     """
     if not product_name or not str(product_name).strip():
         return None

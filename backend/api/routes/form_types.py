@@ -43,67 +43,49 @@ def _form_type_label(code: str) -> str:
     return f"型{code}"
 
 
-@router.get("", response_model=dict)
-async def get_form_types(db=Depends(get_db)):
-    """
-    양식지 타입 목록 조회 (DB 기반).
-    - form_field_mappings 의 form_code
-    - documents_current, documents_archive 의 form_type
-    을 합쳐서 정렬된 목록 반환.
-    """
+def _get_form_types_sync(db):
     codes: set[str] = set()
     with db.get_connection() as conn:
         cur = conn.cursor()
-        # 1) form_field_mappings (설정된 양식)
-        cur.execute(
-            "SELECT DISTINCT form_code FROM form_field_mappings WHERE is_active = TRUE ORDER BY form_code"
-        )
+        cur.execute("SELECT DISTINCT form_code FROM form_field_mappings WHERE is_active = TRUE ORDER BY form_code")
         for row in cur.fetchall():
             if row[0] and str(row[0]).strip():
                 codes.add(str(row[0]).strip())
-        # 2) documents (실제 사용 중인 양식)
-        cur.execute(
-            "SELECT DISTINCT form_type FROM documents_current WHERE form_type IS NOT NULL AND form_type != ''"
-        )
+        cur.execute("SELECT DISTINCT form_type FROM documents_current WHERE form_type IS NOT NULL AND form_type != ''")
         for row in cur.fetchall():
             if row[0] and str(row[0]).strip():
                 codes.add(str(row[0]).strip())
-        cur.execute(
-            "SELECT DISTINCT form_type FROM documents_archive WHERE form_type IS NOT NULL AND form_type != ''"
-        )
+        cur.execute("SELECT DISTINCT form_type FROM documents_archive WHERE form_type IS NOT NULL AND form_type != ''")
         for row in cur.fetchall():
             if row[0] and str(row[0]).strip():
                 codes.add(str(row[0]).strip())
-        # 2자리 zero-pad 정렬 (01, 02, ..., 09, 10, 11)
         def sort_key(c: str) -> tuple:
             try:
-                n = int(c)
-                return (0, n)
+                return (0, int(c))
             except ValueError:
                 return (1, c)
         sorted_codes = sorted(codes, key=sort_key)
-        # 表示名: form_type_labels にあればそれを使用、なければデフォルト (条件① 等)
         labels_map: dict[str, str] = {}
         try:
-            cur.execute(
-                "SELECT form_code, display_name FROM form_type_labels WHERE form_code = ANY(%s)",
-                (list(sorted_codes),),
-            )
+            cur.execute("SELECT form_code, display_name FROM form_type_labels WHERE form_code = ANY(%s)", (list(sorted_codes),))
             for row in cur.fetchall():
                 if row[0] and row[1]:
                     labels_map[str(row[0]).strip()] = str(row[1]).strip()
         except Exception:
-            pass  # テーブル未作成時はスキップ
-    form_types = [
-        {"value": c, "label": labels_map.get(c) or _form_type_label(c)}
-        for c in sorted_codes
-    ]
+            pass
+    return [{"value": c, "label": labels_map.get(c) or _form_type_label(c)} for c in sorted_codes]
+
+
+@router.get("", response_model=dict)
+async def get_form_types(db=Depends(get_db)):
+    """양식지 타입 목록 조회 (DB 기반)."""
+    form_types = await db.run_sync(_get_form_types_sync, db)
     return {"form_types": form_types}
 
 
 # form 01 기준 기본 매핑 (신규 양식 생성 시 복사). 거래처는 코드에서 항상 得意先로 통일하므로 customer 행 없음
 _DEFAULT_MAPPINGS = [
-    ("customer_code", "得意先CD"),
+    ("customer_code", "得意先コード"),
     ("management_id", "請求伝票番号"),
     ("summary", "備考"),
     ("tax", "消費税率"),
@@ -127,18 +109,20 @@ async def update_form_type_label(
     if not display_name or len(display_name) > 200:
         raise HTTPException(status_code=400, detail="display_name must be 1-200 characters")
     try:
-        with db.get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO form_type_labels (form_code, display_name, updated_at)
-                VALUES (%s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (form_code) DO UPDATE
-                SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP
-                """,
-                (code, display_name),
-            )
-            conn.commit()
+        def _update_label():
+            with db.get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO form_type_labels (form_code, display_name, updated_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (form_code) DO UPDATE
+                    SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (code, display_name),
+                )
+                conn.commit()
+        await db.run_sync(_update_label)
         return {"form_code": code, "display_name": display_name, "message": "Label updated"}
     except Exception as e:
         if "form_type_labels" in str(e).lower() and "does not exist" in str(e).lower():
@@ -200,53 +184,45 @@ async def create_form_type(body: CreateFormTypeRequest, db=Depends(get_db)):
     if raw_display and len(raw_display) > 200:
         raise HTTPException(status_code=400, detail="display_name must be at most 200 characters")
 
-    with db.get_connection() as conn:
-        cur = conn.cursor()
-        if raw_code:
-            code = raw_code
-            if len(code) > 10:
-                raise HTTPException(status_code=400, detail="form_code must be at most 10 characters")
-        else:
-            code = _next_form_code(cur)
+    def _create_form_type_sync():
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            if raw_code:
+                code = raw_code
+                if len(code) > 10:
+                    raise HTTPException(status_code=400, detail="form_code must be at most 10 characters")
+            else:
+                code = _next_form_code(cur)
+            cur.execute("SELECT 1 FROM form_field_mappings WHERE form_code = %s LIMIT 1", (code,))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail=f"form_code {code} already exists")
+            for logical_key, physical_key in _DEFAULT_MAPPINGS:
+                cur.execute(
+                    """
+                    INSERT INTO form_field_mappings (form_code, logical_key, physical_key, is_active)
+                    VALUES (%s, %s, %s, TRUE)
+                    ON CONFLICT (form_code, logical_key) DO NOTHING
+                    """,
+                    (code, logical_key, physical_key),
+                )
+            display_name = raw_display or _form_type_label(code)
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO form_type_labels (form_code, display_name, updated_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (form_code) DO UPDATE
+                    SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (code, display_name),
+                )
+            except Exception:
+                pass
+            conn.commit()
+        return code, display_name
 
-        cur.execute(
-            "SELECT 1 FROM form_field_mappings WHERE form_code = %s LIMIT 1",
-            (code,),
-        )
-        if cur.fetchone():
-            raise HTTPException(status_code=409, detail=f"form_code {code} already exists")
-
-        for logical_key, physical_key in _DEFAULT_MAPPINGS:
-            cur.execute(
-                """
-                INSERT INTO form_field_mappings (form_code, logical_key, physical_key, is_active)
-                VALUES (%s, %s, %s, TRUE)
-                ON CONFLICT (form_code, logical_key) DO NOTHING
-                """,
-                (code, logical_key, physical_key),
-            )
-
-        display_name = raw_display or _form_type_label(code)
-        try:
-            cur.execute(
-                """
-                INSERT INTO form_type_labels (form_code, display_name, updated_at)
-                VALUES (%s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (form_code) DO UPDATE
-                SET display_name = EXCLUDED.display_name, updated_at = CURRENT_TIMESTAMP
-                """,
-                (code, display_name),
-            )
-        except Exception:
-            pass  # テーブルが無い場合はスキップ
-
-        conn.commit()
-
-    return {
-        "form_code": code,
-        "display_name": display_name,
-        "message": "Form type created",
-    }
+    code, display_name = await db.run_sync(_create_form_type_sync)
+    return {"form_code": code, "display_name": display_name, "message": "Form type created"}
 
 
 @router.delete("/{form_code}", response_model=dict)
@@ -258,29 +234,19 @@ async def delete_form_type(form_code: str, db=Depends(get_db)):
     code = form_code.strip()
     if not code or len(code) > 10:
         raise HTTPException(status_code=400, detail="form_code must be 1-10 characters")
-    with db.get_connection() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM documents_current WHERE form_type = %s LIMIT 1",
-            (code,),
-        )
-        if cur.fetchone():
-            raise HTTPException(
-                status_code=409,
-                detail="この様式を使用している文書があるため削除できません。",
-            )
-        cur.execute(
-            "SELECT 1 FROM documents_archive WHERE form_type = %s LIMIT 1",
-            (code,),
-        )
-        if cur.fetchone():
-            raise HTTPException(
-                status_code=409,
-                detail="この様式を使用している文書があるため削除できません。",
-            )
-        cur.execute("DELETE FROM form_type_labels WHERE form_code = %s", (code,))
-        cur.execute("DELETE FROM form_field_mappings WHERE form_code = %s", (code,))
-        conn.commit()
+    def _delete_form_type_sync():
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM documents_current WHERE form_type = %s LIMIT 1", (code,))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="この様式を使用している文書があるため削除できません。")
+            cur.execute("SELECT 1 FROM documents_archive WHERE form_type = %s LIMIT 1", (code,))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="この様式を使用している文書があるため削除できません。")
+            cur.execute("DELETE FROM form_type_labels WHERE form_code = %s", (code,))
+            cur.execute("DELETE FROM form_field_mappings WHERE form_code = %s", (code,))
+            conn.commit()
+    await db.run_sync(_delete_form_type_sync)
     return {"form_code": code, "message": "Form type deleted"}
 
 
@@ -297,7 +263,7 @@ async def save_form_preview_image(
     code = form_code.strip()
     if not code or len(code) > 10:
         raise HTTPException(status_code=400, detail="form_code must be 1-10 characters")
-    image_path = db.get_page_image_path(body.pdf_filename, 1)
+    image_path = await db.run_sync(db.get_page_image_path, body.pdf_filename, 1)
     if not image_path:
         raise HTTPException(
             status_code=404,

@@ -3,11 +3,13 @@
 """
 import asyncio
 import base64
-import logging
-import re
 import json
-import time
+import logging
+import os
+import re
 import shutil
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from io import BytesIO
 from typing import List, Optional, Tuple
@@ -22,6 +24,7 @@ from modules.core.processor import PdfProcessor
 from modules.utils.config import rag_config, get_project_root
 from modules.utils.retail_resolve import resolve_retail_dist
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
+from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
 from backend.unit_price_lookup import resolve_product_and_prices
 from backend.core.session import SessionManager
 
@@ -36,6 +39,25 @@ from backend.core.config import settings
 from backend.core.auth import get_current_user, get_current_user_id
 from backend.core.activity_log import log as activity_log
 from backend.api.routes.websocket import manager
+
+# 사용자별 동시 PDF 분석: 1인당 1건 (env: MAX_CONCURRENT_ANALYSES_PER_USER)
+# 전역 상한: 동시 분석 총개수 (env: MAX_CONCURRENT_ANALYSES) — 한 사용자가 슬롯을 다 쓰지 않도록
+_MAX_PER_USER = int(os.getenv("MAX_CONCURRENT_ANALYSES_PER_USER", "1"))
+_MAX_GLOBAL = int(os.getenv("MAX_CONCURRENT_ANALYSES", "20"))
+_user_analysis_semaphores: dict[int, asyncio.Semaphore] = {}
+_user_semaphore_lock = asyncio.Lock()
+_global_analysis_semaphore = asyncio.Semaphore(_MAX_GLOBAL)
+# PDF 분석 전용 스레드 풀: run_sync(DB)와 분리해 경합 완화
+_analysis_executor = ThreadPoolExecutor(max_workers=min(10, _MAX_GLOBAL), thread_name_prefix="pdf_analysis")
+
+
+async def _get_user_analysis_semaphore(user_id: int) -> asyncio.Semaphore:
+    """사용자별 세마포어(동시 1건). 없으면 생성해 반환."""
+    async with _user_semaphore_lock:
+        if user_id not in _user_analysis_semaphores:
+            _user_analysis_semaphores[user_id] = asyncio.Semaphore(_MAX_PER_USER)
+        return _user_analysis_semaphores[user_id]
+
 
 router = APIRouter()
 
@@ -459,26 +481,18 @@ async def upload_documents(
             
             # 파일이 이미 존재하는지 확인
             pdf_filename = f"{pdf_name}.pdf"
-            doc_info = db.check_document_exists(pdf_filename)
-            
+            doc_info = await db.run_sync(db.check_document_exists, pdf_filename)
             if doc_info['exists']:
                 try:
-                    with db.get_connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            UPDATE documents_current 
-                            SET upload_channel = %s 
-                            WHERE pdf_filename = %s
-                        """, (upload_channel, pdf_filename))
-                        cursor.execute("""
-                            UPDATE documents_archive 
-                            SET upload_channel = %s 
-                            WHERE pdf_filename = %s
-                        """, (upload_channel, pdf_filename))
-                        conn.commit()
+                    def _update_doc_channel(database, ch, fn):
+                        with database.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("UPDATE documents_current SET upload_channel = %s WHERE pdf_filename = %s", (ch, fn))
+                            cursor.execute("UPDATE documents_archive SET upload_channel = %s WHERE pdf_filename = %s", (ch, fn))
+                            conn.commit()
+                    await db.run_sync(_update_doc_channel, db, upload_channel, pdf_filename)
                 except Exception:
                     pass
-                
                 results.append({
                     "filename": uploaded_file.filename,
                     "status": "exists",
@@ -561,7 +575,7 @@ async def upload_documents_with_bbox(
                 })
                 continue
             pdf_filename = f"{pdf_name}.pdf"
-            doc_info = db.check_document_exists(pdf_filename)
+            doc_info = await db.run_sync(db.check_document_exists, pdf_filename)
             if doc_info["exists"]:
                 results.append({
                     "filename": uploaded_file.filename,
@@ -602,6 +616,38 @@ async def upload_documents_with_bbox(
     }
 
 
+def _update_doc_after_upload_sync(
+    database,
+    upload_channel: str,
+    user_id: int,
+    data_year: Optional[int],
+    data_month: Optional[int],
+    pdf_filename: str,
+):
+    """업로드 완료 후 문서 메타 업데이트 (run_sync용 동기 함수). 이벤트 루프 블로킹 방지."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        if data_year and data_month:
+            created_at = datetime(data_year, data_month, 1)
+            cursor.execute("""
+                UPDATE documents_current
+                SET upload_channel = %s, created_at = %s, data_year = %s, data_month = %s,
+                    created_by_user_id = COALESCE(created_by_user_id, %s)
+                WHERE pdf_filename = %s
+            """, (upload_channel, created_at, data_year, data_month, user_id, pdf_filename))
+        else:
+            cursor.execute("""
+                UPDATE documents_current
+                SET upload_channel = %s, created_by_user_id = COALESCE(created_by_user_id, %s)
+                WHERE pdf_filename = %s
+            """, (upload_channel, user_id, pdf_filename))
+        conn.commit()
+        cursor.execute("SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
+        row = cursor.fetchone()
+        if settings.DEBUG and row:
+            print(f"[form_type] 업로드 완료: form_type={repr(row[0])}")
+
+
 async def process_pdf_background(
     file_bytes: bytes,
     pdf_name: str,
@@ -624,12 +670,9 @@ async def process_pdf_background(
     """
     pdf_path = None
     try:
-        # 이벤트 루프 캡처 (스레드에서 안전하게 사용하기 위해)
         main_loop = asyncio.get_event_loop()
-        
-        # 진행률 전송 함수 정의 (스레드 안전)
+
         def progress_callback(page_num: int, total_pages: int, message: str):
-            """진행률 콜백 - WebSocket으로 전송 (스레드 안전)"""
             progress_data = {
                 "type": "progress",
                 "file_name": f"{pdf_name}.pdf",
@@ -638,73 +681,58 @@ async def process_pdf_background(
                 "message": message,
                 "progress": page_num / total_pages if total_pages > 0 else 0
             }
-            # 메인 이벤트 루프에서 비동기 함수 실행 (스레드 안전)
             asyncio.run_coroutine_threadsafe(
                 manager.send_progress(session_id, progress_data),
                 main_loop
             )
-        
-        # 시작 메시지 전송
+
         await manager.send_progress(session_id, {
             "type": "start",
             "file_name": f"{pdf_name}.pdf",
             "message": f"Processing {pdf_name}.pdf..."
         })
-        
-        # 임시 파일로 저장
+
         pdf_path = SessionManager.save_pdf_file_from_bytes(
             file_bytes=file_bytes,
             pdf_name=pdf_name,
             session_id=session_id
         )
-        
-        # PDF 처리 (동기 함수를 비동기로 실행)
-        success, pages, error_msg, elapsed_time = await main_loop.run_in_executor(
-            None,
-            lambda: PdfProcessor.process_pdf(
-                pdf_name=pdf_name,
-                pdf_path=str(pdf_path),
-                dpi=rag_config.dpi,
-                progress_callback=progress_callback,
-                form_type=form_type,
-                upload_channel=upload_channel,
-                user_id=user_id,
-                data_year=data_year,
-                data_month=data_month,
-                include_bbox=include_bbox,
-            )
-        )
-        
+
+        user_sem = await _get_user_analysis_semaphore(user_id)
+        async with user_sem:
+            async with _global_analysis_semaphore:
+                success, pages, error_msg, elapsed_time = await main_loop.run_in_executor(
+                    _analysis_executor,
+                    lambda: PdfProcessor.process_pdf(
+                        pdf_name=pdf_name,
+                        pdf_path=str(pdf_path),
+                        dpi=rag_config.dpi,
+                        progress_callback=progress_callback,
+                        form_type=form_type,
+                        upload_channel=upload_channel,
+                        user_id=user_id,
+                        data_year=data_year,
+                        data_month=data_month,
+                        include_bbox=include_bbox,
+                    )
+                )
+
         if success:
             pdf_filename = f"{pdf_name}.pdf"
             try:
-                from database.registry import get_db
-                from datetime import datetime
                 db = get_db()
-                with db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    # form_type은 processor에서 RAG 참조 기준으로 저장됨. 여기서 덮어쓰지 않음.
-                    if data_year and data_month:
-                        created_at = datetime(data_year, data_month, 1)
-                        cursor.execute("""
-                            UPDATE documents_current 
-                            SET upload_channel = %s, created_at = %s, data_year = %s, data_month = %s,
-                                created_by_user_id = COALESCE(created_by_user_id, %s)
-                            WHERE pdf_filename = %s
-                        """, (upload_channel, created_at, data_year, data_month, user_id, pdf_filename))
-                    else:
-                        cursor.execute("""
-                            UPDATE documents_current 
-                            SET upload_channel = %s, created_by_user_id = COALESCE(created_by_user_id, %s)
-                            WHERE pdf_filename = %s
-                        """, (upload_channel, user_id, pdf_filename))
-                    conn.commit()
-                    cursor.execute("SELECT form_type FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
-                    row = cursor.fetchone()
-                    print(f"[form_type] 업로드 완료 핸들러: form_type 미변경 유지, 현재 DB form_type={repr(row[0]) if row else None}")
+                await db.run_sync(
+                    _update_doc_after_upload_sync,
+                    db,
+                    upload_channel,
+                    user_id,
+                    data_year,
+                    data_month,
+                    pdf_filename,
+                )
             except Exception:
                 pass
-            
+
             # 완료 메시지 전송
             await manager.send_progress(session_id, {
                 "type": "complete",
@@ -782,7 +810,11 @@ async def get_documents(
     현황 탭 등 전체 포함 필요 시 exclude_img_seed=false 로 호출.
     """
     try:
-        rows = query_documents_table(
+        def _get_documents_sync(database, **kwargs):
+            rows = query_documents_table(database, **kwargs)
+            return _build_document_list_from_rows(database, rows, kwargs.get("year"), kwargs.get("month"))
+        documents = await db.run_sync(
+            _get_documents_sync,
             db,
             form_type=form_type,
             upload_channel=upload_channel,
@@ -792,10 +824,9 @@ async def get_documents(
             exclude_answer_key=exclude_answer_key,
             exclude_img_seed=exclude_img_seed,
         )
-        documents = _build_document_list_from_rows(db, rows, year=year, month=month)
         logging.info(
-            "get_documents: query rows=%s, documents=%s (params: year=%s, month=%s)",
-            len(rows), len(documents), year, month,
+            "get_documents: documents=%s (params: year=%s, month=%s)",
+            len(documents), year, month,
         )
         return DocumentListResponse(documents=documents, total=len(documents))
     
@@ -839,44 +870,33 @@ async def get_documents_in_vector_index(db=Depends(get_db)):
     - status='deleted'(미사용 정답지)인 문서는 제외 → 재업로드 시 초록/readOnly로 잘못 표시되지 않음.
     """
     try:
-        names = set()
-        deleted_names = set()
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            # 1) merged 문서만 포함
-            cursor.execute("""
-                SELECT DISTINCT pdf_filename FROM rag_learning_status_current
-                WHERE status = 'merged'
-            """)
-            for r in cursor.fetchall():
-                if r and r[0]:
-                    names.add(r[0])
-            # 2) 미사용(deleted) 문서 목록 — 메타에만 남아 있어도 결과에서 제외
-            try:
-                cursor.execute("""
-                    SELECT DISTINCT pdf_filename FROM rag_learning_status_current
-                    WHERE status = 'deleted'
-                """)
+        def _fetch_vector_index_names_sync(database):
+            names = set()
+            deleted_names = set()
+            with database.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT pdf_filename FROM rag_learning_status_current WHERE status = 'merged'")
                 for r in cursor.fetchall():
                     if r and r[0]:
-                        deleted_names.add(r[0])
-            except Exception:
-                pass
-        # 3) rag_vector_index 메타에서 추출 (벡터에만 있고 status 미등록 문서 포함)
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT metadata_json FROM rag_vector_index
-                WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
-                ORDER BY updated_at DESC LIMIT 1
-            """)
-            row = cursor.fetchone()
-        if row and row[0]:
-            for p in _extract_pdf_filenames_from_index_metadata(row[0]):
-                if p:
-                    names.add(p)
-        names -= deleted_names
-        return {"pdf_filenames": sorted(names)}
+                        names.add(r[0])
+                try:
+                    cursor.execute("SELECT DISTINCT pdf_filename FROM rag_learning_status_current WHERE status = 'deleted'")
+                    for r in cursor.fetchall():
+                        if r and r[0]:
+                            deleted_names.add(r[0])
+                except Exception:
+                    pass
+            with database.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT metadata_json FROM rag_vector_index WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '') ORDER BY updated_at DESC LIMIT 1")
+                row = cursor.fetchone()
+            if row and row[0]:
+                for p in _extract_pdf_filenames_from_index_metadata(row[0]):
+                    if p:
+                        names.add(p)
+            names -= deleted_names
+            return {"pdf_filenames": sorted(names)}
+        return await db.run_sync(_fetch_vector_index_names_sync, db)
     except Exception:
         return {"pdf_filenames": []}
 
@@ -946,17 +966,20 @@ async def get_documents_for_answer_key_tab(
 ):
     """
     正解表作成タブ用の文書一覧。管理者は全正解表対象、一般ユーザーは自分が指定した文書のみ。
+    (DB 접근은 run_sync 내부에서만 수행해 이벤트 루프 블로킹 방지)
     """
-    _ensure_answer_key_designated_by_column(db)
     user_id: int = current_user.get("user_id")
     is_admin = current_user.get("username") == "admin" or bool(current_user.get("is_admin"))
-    rows = query_documents_table(
-        db,
-        is_answer_key_document=True,
-        answer_key_designated_by_user_id=None if is_admin else user_id,
-        exclude_img_seed=True,
-    )
-    documents = _build_document_list_from_rows(db, rows)
+    def _for_answer_key_tab_sync(database, uid, admin: bool):
+        _ensure_answer_key_designated_by_column(database)
+        rows = query_documents_table(
+            database,
+            is_answer_key_document=True,
+            answer_key_designated_by_user_id=None if admin else uid,
+            exclude_img_seed=True,
+        )
+        return _build_document_list_from_rows(database, rows)
+    documents = await db.run_sync(_for_answer_key_tab_sync, db, user_id, is_admin)
     return DocumentListResponse(documents=documents, total=len(documents))
 
 
@@ -1010,8 +1033,11 @@ async def get_documents_overview(
     文書一覧と様式マッピング・ページ役割(Cover/Detail/Summary/Reply)別件数を返す。
     """
     try:
-        rows = query_documents_table(db, is_answer_key_document=True if answer_key_only else None)
-        totals, by_doc = _query_page_role_counts(db)
+        def _overview_sync(database, answer_key_only: bool):
+            rows = query_documents_table(database, is_answer_key_document=True if answer_key_only else None)
+            totals, by_doc = _query_page_role_counts(database)
+            return rows, totals, by_doc
+        rows, totals, by_doc = await db.run_sync(_overview_sync, db, answer_key_only)
         documents = []
         for row in rows:
             pdf_filename = row[0]
@@ -1065,6 +1091,57 @@ def _find_pdf_path_for_document(db, pdf_filename: str) -> Optional[Path]:
     return None
 
 
+def _generate_all_page_images_sync(
+    pdf_path_str: str,
+    total_pages: int,
+    pdf_filename: str,
+    dpi: int,
+    db,
+) -> int:
+    """
+    PDF → 페이지 이미지 생성·파일 저장·DB INSERT를 동기로 수행.
+    generate_page_images에서 asyncio.to_thread로 호출해 이벤트 루프 블로킹 방지.
+    Returns: 저장한 페이지 수
+    """
+    import io
+    import fitz
+    from PIL import Image
+
+    doc_fitz = fitz.open(pdf_path_str)
+    try:
+        zoom = dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        saved = 0
+        for page_idx in range(min(len(doc_fitz), total_pages)):
+            page_num = page_idx + 1
+            page = doc_fitz.load_page(page_idx)
+            pix = page.get_pixmap(matrix=matrix)
+            img_bytes = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            jpeg_buf = io.BytesIO()
+            img.save(jpeg_buf, format="JPEG", quality=95, optimize=True)
+            image_data = jpeg_buf.getvalue()
+            image_path = db.save_image_to_file(pdf_filename, page_num, image_data)
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO page_images_current
+                    (pdf_filename, page_number, image_path, image_format, image_size)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (pdf_filename, page_number)
+                    DO UPDATE SET
+                        image_path = EXCLUDED.image_path,
+                        image_format = EXCLUDED.image_format,
+                        image_size = EXCLUDED.image_size,
+                        created_at = CURRENT_TIMESTAMP
+                """, (pdf_filename, page_num, image_path, "JPEG", len(image_data)))
+                conn.commit()
+            saved += 1
+        return saved
+    finally:
+        doc_fitz.close()
+
+
 @router.post("/{pdf_filename}/generate-page-images")
 async def generate_page_images(
     pdf_filename: str,
@@ -1073,59 +1150,31 @@ async def generate_page_images(
     """
     이미지가 아직 없는 문서에 대해 PDF에서 페이지 이미지를 생성해 저장합니다.
     PDF는 세션 temp 또는 img 학습 폴더에서 찾습니다. 없으면 해당 문서를 다시 업로드해야 합니다.
+    (무거운 I/O·DB 작업은 스레드에서 실행해 이벤트 루프 블로킹 방지)
     """
-    doc = db.get_document(pdf_filename)
+    doc = await db.run_sync(db.get_document, pdf_filename)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     total_pages = int(doc.get("total_pages") or 0)
     if total_pages <= 0:
         raise HTTPException(status_code=400, detail="Document has no pages")
-    pdf_path = _find_pdf_path_for_document(db, pdf_filename)
+    pdf_path = await db.run_sync(_find_pdf_path_for_document, db, pdf_filename)
     if not pdf_path or not pdf_path.exists():
         raise HTTPException(
             status_code=404,
             detail="PDFファイルが見つかりません。一覧から該当文書を再度アップロードして解析を実行してください。",
         )
-    import io
-    import fitz
-    from PIL import Image
+    dpi = getattr(rag_config, "dpi", 300)
     try:
-        doc_fitz = fitz.open(str(pdf_path))
-        try:
-            dpi = getattr(rag_config, "dpi", 300)
-            zoom = dpi / 72.0
-            matrix = fitz.Matrix(zoom, zoom)
-            saved = 0
-            for page_idx in range(min(len(doc_fitz), total_pages)):
-                page_num = page_idx + 1
-                page = doc_fitz.load_page(page_idx)
-                pix = page.get_pixmap(matrix=matrix)
-                img_bytes = pix.tobytes("png")
-                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                jpeg_buf = io.BytesIO()
-                img.save(jpeg_buf, format="JPEG", quality=95, optimize=True)
-                image_data = jpeg_buf.getvalue()
-                image_path = db.save_image_to_file(pdf_filename, page_num, image_data)
-                with db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO page_images_current
-                        (pdf_filename, page_number, image_path, image_format, image_size)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (pdf_filename, page_number)
-                        DO UPDATE SET
-                            image_path = EXCLUDED.image_path,
-                            image_format = EXCLUDED.image_format,
-                            image_size = EXCLUDED.image_size,
-                            created_at = CURRENT_TIMESTAMP
-                    """, (pdf_filename, page_num, image_path, "JPEG", len(image_data)))
-                    conn.commit()
-                saved += 1
-        finally:
-            doc_fitz.close()
+        saved = await asyncio.to_thread(
+            _generate_all_page_images_sync,
+            str(pdf_path),
+            total_pages,
+            pdf_filename,
+            dpi,
+            db,
+        )
         return {"success": True, "message": f"Generated {saved} page images", "pages": saved}
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1241,7 +1290,7 @@ async def get_document_answer_json(
             key=lambda x: int(x.get("item_order", 0)) if isinstance(x, dict) else 0,
         )
         items_plain = [_to_item_data_only(it) for it in items_sorted]
-        page_obj = {k: v for k, v in pr.items() if k != "items" and k != "_ocr_text"}
+        page_obj = {k: v for k, v in pr.items() if k not in ("items", "_ocr_text", "_rag_reference")}
         page_obj["items"] = items_plain
         pages.append(page_obj)
     pages.sort(key=lambda p: p.get("page_number") or 0)
@@ -1286,6 +1335,7 @@ async def save_document_answer_json(
                 if page_role not in ("cover", "detail", "summary", "reply"):
                     page_role = "detail"
                 page_meta = dict(page_obj.get("page_meta")) if isinstance(page_obj.get("page_meta"), dict) else {}
+                page_meta.pop("_rag_reference", None)  # 정답지에 불필요, 저장하지 않음
                 # 画面で表示済みのOCRを保存（ベクター登録時に再抽出しない）
                 ocr_text = page_obj.get("ocr_text")
                 if isinstance(ocr_text, str) and ocr_text.strip():
@@ -1309,23 +1359,24 @@ async def save_document_answer_json(
                     if not isinstance(item_dict, dict):
                         continue
                     retail_code, dist_code = resolve_retail_dist(
-                        item_dict.get("得意先"), item_dict.get("得意先CD")
+                        item_dict.get("得意先"), item_dict.get("得意先コード")
                     )
                     if retail_code:
-                        item_dict["小売先CD"] = retail_code
+                        item_dict["小売先コード"] = retail_code
                     if dist_code:
-                        item_dict["受注先CD"] = dist_code
+                        item_dict["受注先コード"] = dist_code
                     product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
                     if product_result:
                         code, shikiri, honbu = product_result
                         if code:
-                            item_dict["商品CD"] = code
+                            item_dict["商品コード"] = code
                         if shikiri is not None:
                             item_dict["仕切"] = shikiri
                         if honbu is not None:
                             item_dict["本部長"] = honbu
                     upload_channel = doc.get("upload_channel")
                     apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
+                    apply_form04_mishu_decimal(item_dict, form_type)
                     separated = db._separate_item_fields(item_dict, form_type=form_type)
                     item_data = separated.get("item_data") or {}
                     if first_item_keys is None and item_data:
@@ -1368,28 +1419,22 @@ async def get_document(
         db: 데이터베이스 인스턴스
     """
     try:
-        doc = db.get_document(pdf_filename)
+        doc = await db.run_sync(db.get_document, pdf_filename)
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
-        
-        # created_at을 ISO 형식 문자열로 변환
         created_at_str = None
         if doc.get('created_at'):
             created_at = doc['created_at']
             if isinstance(created_at, str):
                 created_at_str = created_at
             elif isinstance(created_at, datetime):
-                # datetime 객체인 경우 ISO 형식으로 변환
                 created_at_str = created_at.isoformat()
             else:
-                # 다른 타입인 경우 문자열로 변환 시도
                 try:
                     created_at_str = str(created_at)
                 except Exception:
                     created_at_str = None
-        
-        # 문서의 첫 번째 페이지에서 請求年月 추출
-        year_month = get_document_year_month(db, pdf_filename)
+        year_month = await db.run_sync(get_document_year_month, db, pdf_filename)
         data_year = year_month[0] if year_month else None
         data_month = year_month[1] if year_month else None
         
@@ -1419,44 +1464,70 @@ async def designate_document_as_answer_key(
     db=Depends(get_db)
 ):
     """
-    문서를 정답지 생성 대상으로 지정 (검토 탭에서 제외, 정답지 생성 탭에서만 표시)
-    - documents_current 또는 documents_archive의 is_answer_key_document = TRUE, answer_key_designated_by_user_id = 현재 사용자
-    - 해당 문서의 모든 페이지에 page_data의 is_rag_candidate = TRUE
+    문서를 정답지 생성 대상으로 지정（解答作成タブで編集・ベクターDB反映可能）。
+    - 1・2次検討の完了有無にかかわらず指定可能（未完了時はフロントのモーダルで案内）
+    - documents_current または documents_archive の is_answer_key_document = TRUE, answer_key_designated_by_user_id = 現在ユーザー
+    - 該当文書の全ページの page_data に is_rag_candidate = TRUE
     """
-    _ensure_answer_key_designated_by_column(db)
-    try:
-        with db.get_connection() as conn:
+    def _designate_answer_key_sync(database, uid: int, fn: str):
+        _ensure_answer_key_designated_by_column(database)
+        with database.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE documents_current
                 SET is_answer_key_document = TRUE, answer_key_designated_by_user_id = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE pdf_filename = %s
-            """, (current_user_id, pdf_filename))
+            """, (uid, fn))
             if cursor.rowcount > 0:
-                cursor.execute("""
-                    UPDATE page_data_current
-                    SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP
-                    WHERE pdf_filename = %s
-                """, (pdf_filename,))
+                cursor.execute("UPDATE page_data_current SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP WHERE pdf_filename = %s", (fn,))
             else:
                 cursor.execute("""
                     UPDATE documents_archive
                     SET is_answer_key_document = TRUE, answer_key_designated_by_user_id = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s
-                """, (current_user_id, pdf_filename))
+                """, (uid, fn))
                 if cursor.rowcount == 0:
                     raise HTTPException(status_code=404, detail="Document not found in current or archive table")
-                cursor.execute("""
-                    UPDATE page_data_archive
-                    SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP
-                    WHERE pdf_filename = %s
-                """, (pdf_filename,))
+                cursor.execute("UPDATE page_data_archive SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP WHERE pdf_filename = %s", (fn,))
             conn.commit()
+    try:
+        await db.run_sync(_designate_answer_key_sync, db, current_user_id, pdf_filename)
         return {"success": True, "message": "Document designated for answer key creation"}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _revoke_answer_key_sync(database, pdf_filename: str):
+    """정답지 지정 해제 DB 작업 (run_sync용)."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE documents_current
+            SET is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE pdf_filename = %s
+        """, (pdf_filename,))
+        if cursor.rowcount > 0:
+            cursor.execute("""
+                UPDATE page_data_current
+                SET is_rag_candidate = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (pdf_filename,))
+        else:
+            cursor.execute("""
+                UPDATE documents_archive
+                SET is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (pdf_filename,))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Document not found in current or archive table")
+            cursor.execute("""
+                UPDATE page_data_archive
+                SET is_rag_candidate = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (pdf_filename,))
+        conn.commit()
 
 
 @router.post("/{pdf_filename}/answer-key-revoke")
@@ -1470,33 +1541,7 @@ async def revoke_document_answer_key(
     - 해당 문서의 모든 페이지에 page_data의 is_rag_candidate = FALSE
     """
     try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE documents_current
-                SET is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP
-                WHERE pdf_filename = %s
-            """, (pdf_filename,))
-            if cursor.rowcount > 0:
-                cursor.execute("""
-                    UPDATE page_data_current
-                    SET is_rag_candidate = FALSE, updated_at = CURRENT_TIMESTAMP
-                    WHERE pdf_filename = %s
-                """, (pdf_filename,))
-            else:
-                cursor.execute("""
-                    UPDATE documents_archive
-                    SET is_answer_key_document = FALSE, answer_key_designated_by_user_id = NULL, updated_at = CURRENT_TIMESTAMP
-                    WHERE pdf_filename = %s
-                """, (pdf_filename,))
-                if cursor.rowcount == 0:
-                    raise HTTPException(status_code=404, detail="Document not found in current or archive table")
-                cursor.execute("""
-                    UPDATE page_data_archive
-                    SET is_rag_candidate = FALSE, updated_at = CURRENT_TIMESTAMP
-                    WHERE pdf_filename = %s
-                """, (pdf_filename,))
-            conn.commit()
+        await db.run_sync(_revoke_answer_key_sync, db, pdf_filename)
         return {"success": True, "message": "Document revoked from answer key creation"}
     except HTTPException:
         raise
@@ -1671,22 +1716,26 @@ async def generate_answer_with_gpt(
         if not api_key:
             raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
 
+        from modules.utils.llm_retry import call_with_retry
         client = OpenAI(api_key=api_key)
-        response = await asyncio.to_thread(
-            lambda: client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                        ],
-                    }
-                ],
-                max_completion_tokens=4096,
+
+        def _gpt_create():
+            return call_with_retry(
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            ],
+                        }
+                    ],
+                    max_completion_tokens=4096,
+                )
             )
-        )
+        response = await asyncio.to_thread(_gpt_create)
         raw_text = (response.choices[0].message.content or "").strip()
         if not raw_text:
             raise HTTPException(status_code=502, detail="GPT returned empty content")
@@ -1758,10 +1807,167 @@ class CreateItemsFromAnswerRequest(BaseModel):
     page_meta: Optional[dict] = None
 
 
+def _create_items_from_answer_sync(
+    database, pdf_filename: str, page_number: int,
+    items: list, page_role: str, page_meta_json: Optional[str]
+):
+    """정답지 결과로 items DB 저장 (run_sync용). 이벤트 루프 블로킹 방지."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+            (pdf_filename,)
+        )
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Document not found")
+        if page_meta_json:
+            cursor.execute("""
+                INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
+                VALUES (%s, %s, %s, %s::jsonb)
+                ON CONFLICT (pdf_filename, page_number)
+                DO UPDATE SET
+                    page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role),
+                    page_meta = COALESCE(EXCLUDED.page_meta, page_data_current.page_meta)
+            """, (pdf_filename, page_number, page_role, page_meta_json))
+        else:
+            cursor.execute("""
+                INSERT INTO page_data_current (pdf_filename, page_number, page_role)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (pdf_filename, page_number)
+                DO UPDATE SET page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role)
+            """, (pdf_filename, page_number, page_role))
+        cursor.execute(
+            "SELECT form_type, upload_channel FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+            (pdf_filename,)
+        )
+        row = cursor.fetchone()
+        form_type = row[0] if row and row[0] else None
+        upload_channel = row[1] if row and len(row) > 1 else None
+        _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+        for item_order, item_dict in enumerate(items, 1):
+            if not isinstance(item_dict, dict):
+                continue
+            retail_code, dist_code = resolve_retail_dist(
+                item_dict.get("得意先"), item_dict.get("得意先コード")
+            )
+            if retail_code:
+                item_dict["小売先コード"] = retail_code
+            if dist_code:
+                item_dict["受注先コード"] = dist_code
+            product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+            if product_result:
+                code, shikiri, honbu = product_result
+                if code:
+                    item_dict["商品コード"] = code
+                if shikiri is not None:
+                    item_dict["仕切"] = shikiri
+                if honbu is not None:
+                    item_dict["本部長"] = honbu
+            apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
+            apply_form04_mishu_decimal(item_dict, form_type)
+            separated = database._separate_item_fields(item_dict, form_type=form_type)
+            item_data = separated.get("item_data") or {}
+            customer = separated.get("customer")
+            cursor.execute("""
+                INSERT INTO items_current (
+                    pdf_filename, page_number, item_order,
+                    customer,
+                    first_review_checked, second_review_checked,
+                    item_data
+                )
+                VALUES (%s, %s, %s, %s, FALSE, FALSE, %s::jsonb)
+            """, (
+                pdf_filename, page_number, item_order,
+                customer,
+                json.dumps(item_data, ensure_ascii=False)
+            ))
+        if items and isinstance(items[0], dict):
+            item_data_keys = list(items[0].keys())
+            if item_data_keys:
+                cursor.execute("""
+                    UPDATE documents_current
+                    SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
+                    WHERE pdf_filename = %s
+                """, (json.dumps({"item_data_keys": item_data_keys}, ensure_ascii=False), pdf_filename))
+        conn.commit()
+    return {"success": True, "created_count": len(items), "page_number": page_number}
+
+
 class GenerateItemsFromTemplateRequest(BaseModel):
     """첫 행(템플릿)으로 나머지 행 LLM 생성 요청"""
     template_item: dict  # 한 행의 키-값 (키 추가/삭제/편집 가능)
     provider: Optional[str] = "gpt-5.2"  # "gemini" | "gpt-5.2" — 정답지 탭 드롭다운과 동일
+
+
+def _create_items_from_template_sync(database, pdf_filename: str, page_number: int, items: list, page_role: str):
+    """템플릿/GPT 결과로 items DB 저장 (run_sync용). 이벤트 루프 블로킹 방지."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+            (pdf_filename,)
+        )
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Document not found")
+        cursor.execute(
+            "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
+            (pdf_filename, page_number)
+        )
+        cursor.execute("""
+            INSERT INTO page_data_current (pdf_filename, page_number, page_role)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (pdf_filename, page_number)
+            DO UPDATE SET page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role)
+        """, (pdf_filename, page_number, page_role))
+        cursor.execute(
+            "SELECT form_type, upload_channel FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+            (pdf_filename,)
+        )
+        row = cursor.fetchone()
+        form_type = row[0] if row and row[0] else None
+        upload_channel = row[1] if row and len(row) > 1 else None
+        _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+        for item_order, item_dict in enumerate(items, 1):
+            if not isinstance(item_dict, dict):
+                continue
+            retail_code, dist_code = resolve_retail_dist(
+                item_dict.get("得意先"), item_dict.get("得意先コード")
+            )
+            if retail_code:
+                item_dict["小売先コード"] = retail_code
+            if dist_code:
+                item_dict["受注先コード"] = dist_code
+            product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+            if product_result:
+                code, shikiri, honbu = product_result
+                if code:
+                    item_dict["商品コード"] = code
+                if shikiri is not None:
+                    item_dict["仕切"] = shikiri
+                if honbu is not None:
+                    item_dict["本部長"] = honbu
+            apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
+            apply_form04_mishu_decimal(item_dict, form_type)
+            separated = database._separate_item_fields(item_dict, form_type=form_type)
+            item_data = separated.get("item_data") or {}
+            cursor.execute("""
+                INSERT INTO items_current (
+                    pdf_filename, page_number, item_order,
+                    first_review_checked, second_review_checked,
+                    item_data
+                )
+                VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+            """, (
+                pdf_filename, page_number, item_order,
+                json.dumps(item_data, ensure_ascii=False)
+            ))
+        conn.commit()
+    return {
+        "success": True,
+        "page_number": page_number,
+        "items_count": len(items),
+        "items": items,
+    }
 
 
 @router.post("/{pdf_filename}/pages/{page_number:int}/generate-items-from-template")
@@ -1822,23 +2028,27 @@ Use the same key names as the template. Fill values from the document for each r
             api_key = getattr(settings, "openai_api_key", None) or __import__("os").getenv("OPENAI_API_KEY")
             if not api_key:
                 raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+            from modules.utils.llm_retry import call_with_retry
             client = OpenAI(api_key=api_key)
             gpt_model = "gpt-5.2-2025-12-11"  # 정답지 탭 GPT 5.2와 동일
-            response = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model=gpt_model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                            ],
-                        }
-                    ],
-                    max_completion_tokens=4096,
+
+            def _gpt_create():
+                return call_with_retry(
+                    lambda: client.chat.completions.create(
+                        model=gpt_model,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt},
+                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                                ],
+                            }
+                        ],
+                        max_completion_tokens=4096,
+                    )
                 )
-            )
+            response = await asyncio.to_thread(_gpt_create)
             raw_text = (response.choices[0].message.content or "").strip()
             if not raw_text:
                 raise HTTPException(status_code=502, detail="GPT returned empty content")
@@ -1855,75 +2065,14 @@ Use the same key names as the template. Fill values from the document for each r
             items = []
         page_role = result.get("page_role") or "detail"
 
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT 1 FROM documents_current WHERE pdf_filename = %s LIMIT 1",
-                (pdf_filename,)
-            )
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="Document not found")
-
-            cursor.execute(
-                "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
-                (pdf_filename, page_number)
-            )
-
-            cursor.execute("""
-                INSERT INTO page_data_current (pdf_filename, page_number, page_role)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (pdf_filename, page_number)
-                DO UPDATE SET page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role)
-            """, (pdf_filename, page_number, page_role))
-
-            cursor.execute(
-                "SELECT form_type, upload_channel FROM documents_current WHERE pdf_filename = %s LIMIT 1",
-                (pdf_filename,)
-            )
-            row = cursor.fetchone()
-            form_type = row[0] if row and row[0] else None
-            upload_channel = row[1] if row and len(row) > 1 else None
-            _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
-            for item_order, item_dict in enumerate(items, 1):
-                if not isinstance(item_dict, dict):
-                    continue
-                retail_code, dist_code = resolve_retail_dist(
-                    item_dict.get("得意先"), item_dict.get("得意先CD")
-                )
-                if retail_code:
-                    item_dict["小売先CD"] = retail_code
-                if dist_code:
-                    item_dict["受注先CD"] = dist_code
-                product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
-                if product_result:
-                    code, shikiri, honbu = product_result
-                    if code:
-                        item_dict["商品CD"] = code
-                    if shikiri is not None:
-                        item_dict["仕切"] = shikiri
-                    if honbu is not None:
-                        item_dict["本部長"] = honbu
-                apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
-                separated = db._separate_item_fields(item_dict, form_type=form_type)
-                item_data = separated.get("item_data") or {}
-                cursor.execute("""
-                    INSERT INTO items_current (
-                        pdf_filename, page_number, item_order,
-                        first_review_checked, second_review_checked,
-                        item_data
-                    )
-                    VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
-                """, (
-                    pdf_filename, page_number, item_order,
-                    json.dumps(item_data, ensure_ascii=False)
-                ))
-
-        return {
-            "success": True,
-            "page_number": page_number,
-            "items_count": len(items),
-            "items": items,
-        }
+        return await db.run_sync(
+            _create_items_from_template_sync,
+            db,
+            pdf_filename,
+            page_number,
+            items,
+            page_role,
+        )
     except HTTPException:
         raise
     except ValueError as e:
@@ -1951,98 +2100,15 @@ async def create_items_from_answer(
         page_role = body.page_role or "detail"
         page_meta = body.page_meta if isinstance(body.page_meta, dict) else None
         page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
-
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-
-            # 1. 문서 존재 확인
-            cursor.execute(
-                "SELECT 1 FROM documents_current WHERE pdf_filename = %s LIMIT 1",
-                (pdf_filename,)
-            )
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="Document not found")
-
-            # 2. page_data 생성/갱신 (page_role, page_meta 포함)
-            if page_meta_json:
-                cursor.execute("""
-                    INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
-                    VALUES (%s, %s, %s, %s::jsonb)
-                    ON CONFLICT (pdf_filename, page_number)
-                    DO UPDATE SET
-                        page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role),
-                        page_meta = COALESCE(EXCLUDED.page_meta, page_data_current.page_meta)
-                """, (pdf_filename, page_number, page_role, page_meta_json))
-            else:
-                cursor.execute("""
-                    INSERT INTO page_data_current (pdf_filename, page_number, page_role)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (pdf_filename, page_number)
-                    DO UPDATE SET page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role)
-                """, (pdf_filename, page_number, page_role))
-
-            # 3. 공통 필드 분리 후 items INSERT (표준 키 得意先, 商品名)
-            cursor.execute(
-                "SELECT form_type, upload_channel FROM documents_current WHERE pdf_filename = %s LIMIT 1",
-                (pdf_filename,)
-            )
-            row = cursor.fetchone()
-            form_type = row[0] if row and row[0] else None
-            upload_channel = row[1] if row and len(row) > 1 else None
-            _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
-            for item_order, item_dict in enumerate(items, 1):
-                if not isinstance(item_dict, dict):
-                    continue
-                retail_code, dist_code = resolve_retail_dist(
-                    item_dict.get("得意先"), item_dict.get("得意先CD")
-                )
-                if retail_code:
-                    item_dict["小売先CD"] = retail_code
-                if dist_code:
-                    item_dict["受注先CD"] = dist_code
-                product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
-                if product_result:
-                    code, shikiri, honbu = product_result
-                    if code:
-                        item_dict["商品CD"] = code
-                    if shikiri is not None:
-                        item_dict["仕切"] = shikiri
-                    if honbu is not None:
-                        item_dict["本部長"] = honbu
-                apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
-                separated = db._separate_item_fields(item_dict, form_type=form_type)
-                item_data = separated.get("item_data") or {}
-                customer = separated.get("customer")
-
-                cursor.execute("""
-                    INSERT INTO items_current (
-                        pdf_filename, page_number, item_order,
-                        customer,
-                        first_review_checked, second_review_checked,
-                        item_data
-                    )
-                    VALUES (%s, %s, %s, %s, FALSE, FALSE, %s::jsonb)
-                """, (
-                    pdf_filename, page_number, item_order,
-                    customer,
-                    json.dumps(item_data, ensure_ascii=False)
-                ))
-
-            # 4. document_metadata.item_data_keys 갱신 — 저장 후 refetch 시 RAG 영문 key_order가 아닌 이 문서의 키 순서 사용
-            if items and isinstance(items[0], dict):
-                item_data_keys = list(items[0].keys())
-                if item_data_keys:
-                    cursor.execute("""
-                        UPDATE documents_current
-                        SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
-                        WHERE pdf_filename = %s
-                    """, (json.dumps({"item_data_keys": item_data_keys}, ensure_ascii=False), pdf_filename))
-
-        return {
-            "success": True,
-            "created_count": len(items),
-            "page_number": page_number,
-        }
+        return await db.run_sync(
+            _create_items_from_answer_sync,
+            db,
+            pdf_filename,
+            page_number,
+            items,
+            page_role,
+            page_meta_json,
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -2069,21 +2135,48 @@ async def update_document_form_type(
         raise HTTPException(status_code=400, detail="form_type must be 1-10 characters (e.g. 01, 02, 07)")
 
     try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE documents_current 
-                SET form_type = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE pdf_filename = %s
-            """, (form_type, pdf_filename))
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Document not found")
-            conn.commit()
+        await db.run_sync(_update_form_type_sync, db, pdf_filename, form_type)
         return {"form_type": form_type, "message": "Form type updated"}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _update_form_type_sync(database, pdf_filename: str, form_type: str):
+    """문서 form_type 업데이트 (run_sync용)."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE documents_current 
+            SET form_type = %s, updated_at = CURRENT_TIMESTAMP
+            WHERE pdf_filename = %s
+        """, (form_type, pdf_filename))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Document not found")
+        conn.commit()
+
+
+def _delete_document_sync(database, pdf_filename: str):
+    """문서 삭제 DB + static 이미지 삭제 (run_sync용)."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM documents_current WHERE pdf_filename = %s", (pdf_filename,))
+        deleted_count = cursor.rowcount
+        cursor.execute("DELETE FROM documents_archive WHERE pdf_filename = %s", (pdf_filename,))
+        deleted_count += cursor.rowcount
+        if deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Document not found")
+        try:
+            cursor.execute("""
+                UPDATE rag_learning_status_current
+                SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+                WHERE pdf_filename = %s
+            """, (pdf_filename,))
+        except Exception:
+            pass
+        conn.commit()
+    _delete_static_images_for_document(pdf_filename)
 
 
 @router.delete("/{pdf_filename}")
@@ -2100,42 +2193,9 @@ async def delete_document(
         db: 데이터베이스 인스턴스
     """
     try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            # 문서 삭제 (current와 archive 모두에서 삭제)
-            cursor.execute("""
-                DELETE FROM documents_current 
-                WHERE pdf_filename = %s
-            """, (pdf_filename,))
-            deleted_count = cursor.rowcount
-
-            cursor.execute("""
-                DELETE FROM documents_archive 
-                WHERE pdf_filename = %s
-            """, (pdf_filename,))
-            deleted_count += cursor.rowcount
-
-            if deleted_count == 0:
-                raise HTTPException(status_code=404, detail="Document not found")
-
-            # 해당 문서의 정답지 페이지를 미사용으로 전환 (merged → deleted, 대시보드 unused_pages 반영)
-            try:
-                cursor.execute("""
-                    UPDATE rag_learning_status_current
-                    SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
-                    WHERE pdf_filename = %s
-                """, (pdf_filename,))
-            except Exception:
-                # 테이블/컬럼 없음 등은 무시 (문서 삭제는 계속 진행)
-                pass
-
-            conn.commit()
-        # DB 삭제 후 해당 문서의 분석 완료 이미지(static)도 삭제
-        _delete_static_images_for_document(pdf_filename)
-
+        await db.run_sync(_delete_document_sync, db, pdf_filename)
         activity_log(current_user.get("username"), f"문서 삭제: {pdf_filename}")
         return {"message": "Document deleted successfully"}
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -2192,7 +2252,7 @@ async def purge_old_documents(
     """
     try:
         years = retention_years if retention_years and retention_years > 0 else RETENTION_YEARS
-        result = purge_old_documents_impl(db, years)
+        result = await db.run_sync(purge_old_documents_impl, db, years)
         activity_log(current_user.get("username"), f"구 문서 정리: {result.get('deleted_count', 0)}건")
         return result
     except HTTPException:

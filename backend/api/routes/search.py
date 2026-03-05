@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from pydantic import BaseModel
 
 from database.registry import get_db
-from database.db_manager import _similarity_difflib
+from database.db_manager import _similarity_difflib, normalize_company_name_for_similarity
 from backend.core.auth import get_current_user_optional, get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
 from modules.core.rag_manager import get_rag_manager
@@ -88,7 +88,7 @@ async def get_retail_candidates_by_sap_retail(
 
 @router.get("/retail/sap-row-by-retail-code")
 async def get_sap_row_by_retail_code(
-    retail_code: str = Query(..., description="소매처코드(小売先CD)"),
+    retail_code: str = Query(..., description="소매처코드(小売先コード)"),
 ):
     """sap_retail에서 소매처코드로 첫 행 조회. SAP受注先・SAP小売先 표시용."""
     code = (retail_code or "").strip()
@@ -297,9 +297,9 @@ async def get_review_tab_customers(
     검토 탭에 있는 모든 거래처 목록 (정답지·벡터 등록 문서 제외, items의 得意先/customer 중복 제거).
     검토 탭에서 거래처 목록 버튼 클릭 시 "검토 탭 전체 거래처" 표시용.
     """
-    in_vector = _get_in_vector_pdf_filenames(db)
-    pdfs = db.get_review_tab_pdf_filenames(in_vector, year=year, month=month)
-    customer_names = db.get_distinct_customer_names_for_pdfs(pdfs)
+    in_vector = await db.run_sync(_get_in_vector_pdf_filenames, db)
+    pdfs = await db.run_sync(db.get_review_tab_pdf_filenames, in_vector, year, month)
+    customer_names = await db.run_sync(db.get_distinct_customer_names_for_pdfs, pdfs)
     return {"customer_names": customer_names}
 
 
@@ -315,9 +315,10 @@ async def post_pages_by_customers(
     """
     if not body.customer_names:
         return {"pages": []}
-    pages = db.get_page_keys_by_customer_names(
-        customer_names=body.customer_names,
-        form_type=body.form_type,
+    pages = await db.run_sync(
+        db.get_page_keys_by_customer_names,
+        body.customer_names,
+        body.form_type,
     )
     return {"pages": pages}
 
@@ -329,7 +330,7 @@ async def post_customer_similarity_mapping(
 ):
     """
     왼쪽(실제 거래처) 각각에 대해 오른쪽(담당) 중 유사도 최고인 1개 + 점수 반환.
-    notepad.ipynb find_similar_supers와 동일한 difflib 유사도 사용 (Levenshtein 아님).
+    비교 시 거래처·retail_user 모두 전처리(株式会社/（株）/괄호·기호 제거) 후 difflib 유사도 사용.
     """
     left_list = [s.strip() for s in (body.customer_names or []) if s is not None]
     right_list = [s.strip() for s in (body.super_names or []) if s is not None]
@@ -338,8 +339,10 @@ async def post_customer_similarity_mapping(
     for left in left_list:
         best_right = ""
         best_score = 0.0
+        left_norm = normalize_company_name_for_similarity(left)
         for right in right_list:
-            score = _similarity_difflib(left, right)
+            right_norm = normalize_company_name_for_similarity(right)
+            score = _similarity_difflib(left_norm, right_norm)
             if score > best_score:
                 best_score = score
                 best_right = right
@@ -584,10 +587,10 @@ def _dist_for_retail(retail_code: str) -> tuple:
 
 @router.get("/retail/by-customer-code")
 async def get_retail_by_customer_code(
-    customer_code: str = Query(..., description="得意先CD(도매소매처코드)"),
+    customer_code: str = Query(..., description="得意先コード(도매소매처코드)"),
 ):
     """
-    得意先CD(도매소매처코드)로 domae_retail_1 조회 → 해당 행의 소매처코드/소매처명 1건 반환.
+    得意先コード(도매소매처코드)로 domae_retail_1 조회 → 해당 행의 소매처코드/소매처명 1건 반환.
     판매처코드/판매처명은 dist_retail에서 조회해 함께 반환.
     """
     customer_code = (customer_code or "").strip()
@@ -597,7 +600,7 @@ async def get_retail_by_customer_code(
         return {"customer_code_input": customer_code, "match": None, "skipped_reason": "domae_retail_1.csv not found"}
     try:
         df = pd.read_csv(_DOMAE_RETAIL_1_CSV, dtype=str)
-        # 得意先CD = domae_retail_1의 도매소매처코드(1열). 소매처코드(2열)로 착각하면 안 됨
+        # 得意先コード = domae_retail_1의 도매소매처코드(1열). 소매처코드(2열)로 착각하면 안 됨
         row = df[df["도매소매처코드"].astype(str).str.strip() == customer_code]
         if row.empty:
             return {"customer_code_input": customer_code, "match": None, "skipped_reason": None}
@@ -731,8 +734,8 @@ async def get_retail_candidates_by_rag_answer(
         code_to_names = _retail_code_to_names()
         matches = []
         for r in raw:
-            retail_code = (r.get("小売先CD") or "").strip()
-            dist_c = (r.get("受注先CD") or "").strip()
+            retail_code = (r.get("小売先コード") or "").strip()
+            dist_c = (r.get("受注先コード") or "").strip()
             retail_n, dist_c_lookup, dist_n = code_to_names.get(retail_code, ("", "", ""))
             if not dist_c and dist_c_lookup:
                 dist_c = dist_c_lookup
@@ -843,10 +846,7 @@ async def get_page_ocr_text(
         if pdf_name.lower().endswith(".pdf"):
             pdf_name = pdf_name[:-4]
 
-        ocr_text = ""
-
-        # 0) DB에 저장된 OCR (이전 저장 시 화면에서 보낸 값)
-        try:
+        def _fetch_ocr_from_db():
             with db.get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
@@ -854,12 +854,17 @@ async def get_page_ocr_text(
                     (pdf_filename, page_number),
                 )
                 row = cur.fetchone()
-                if row and row[0]:
-                    meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if isinstance(row[0], str) else None)
-                    if isinstance(meta, dict) and meta.get("_ocr_text"):
-                        ocr_text = (meta["_ocr_text"] or "").strip()
+            if not row or not row[0]:
+                return ""
+            meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if isinstance(row[0], str) else None)
+            if isinstance(meta, dict) and meta.get("_ocr_text"):
+                return (meta["_ocr_text"] or "").strip()
+            return ""
+
+        try:
+            ocr_text = await db.run_sync(_fetch_ocr_from_db)
         except Exception:
-            pass
+            ocr_text = ""
 
         # 1) debug2 (RAG 파싱 시 저장된 파일) — 외부 API 호출 없음
         if not ocr_text.strip():

@@ -32,8 +32,8 @@ _RETAIL_USER_CSV = _get_project_root() / "database" / "csv" / "retail_user.csv"
 _retail_code_to_담당자명: Optional[Dict[str, str]] = None
 
 
-def _get_담당자명_by_小売先CD(retail_code: str) -> str:
-    """retail_user.csv에서 소매처코드=小売先CD인 행의 담당자명 반환 (없으면 '')."""
+def _get_담당자명_by_小売先コード(retail_code: str) -> str:
+    """retail_user.csv에서 소매처코드=小売先コード인 행의 담당자명 반환 (없으면 '')."""
     global _retail_code_to_담당자명
     code = (retail_code or "").strip()
     if not code:
@@ -188,6 +188,8 @@ def get_all_items_current(
                     ON i.pdf_filename = p.pdf_filename
                    AND i.page_number = p.page_number
                 WHERE p.page_role = 'detail'
+                  AND i.first_review_checked = TRUE
+                  AND i.second_review_checked = TRUE
                 """ + ym_clause + """
                 ORDER BY i.pdf_filename, i.page_number, i.item_order
             """,
@@ -334,15 +336,15 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
     for item in items:
         form_type = item.get("form_type", "01")
         processed = process_item_for_sap(item, form_type, config)
-        # D열: item_data에 없음. J열(小売先CD)로 retail_user.csv 매핑 담당자명으로 항상 채움
+        # D열: item_data에 없음. J열(小売先コード)로 retail_user.csv 매핑 담당자명으로 항상 채움
         item_data = item.get("item_data") or {}
         if isinstance(item_data, str):
             try:
                 item_data = json.loads(item_data)
             except Exception:
                 item_data = {}
-        retail_cd = (processed.get("J") or item_data.get("小売先CD") or "").strip()
-        processed["D"] = _get_담당자명_by_小売先CD(retail_cd)
+        retail_cd = (processed.get("J") or item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
+        processed["D"] = _get_담당자명_by_小売先コード(retail_cd)
 
         for col in data_columns:
             val = processed.get(col)
@@ -368,29 +370,26 @@ def create_sap_excel(items: List[Dict[str, Any]], template_path: Optional[str] =
     return output
 
 
+def _get_sap_available_year_months_sync(db):
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT d.data_year AS y, d.data_month AS m
+            FROM documents_current d
+            WHERE d.created_by_user_id IS NOT NULL
+              AND d.data_year IS NOT NULL AND d.data_month IS NOT NULL
+              AND EXISTS (SELECT 1 FROM page_data_current p WHERE p.pdf_filename = d.pdf_filename AND p.page_role = 'detail')
+            ORDER BY y DESC, m DESC
+        """)
+        return [{"year": r[0], "month": r[1]} for r in cursor.fetchall()]
+
+
 @router.get("/available-year-months")
 async def get_sap_available_year_months(db=Depends(get_db)):
-    """
-    SAP 대상 문서가 있는 연월 목록.
-    documents_current.created_by_user_id IS NOT NULL 이고
-    detail 페이지가 있는 문서의 distinct (data_year, data_month). 최신순.
-    """
+    """SAP 대상 문서가 있는 연월 목록."""
     try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT d.data_year AS y, d.data_month AS m
-                FROM documents_current d
-                WHERE d.created_by_user_id IS NOT NULL
-                  AND d.data_year IS NOT NULL AND d.data_month IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1 FROM page_data_current p
-                    WHERE p.pdf_filename = d.pdf_filename AND p.page_role = 'detail'
-                  )
-                ORDER BY y DESC, m DESC
-            """)
-            rows = cursor.fetchall()
-            return {"year_months": [{"year": r[0], "month": r[1]} for r in rows]}
+        year_months = await db.run_sync(_get_sap_available_year_months_sync, db)
+        return {"year_months": year_months}
     except Exception as e:
         print(f"❌ [get_sap_available_year_months] 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -410,63 +409,35 @@ async def check_sap_document(
         return {"ok": False, "reason": "pdf 파라미터가 비어 있습니다."}
     pdf = pdf.strip()
     try:
-        with db.get_connection() as conn:
+        def _check_sap_doc_sync():
             from psycopg2.extras import RealDictCursor
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute(
-                """
-                SELECT pdf_filename, created_by_user_id, data_year, data_month, form_type
-                FROM documents_current
-                WHERE pdf_filename = %s
-                """,
-                (pdf,),
-            )
-            row = cursor.fetchone()
-        if not row:
-            return {
-                "ok": True,
-                "pdf_filename": pdf,
-                "in_db": False,
-                "created_by_user_id": None,
-                "data_year": None,
-                "data_month": None,
-                "has_detail_page": False,
-                "reason": "documents_current에 해당 pdf_filename이 없습니다. (아카이브에 있거나 미등록)",
-            }
-        d = dict(row)
-        created_by = d.get("created_by_user_id")
-        data_year = d.get("data_year")
-        data_month = d.get("data_month")
-
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT 1 FROM page_data_current
-                WHERE pdf_filename = %s AND page_role = 'detail'
-                LIMIT 1
-                """,
-                (pdf,),
-            )
-            has_detail = cursor.fetchone() is not None
-        reasons = []
-        if created_by is None:
-            reasons.append("created_by_user_id가 NULL입니다. (업로드 시 로그인 사용자로 저장된 문서만 대상)")
-        if data_year is None or data_month is None:
-            reasons.append("data_year 또는 data_month가 NULL입니다. (연월이 지정된 문서만 대상)")
-        if not has_detail:
-            reasons.append("detail 페이지가 없습니다. (page_data_current에 page_role='detail'인 페이지가 없음)")
-        reason = "; ".join(reasons) if reasons else "조건은 모두 만족합니다. 연월 선택이 이 문서의 data_year/data_month와 일치하는지 확인하세요."
-        return {
-            "ok": True,
-            "pdf_filename": pdf,
-            "in_db": True,
-            "created_by_user_id": created_by,
-            "data_year": data_year,
-            "data_month": data_month,
-            "has_detail_page": has_detail,
-            "reason": reason,
-        }
+            with db.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute(
+                    "SELECT pdf_filename, created_by_user_id, data_year, data_month, form_type FROM documents_current WHERE pdf_filename = %s",
+                    (pdf,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                return {"ok": True, "pdf_filename": pdf, "in_db": False, "created_by_user_id": None, "data_year": None, "data_month": None, "has_detail_page": False, "reason": "documents_current에 해당 pdf_filename이 없습니다. (아카이브에 있거나 미등록)"}
+            d = dict(row)
+            created_by = d.get("created_by_user_id")
+            data_year = d.get("data_year")
+            data_month = d.get("data_month")
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM page_data_current WHERE pdf_filename = %s AND page_role = 'detail' LIMIT 1", (pdf,))
+                has_detail = cursor.fetchone() is not None
+            reasons = []
+            if created_by is None:
+                reasons.append("created_by_user_id가 NULL입니다. (업로드 시 로그인 사용자로 저장된 문서만 대상)")
+            if data_year is None or data_month is None:
+                reasons.append("data_year 또는 data_month가 NULL입니다. (연월이 지정된 문서만 대상)")
+            if not has_detail:
+                reasons.append("detail 페이지가 없습니다. (page_data_current에 page_role='detail'인 페이지가 없음)")
+            reason = "; ".join(reasons) if reasons else "조건은 모두 만족합니다. 연월 선택이 이 문서의 data_year/data_month와 일치하는지 확인하세요."
+            return {"ok": True, "pdf_filename": pdf, "in_db": True, "created_by_user_id": created_by, "data_year": data_year, "data_month": data_month, "has_detail_page": has_detail, "reason": reason}
+        return await db.run_sync(_check_sap_doc_sync)
     except Exception as e:
         print(f"❌ [check_sap_document] 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -481,42 +452,39 @@ async def get_sap_documents(
     """
     조건 충족 문서 목록을 양식지(form_type)별로 반환.
     조건: created_by_user_id IS NOT NULL, detail 페이지 있음, (선택) data_year/month 일치.
+    2次検討まで完了した行のみカウント（SAP対象は2次検討済みのみ）。
     Returns:
         by_form: { "01": [{ pdf_filename, item_count }], ... },
-        total_items: 전체 행 수
+        total_items: 전체 행 수（2次検討済みのみ）
     """
     if year is None or month is None:
         return {"by_form": {}, "total_items": 0}
     try:
-        with db.get_connection() as conn:
+        def _get_sap_docs_sync():
             from psycopg2.extras import RealDictCursor
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute("""
-                SELECT d.pdf_filename, d.form_type, COUNT(i.item_id) AS item_count
-                FROM documents_current d
-                INNER JOIN page_data_current p
-                    ON p.pdf_filename = d.pdf_filename AND p.page_role = 'detail'
-                INNER JOIN items_current i
-                    ON i.pdf_filename = d.pdf_filename AND i.page_number = p.page_number
-                WHERE d.created_by_user_id IS NOT NULL
-                  AND d.data_year = %s AND d.data_month = %s
-                GROUP BY d.pdf_filename, d.form_type
-                ORDER BY d.form_type, d.pdf_filename
-            """, (year, month))
-            rows = cursor.fetchall()
-        by_form: Dict[str, List[Dict[str, Any]]] = {}
-        total_items = 0
-        for r in rows:
-            row = dict(r)
-            ft = (row.get("form_type") or "01").strip()
-            if ft not in by_form:
-                by_form[ft] = []
-            by_form[ft].append({
-                "pdf_filename": row.get("pdf_filename", ""),
-                "item_count": int(row.get("item_count", 0)),
-            })
-            total_items += int(row.get("item_count", 0))
-        return {"by_form": by_form, "total_items": total_items}
+            with db.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=RealDictCursor)
+                cursor.execute("""
+                    SELECT d.pdf_filename, d.form_type, COUNT(i.item_id) AS item_count
+                    FROM documents_current d
+                    INNER JOIN page_data_current p ON p.pdf_filename = d.pdf_filename AND p.page_role = 'detail'
+                    INNER JOIN items_current i ON i.pdf_filename = d.pdf_filename AND i.page_number = p.page_number
+                        AND i.first_review_checked = TRUE AND i.second_review_checked = TRUE
+                    WHERE d.created_by_user_id IS NOT NULL AND d.data_year = %s AND d.data_month = %s
+                    GROUP BY d.pdf_filename, d.form_type ORDER BY d.form_type, d.pdf_filename
+                """, (year, month))
+                rows = cursor.fetchall()
+            by_form: Dict[str, List[Dict[str, Any]]] = {}
+            total_items = 0
+            for r in rows:
+                row = dict(r)
+                ft = (row.get("form_type") or "01").strip()
+                if ft not in by_form:
+                    by_form[ft] = []
+                by_form[ft].append({"pdf_filename": row.get("pdf_filename", ""), "item_count": int(row.get("item_count", 0))})
+                total_items += int(row.get("item_count", 0))
+            return {"by_form": by_form, "total_items": total_items}
+        return await db.run_sync(_get_sap_docs_sync)
     except Exception as e:
         print(f"❌ [get_sap_documents] 오류: {e}")
         import traceback
@@ -536,7 +504,7 @@ async def preview_sap_excel(
     try:
         from pathlib import Path
 
-        items = get_all_items_current(db, data_year=year, data_month=month)
+        items = await db.run_sync(get_all_items_current, db, year, month)
         
         # 템플릿 파일에서 컬럼명 읽기
         project_root = Path(__file__).parent.parent.parent.parent
@@ -575,15 +543,15 @@ async def preview_sap_excel(
         for item in preview_items:
             form_type = item.get("form_type", "01")
             processed = process_item_for_sap(item, form_type, config)
-            # D열: 小売先CD → retail_user 매핑 담당자명
+            # D열: 小売先コード → retail_user 매핑 담당자명
             item_data = item.get("item_data") or {}
             if isinstance(item_data, str):
                 try:
                     item_data = json.loads(item_data)
                 except Exception:
                     item_data = {}
-            retail_cd = (processed.get("J") or item_data.get("小売先CD") or "").strip()
-            processed["D"] = _get_담당자명_by_小売先CD(retail_cd)
+            retail_cd = (processed.get("J") or item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
+            processed["D"] = _get_담당자명_by_小売先コード(retail_cd)
 
             row_data: Dict[str, Any] = {
                 "pdf_filename": item.get("pdf_filename", ""),
@@ -620,7 +588,7 @@ async def download_sap_excel(
     SAP 업로드용 엑셀 파일 다운로드. year/month 지정 시 해당 기간 문서의 item만 취합.
     """
     try:
-        items = get_all_items_current(db, data_year=year, data_month=month)
+        items = await db.run_sync(get_all_items_current, db, year, month)
 
         if not items:
             raise HTTPException(status_code=404, detail="データがありません")
@@ -690,10 +658,10 @@ def _default_formulas() -> Dict[str, Any]:
     """
     return {
         "dataInputColumns": [
-            {"column": "C", "byForm": {"01": {"field": "受注先CD"}, "02": {"field": "受注先CD"}, "03": {"field": "受注先CD"}, "04": {"field": "受注先CD"}, "05": {"field": "受注先CD"}}},
+            {"column": "C", "byForm": {"01": {"field": "受注先コード"}, "02": {"field": "受注先コード"}, "03": {"field": "受注先コード"}, "04": {"field": "受注先コード"}, "05": {"field": "受注先コード"}}},
             {"column": "D", "byForm": {"01": {"field": "담당자명"}, "02": {"field": "담당자명"}, "03": {"field": "담당자명"}, "04": {"field": "담당자명"}, "05": {"field": "담당자명"}}},
-            {"column": "J", "byForm": {"01": {"field": "小売先CD"}, "02": {"field": "小売先CD"}, "03": {"field": "小売先CD"}, "04": {"field": "小売先CD"}, "05": {"field": "小売先CD"}}},
-            {"column": "M", "byForm": {"01": {"field": "商品CD"}, "02": {"field": "商品CD"}, "03": {"field": "商品CD"}, "04": {"field": "商品CD"}, "05": {"field": "商品CD"}}},
+            {"column": "J", "byForm": {"01": {"field": "小売先コード"}, "02": {"field": "小売先コード"}, "03": {"field": "小売先コード"}, "04": {"field": "小売先コード"}, "05": {"field": "小売先コード"}}},
+            {"column": "M", "byForm": {"01": {"field": "商品コード"}, "02": {"field": "商品コード"}, "03": {"field": "商品コード"}, "04": {"field": "商品コード"}, "05": {"field": "商品コード"}}},
             {
                 "column": "T",
                 "byForm": {
