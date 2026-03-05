@@ -1,31 +1,56 @@
 /**
- * 정답지 탭 — 우측: キー・値 / テンプレート 탭 및 저장 버튼
+ * 정답지 탭 — 우측: キー・値 / テンプレート 탭（保存はヘッダで実行）
+ * 役割別に ctx を分割し、page_meta / items はサブコンポーネントへ
  */
-import { KEY_LABELS } from './answerKeyTabConstants'
+import { AnswerKeyPageMetaSection } from './AnswerKeyPageMetaSection'
+import { AnswerKeyItemsKvSection } from './AnswerKeyItemsKvSection'
 
-/** 우측 패널에 필요한 상태·핸들러 (AnswerKeyTab에서 한 번에 전달) */
-export interface AnswerKeyRightPanelCtx {
+/** タブ切替（キー・値 / テンプレート） */
+export interface AnswerKeyViewCtx {
   rightView: 'kv' | 'template'
   setRightView: (v: 'kv' | 'template') => void
+}
+
+/** テンプレートタブ用（currentPageRows は gridCtx と共有） */
+export interface AnswerKeyTemplateCtx {
   firstRowToTemplateEntries: (row: unknown) => Array<{ id: string; key: string; value: string }>
-  currentPageRows: Array<Record<string, unknown>>
   setTemplateEntries: React.Dispatch<React.SetStateAction<Array<{ id: string; key: string; value: string }>>>
-  dirtyIds: Set<number>
-  pageMetaDirtyPages: Set<number>
-  answerProvider: string
-  setAnswerProvider: (v: 'gemini' | 'gpt-5.2') => void
-  generateAnswerMutation: { mutate: (arg: unknown) => void; isPending: boolean }
-  selectedDoc: { pdf_filename: string; total_pages: number } | null
-  rows: Array<Record<string, unknown>>
-  itemDataKeys: string[]
-  allDataLoaded: boolean
   templateEntries: Array<{ id: string; key: string; value: string }>
   updateTemplateEntry: (id: string, field: 'key' | 'value', value: string) => void
   removeTemplateEntry: (id: string) => void
   addTemplateEntry: () => void
   generateFromTemplateMutation: { mutate: () => void; isPending: boolean }
+  allDataLoaded: boolean
+}
+
+/** items キー・値グリッド用 */
+export interface AnswerKeyGridCtx {
   currentPage: number
+  currentPageRows: Array<Record<string, unknown>>
+  rows: Array<Record<string, unknown>>
+  itemDataKeys: string[]
+  dirtyIds: Set<number>
+  displayKeys: string[]
+  dataKeysForDisplay: string[]
+  editableKeys: Set<string>
+  typeOptions: Array<{ value: string; label: string }>
+  editingKeyName: string | null
+  setEditingKeyName: (v: string | null) => void
+  editingKeyValue: string
+  setEditingKeyValue: (v: string) => void
+  onRenameKey: (oldKey: string, newKey: string) => void
+  onValueChange: (itemId: number, key: string, value: string | number | boolean | null) => void
+  onRemoveKey: (key: string) => void
+  onAddKey: (newKey: string) => void
+  getKuLabel: (value: unknown) => string | null
+  newKeyInput: string
+  setNewKeyInput: (v: string) => void
+}
+
+/** page_meta / page_role 編集用（currentPage は gridCtx と共有） */
+export interface AnswerKeyPageMetaCtx {
   currentPageMetaFields: Array<{ key: string; value: string }>
+  pageMetaDirtyPages: Set<number>
   pageRoleEdits: Record<number, string>
   setPageRoleEdits: React.Dispatch<React.SetStateAction<Record<number, string>>>
   setPageMetaDirtyPages: (fn: (prev: Set<number>) => Set<number>) => void
@@ -39,76 +64,55 @@ export interface AnswerKeyRightPanelCtx {
   onPageMetaKeyRenameFull: (oldKey: string, newKey: string, currentValue: string) => void
   onPageMetaChange: (flatKey: string, value: string) => void
   onPageMetaKeyRemove: (flatKey: string) => void
-  typeOptions: Array<{ value: string; label: string }>
   newPageMetaKey: string
   setNewPageMetaKey: (v: string) => void
   newPageMetaValue: string
   setNewPageMetaValue: (v: string) => void
   onPageMetaKeyAdd: (newKey: string, newValue: string) => void
-  displayKeys: string[]
-  dataKeysForDisplay: string[]
-  editableKeys: Set<string>
-  editingKeyName: string | null
-  setEditingKeyName: (v: string | null) => void
-  editingKeyValue: string
-  setEditingKeyValue: (v: string) => void
-  onRenameKey: (oldKey: string, newKey: string) => void
-  onValueChange: (itemId: number, key: string, value: string | number | boolean | null) => void
-  onRemoveKey: (key: string) => void
-  onAddKey: (newKey: string) => void
-  getKuLabel: (value: unknown) => string | null
-  newKeyInput: string
-  setNewKeyInput: (v: string) => void
-  handleSaveGrid: () => void
-  handleSaveAsAnswerKey: () => void
+}
+
+/** 正解生成（GPT/Gemini）用 */
+export interface AnswerKeyGenerateCtx {
+  answerProvider: string
+  setAnswerProvider: (v: 'gemini' | 'gpt-5.2') => void
+  generateAnswerMutation: { mutate: (arg: unknown) => void; isPending: boolean }
+  selectedDoc: { pdf_filename: string; total_pages: number } | null
+}
+
+/** 保存状態・メッセージ・読取専用（保存はヘッダの「保存」で実行） */
+export interface AnswerKeySaveCtx {
   saveStatus: string
   saveMessage: string
-  /** 既にベクターDBに登録済みの文書は編集・学習リクエスト不可 */
   readOnly?: boolean
 }
 
-export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
+export interface AnswerKeyRightPanelProps {
+  viewCtx: AnswerKeyViewCtx
+  templateCtx: AnswerKeyTemplateCtx
+  gridCtx: AnswerKeyGridCtx
+  pageMetaCtx: AnswerKeyPageMetaCtx
+  generateCtx: AnswerKeyGenerateCtx
+  saveCtx: AnswerKeySaveCtx
+}
+
+export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx, generateCtx, saveCtx }: AnswerKeyRightPanelProps) {
+  const { rightView, setRightView } = viewCtx
   const {
-    rightView,
-    setRightView,
     firstRowToTemplateEntries,
-    currentPageRows,
-    dirtyIds,
-    pageMetaDirtyPages,
-    answerProvider,
-    setAnswerProvider,
-    generateAnswerMutation,
-    selectedDoc,
-    rows,
-    itemDataKeys,
-    allDataLoaded,
-    templateEntries,
     setTemplateEntries,
+    templateEntries,
     updateTemplateEntry,
     removeTemplateEntry,
     addTemplateEntry,
     generateFromTemplateMutation,
-    currentPage,
-    currentPageMetaFields,
-    pageRoleEdits,
-    setPageRoleEdits,
-    setPageMetaDirtyPages,
-    currentPageMetaData,
-    groupedPageMetaFields,
-    onPageMetaGroupRemove,
-    editingPageMetaKey,
-    setEditingPageMetaKey,
-    editingPageMetaKeyValue,
-    setEditingPageMetaKeyValue,
-    onPageMetaKeyRenameFull,
-    onPageMetaChange,
-    onPageMetaKeyRemove,
-    typeOptions,
-    newPageMetaKey,
-    setNewPageMetaKey,
-    newPageMetaValue,
-    setNewPageMetaValue,
-    onPageMetaKeyAdd,
+    allDataLoaded,
+  } = templateCtx
+  const currentPage = gridCtx.currentPage
+  const {
+    currentPageRows,
+    rows,
+    itemDataKeys,
+    dirtyIds,
     displayKeys,
     dataKeysForDisplay,
     editableKeys,
@@ -123,12 +127,33 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
     getKuLabel,
     newKeyInput,
     setNewKeyInput,
-    handleSaveGrid,
-    handleSaveAsAnswerKey,
-    saveStatus,
-    saveMessage,
-    readOnly = false,
-  } = ctx
+  } = gridCtx
+  const {
+    currentPageMetaFields,
+    pageMetaDirtyPages,
+    pageRoleEdits,
+    setPageRoleEdits,
+    setPageMetaDirtyPages,
+    currentPageMetaData,
+    groupedPageMetaFields,
+    onPageMetaGroupRemove,
+    editingPageMetaKey,
+    setEditingPageMetaKey,
+    editingPageMetaKeyValue,
+    setEditingPageMetaKeyValue,
+    onPageMetaKeyRenameFull,
+    onPageMetaChange,
+    onPageMetaKeyRemove,
+    newPageMetaKey,
+    setNewPageMetaKey,
+    newPageMetaValue,
+    setNewPageMetaValue,
+    onPageMetaKeyAdd,
+  } = pageMetaCtx
+  const { answerProvider, setAnswerProvider, generateAnswerMutation, selectedDoc } = generateCtx
+  const { saveStatus, saveMessage, readOnly = false } = saveCtx
+
+  const typeOptions = gridCtx.typeOptions
 
   return (
     <div className="answer-key-right">
@@ -253,331 +278,59 @@ export function AnswerKeyRightPanel({ ctx }: { ctx: AnswerKeyRightPanelCtx }) {
       )}
       {rightView === 'kv' && allDataLoaded && (rows.length > 0 || currentPageMetaFields.length > 0 || itemDataKeys.length > 0) && (
         <div className="answer-key-kv-scroll">
-          <div className="answer-key-page-label">p.{currentPage}</div>
-          <div className="answer-key-page-role-row">
-            <label className="answer-key-ocr-label">page_role</label>
-            <select
-              className="answer-key-page-role-select"
-              value={pageRoleEdits[currentPage] ?? currentPageMetaData?.page_role ?? 'detail'}
-              onChange={(e) => {
-                setPageRoleEdits((prev) => ({ ...prev, [currentPage]: e.target.value }))
-                setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
-              }}
-              title="표지(cover) / 상세(detail) / 요약(summary) / 회신(reply)"
-            >
-              <option value="detail">detail（明細）</option>
-              <option value="cover">cover（表紙）</option>
-              <option value="summary">summary（合計）</option>
-              <option value="reply">reply（返信）</option>
-            </select>
-          </div>
-          <div className={`answer-key-meta-block ${pageMetaDirtyPages.has(currentPage) ? 'answer-key-kv-dirty' : ''}`}>
-            <div className="answer-key-meta-section-label">page_meta（キー・値の直接編集）</div>
-            {groupedPageMetaFields.map(({ group, sub, fields }, groupIdx) => (
-              <div key={`page-meta-group-${currentPage}-${groupIdx}-${group}-${sub ?? 'root'}`} className="answer-key-meta-group">
-                <div className="answer-key-meta-group-header">
-                  <span className="answer-key-meta-group-label">
-                    {group === 'root' ? 'その他' : group}
-                    {sub ? ` / ${sub}` : ''}
-                  </span>
-                  <button
-                    type="button"
-                    className="answer-key-meta-group-delete-btn"
-                    onClick={() => onPageMetaGroupRemove(group, sub, fields)}
-                    title="このグループ全体を削除"
-                  >
-                    グループ削除
-                  </button>
-                </div>
-                {fields.map(({ key: metaKey, value }, metaIdx) => (
-                  <div
-                    key={`page-meta-${currentPage}-${metaIdx}-${metaKey}`}
-                    className="answer-key-kv-row answer-key-kv-row-with-delete"
-                  >
-                    <input
-                      type="text"
-                      className="answer-key-kv-key-input"
-                      value={editingPageMetaKey === metaKey ? editingPageMetaKeyValue : metaKey}
-                      title="キー（フルパス編集可）"
-                      onChange={(e) => {
-                        if (editingPageMetaKey !== metaKey) {
-                          setEditingPageMetaKey(metaKey)
-                          setEditingPageMetaKeyValue(e.target.value)
-                        } else {
-                          setEditingPageMetaKeyValue(e.target.value)
-                        }
-                      }}
-                      onFocus={() => {
-                        setEditingPageMetaKey(metaKey)
-                        setEditingPageMetaKeyValue(metaKey)
-                      }}
-                      onBlur={() => {
-                        if (editingPageMetaKey === metaKey) {
-                          const n = editingPageMetaKeyValue.trim()
-                          if (n && n !== metaKey) onPageMetaKeyRenameFull(metaKey, n, value)
-                          setEditingPageMetaKey(null)
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (editingPageMetaKey === metaKey && e.key === 'Enter') {
-                          const n = editingPageMetaKeyValue.trim()
-                          if (n && n !== metaKey) onPageMetaKeyRenameFull(metaKey, n, value)
-                          setEditingPageMetaKey(null)
-                          e.currentTarget.blur()
-                        }
-                        if (e.key === 'Escape') {
-                          setEditingPageMetaKey(null)
-                          e.currentTarget.blur()
-                        }
-                      }}
-                      placeholder="例: totals.役務提供.入金額"
-                    />
-                    {metaKey === 'タイプ' || metaKey.endsWith('.タイプ') ? (
-                      <select
-                        className="answer-key-kv-input answer-key-kv-select"
-                        value={value}
-                        onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
-                      >
-                        {(() => {
-                          const opts = [...typeOptions]
-                          if (value != null && String(value).trim() !== '' && !opts.some((o) => o.value === value)) {
-                            opts.unshift({ value: String(value).trim(), label: String(value).trim() })
-                          }
-                          return opts.map((opt) => (
-                            <option key={opt.value || '_'} value={opt.value}>
-                              {opt.label}
-                            </option>
-                          ))
-                        })()}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        className="answer-key-kv-input"
-                        value={value}
-                        onChange={(e) => onPageMetaChange(metaKey, e.target.value)}
-                        placeholder="値"
-                      />
-                    )}
-                    <button
-                      type="button"
-                      className="answer-key-kv-delete-btn"
-                      onClick={() => onPageMetaKeyRemove(metaKey)}
-                      title="このキーを削除"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ))}
-            <div className="answer-key-kv-row answer-key-kv-row-with-delete answer-key-add-row">
-              <input
-                type="text"
-                className="answer-key-kv-key-input"
-                value={newPageMetaKey}
-                onChange={(e) => setNewPageMetaKey(e.target.value)}
-                placeholder="例: totals.役務提供.新規キー"
-                title="フルパスで入力（例: totals.役務提供.入金額）"
-              />
-              <input
-                type="text"
-                className="answer-key-kv-input"
-                value={newPageMetaValue}
-                onChange={(e) => setNewPageMetaValue(e.target.value)}
-                placeholder="値"
-              />
-              <button
-                type="button"
-                className="answer-key-btn answer-key-kv-add-btn"
-                onClick={() => {
-                  onPageMetaKeyAdd(newPageMetaKey, newPageMetaValue)
-                  setNewPageMetaKey('')
-                  setNewPageMetaValue('')
-                }}
-                disabled={!newPageMetaKey.trim()}
-              >
-                キー追加
-              </button>
-            </div>
-          </div>
+          <AnswerKeyPageMetaSection
+            currentPage={currentPage}
+            pageRoleEdits={pageRoleEdits}
+            setPageRoleEdits={setPageRoleEdits}
+            setPageMetaDirtyPages={setPageMetaDirtyPages}
+            currentPageMetaData={currentPageMetaData}
+            pageMetaDirtyPages={pageMetaDirtyPages}
+            groupedPageMetaFields={groupedPageMetaFields}
+            onPageMetaGroupRemove={onPageMetaGroupRemove}
+            editingPageMetaKey={editingPageMetaKey}
+            setEditingPageMetaKey={setEditingPageMetaKey}
+            editingPageMetaKeyValue={editingPageMetaKeyValue}
+            setEditingPageMetaKeyValue={setEditingPageMetaKeyValue}
+            onPageMetaKeyRenameFull={onPageMetaKeyRenameFull}
+            onPageMetaChange={onPageMetaChange}
+            onPageMetaKeyRemove={onPageMetaKeyRemove}
+            typeOptions={typeOptions}
+            newPageMetaKey={newPageMetaKey}
+            setNewPageMetaKey={setNewPageMetaKey}
+            newPageMetaValue={newPageMetaValue}
+            setNewPageMetaValue={setNewPageMetaValue}
+            onPageMetaKeyAdd={onPageMetaKeyAdd}
+          />
           {currentPageRows.length === 0 ? (
             currentPageMetaFields.length > 0 ? null : <p className="answer-key-empty">このページには行がありません。</p>
           ) : (
-            <>
-              <div className="answer-key-meta-section-label">items（キー・値の直接編集）</div>
-              {currentPageRows.map((row: Record<string, unknown>, index: number) => (
-                <div
-                  key={row.item_id as number}
-                  className={`answer-key-kv-block ${dirtyIds.has(row.item_id as number) ? 'answer-key-kv-dirty' : ''}`}
-                >
-                  <div className="answer-key-kv-block-title">items[{index}]</div>
-                  {displayKeys.map((key) => {
-                    const label = KEY_LABELS[key] ?? key
-                    const val = row[key]
-                    const isArray = Array.isArray(val)
-                    const isObject = !isArray && val !== null && typeof val === 'object'
-                    const isComplex = isArray || isObject
-                    const strVal =
-                      val == null
-                        ? ''
-                        : isArray
-                          ? `配列(${(val as unknown[]).length}件)`
-                          : isObject
-                            ? '[オブジェクト]'
-                            : String(val)
-                    const isDataKey = dataKeysForDisplay.includes(key)
-                    const isEditable = editableKeys.has(key)
-                    const keyDisplay =
-                      editingKeyName === key
-                        ? editingKeyValue
-                        : (KEY_LABELS[key] ?? key)
-                    return (
-                      <div key={key} className="answer-key-kv-row answer-key-kv-row-with-delete">
-                        {isDataKey ? (
-                          <input
-                            type="text"
-                            className="answer-key-kv-key-input"
-                            value={editingKeyName === key ? editingKeyValue : keyDisplay}
-                            onChange={(e) => {
-                              setEditingKeyName(key)
-                              setEditingKeyValue(e.target.value)
-                            }}
-                            onBlur={() => {
-                              const n = editingKeyValue.trim()
-                              if (n && n !== key) onRenameKey(key, n)
-                              setEditingKeyName(null)
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                const n = editingKeyValue.trim()
-                                if (n && n !== key) onRenameKey(key, n)
-                                setEditingKeyName(null)
-                              }
-                              if (e.key === 'Escape') setEditingKeyName(null)
-                            }}
-                            onFocus={() => {
-                              setEditingKeyName(key)
-                              setEditingKeyValue(keyDisplay)
-                            }}
-                            placeholder="キー"
-                          />
-                        ) : (
-                          <span className="answer-key-kv-key">{label}</span>
-                        )}
-                        {isEditable ? (
-                          key === 'タイプ' ? (
-                            <select
-                              className="answer-key-kv-input answer-key-kv-select"
-                              value={isComplex ? '' : strVal}
-                              onChange={(e) =>
-                                onValueChange(
-                                  row.item_id as number,
-                                  key,
-                                  e.target.value === '' ? null : e.target.value
-                                )
-                              }
-                            >
-                              {typeOptions.map((opt) => (
-                                <option key={opt.value || '_'} value={opt.value}>
-                                  {opt.label}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className="answer-key-kv-value-with-ku">
-                              <input
-                                type="text"
-                                className="answer-key-kv-input"
-                                value={isComplex ? '' : strVal}
-                                onChange={(e) =>
-                                  onValueChange(
-                                    row.item_id as number,
-                                    key,
-                                    e.target.value === '' ? null : e.target.value
-                                  )
-                                }
-                                placeholder={isComplex ? strVal : undefined}
-                              />
-                              {key === '区' && getKuLabel(val) && (
-                                <span className="answer-key-ku-label" title={`区_mapping: ${strVal} → ${getKuLabel(val)}`}>
-                                  {getKuLabel(val)}
-                                </span>
-                              )}
-                            </span>
-                          )
-                        ) : (
-                          <span className="answer-key-kv-val">
-                            {key === '区' && getKuLabel(val)
-                              ? `${strVal} (${getKuLabel(val)})`
-                              : (strVal || '—')}
-                          </span>
-                        )}
-                        {isDataKey ? (
-                          <button
-                            type="button"
-                            className="answer-key-kv-delete-btn"
-                            onClick={() => onRemoveKey(key)}
-                            title="このキーを削除"
-                          >
-                            ×
-                          </button>
-                        ) : (
-                          <span className="answer-key-kv-delete-placeholder" />
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              ))}
-              <div className="answer-key-kv-row answer-key-add-row answer-key-items-add-key">
-                <input
-                  type="text"
-                  className="answer-key-kv-key-input"
-                  value={newKeyInput}
-                  onChange={(e) => setNewKeyInput(e.target.value)}
-                  placeholder="새 키（모든 행에 추가）"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      onAddKey(newKeyInput)
-                      setNewKeyInput('')
-                    }
-                  }}
-                />
-                <span className="answer-key-kv-add-hint">모든 행에 추가</span>
-                <button
-                  type="button"
-                  className="answer-key-btn answer-key-kv-add-btn"
-                  onClick={() => {
-                    onAddKey(newKeyInput)
-                    setNewKeyInput('')
-                  }}
-                  disabled={!newKeyInput.trim()}
-                >
-                  キー追加
-                </button>
-              </div>
-            </>
+            <AnswerKeyItemsKvSection
+              currentPageRows={currentPageRows}
+              dirtyIds={dirtyIds}
+              displayKeys={displayKeys}
+              dataKeysForDisplay={dataKeysForDisplay}
+              editableKeys={editableKeys}
+              typeOptions={typeOptions}
+              editingKeyName={editingKeyName}
+              setEditingKeyName={setEditingKeyName}
+              editingKeyValue={editingKeyValue}
+              setEditingKeyValue={setEditingKeyValue}
+              onRenameKey={onRenameKey}
+              onValueChange={onValueChange}
+              onRemoveKey={onRemoveKey}
+              onAddKey={onAddKey}
+              getKuLabel={getKuLabel}
+              newKeyInput={newKeyInput}
+              setNewKeyInput={setNewKeyInput}
+            />
           )}
         </div>
       )}
       </div>
       </div>
-      <div className="answer-key-actions">
-        {readOnly ? (
-          <p className="answer-key-status">既にベクターDBに登録された文書です。編集できません。</p>
-        ) : (
-          <button
-            type="button"
-            className="answer-key-btn answer-key-btn-secondary"
-            onClick={handleSaveGrid}
-            disabled={(dirtyIds.size === 0 && pageMetaDirtyPages.size === 0) || saveStatus === 'saving' || saveStatus === 'building'}
-            title="変更をDBにだけ反映します。ベクターDBは作らないので短時間で完了します。"
-          >
-            {saveStatus === 'saving' ? '保存中…' : '保存（DBのみ・ベクターDBなし）'}
-          </button>
-        )}
-      </div>
+      {readOnly && (
+        <p className="answer-key-status">既にベクターDBに登録された文書です。編集できません。</p>
+      )}
       {saveMessage && (
         <p className={`answer-key-status ${saveStatus === 'error' ? 'answer-key-status-error' : ''}`}>
           {saveMessage}

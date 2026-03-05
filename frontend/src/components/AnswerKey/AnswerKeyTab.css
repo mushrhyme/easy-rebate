@@ -40,6 +40,15 @@
   color: #374151;
 }
 
+.answer-key-current-doc {
+  font-size: 0.9rem;
+  color: #374151;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .answer-key-select {
   min-width: 320px;
   padding: 0.5rem 0.75rem;
@@ -891,6 +900,15 @@
 
 .answer-key-btn-primary:hover:not(:disabled) {
   background: #1d4ed8;
+}
+
+/* 保存ボタン: 赤系 */
+.answer-key-btn-save {
+  background: linear-gradient(135deg, #ef5350 0%, #c62828 100%);
+  color: #fff;
+}
+.answer-key-btn-save:hover:not(:disabled) {
+  background: linear-gradient(135deg, #e53935 0%, #b71c1c 100%);
 }
 
 .answer-key-status {

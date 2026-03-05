@@ -102,7 +102,7 @@ export function AnswerKeyLeftPanel({
               pageOcrTextQueries[currentPage - 1]?.data?.ocr_text ??
               (pageOcrTextQueries[currentPage - 1]?.isLoading ? '読み込み中…' : '')
             }
-            placeholder="（OCR 텍스트 없음）"
+            placeholder="（OCRテキストなし）"
             rows={6}
           />
         </div>

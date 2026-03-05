@@ -12,8 +12,14 @@ export interface GridRow {
 export const SYSTEM_ROW_KEYS = ['item_id', 'page_number', 'item_order', 'version']
 export const HIDDEN_ROW_KEYS = new Set([...SYSTEM_ROW_KEYS, '_displayIndex'])
 
+/** 解答作成タブで非表示（検討タブ frozen 由来・임베딩 불필요） */
+export const ANSWER_KEY_HIDDEN_KEYS = new Set([
+  '小売先コード', '小売先CD', '受注先コード', '受注先CD', '商品コード', '商品CD',
+  'frozen_retail_code', 'frozen_dist_code', 'frozen_product_code',
+])
+
 export const KEY_LABELS: Record<string, string> = {
-  page_number: 'ページ',
+  page_number: 'p',
   item_order: '順番',
   得意先: '得意先',
   '商品名': '商品名',
@@ -40,7 +46,8 @@ export interface InitialDocumentForAnswerKey {
 export interface AnswerKeyTabProps {
   initialDocument?: InitialDocumentForAnswerKey | null
   onConsumeInitialDocument?: () => void
-  onRevokeSuccess?: () => void
+  /** 検討タブに復帰 시 현재 편집 중인 문서 정보 전달 → 검토 탭에서 해당 문서·양식지 유지 */
+  onRevokeSuccess?: (doc: { pdf_filename: string; form_type: string | null }) => void
 }
 
 export const CUSTOMER_KEYS = ['得意先名', '得意先様', '得意先', '取引先']

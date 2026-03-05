@@ -36,9 +36,11 @@ export interface UseItemsGridColumnsParams {
   deleteItemPending: boolean
   /** 액션 메뉴에서 "単価" 클릭 시 해당 행으로 단가 후보 모달 열기 */
   onOpenUnitPriceModal: (row: GridRow) => void
+  /** 액션 메뉴에서 "添付" 클릭 시 첨부 파일 모달 열기 */
+  onOpenAttachments?: () => void
   /** true면 편집·추가/삭제·체크박스 비활성 */
   readOnly?: boolean
-  /** detail일 때만 タイプ/受注先CD/小売先CD/商品CD/仕切/本部長/NET 컬럼 표시 */
+  /** detail일 때만 タイプ/受注先コード/小売先コード/商品コード/仕切/本部長/NET 컬럼 표시 */
   pageRole?: string | null
 }
 
@@ -77,6 +79,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     createItemPending,
     deleteItemPending,
     onOpenUnitPriceModal,
+    onOpenAttachments,
     readOnly = false,
     pageRole = null,
   } = params
@@ -177,6 +180,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
               onAdd={() => handleAddRow(itemId)}
               onDelete={() => handleDeleteRow(itemId)}
               onUnitPrice={() => onOpenUnitPriceModal(row)}
+              onAttachments={onOpenAttachments}
               createItemPending={createItemPending}
               deleteItemPending={deleteItemPending}
             />
@@ -225,7 +229,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         ),
       })
 
-      // detail 페이지 한정: タイプ, 受注先CD, 小売先CD, 商品CD, 仕切, 本部長, NET (summary/cover 등에서는 매핑 불필요·혼선 방지)
+      // detail 페이지 한정: タイプ, 受注先コード, 小売先コード, 商品コード, 仕切, 本部長, NET (summary/cover 등에서는 매핑 불필요·혼선 방지)
       if (isDetailPage) {
         cols.push({
           key: 'タイプ',
@@ -272,41 +276,41 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
 
         const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null
         cols.push({
-          key: '受注先CD',
-          name: '受注先CD',
+          key: '受注先コード',
+          name: '受注先コード',
           width: 100,
           minWidth: 80,
           frozen: true,
           resizable: true,
           editable: false,
           renderCell: ({ row }) => {
-            const v = row['受注先CD']
+            const v = row['受注先コード']
             return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
         cols.push({
-          key: '小売先CD',
-          name: '小売先CD',
+          key: '小売先コード',
+          name: '小売先コード',
           width: 100,
           minWidth: 80,
           frozen: true,
           resizable: true,
           editable: false,
           renderCell: ({ row }) => {
-            const v = row['小売先CD']
+            const v = row['小売先コード']
             return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
         cols.push({
-          key: '商品CD',
-          name: '商品CD',
+          key: '商品コード',
+          name: '商品コード',
           width: 100,
           minWidth: 80,
           frozen: true,
           resizable: true,
           editable: false,
           renderCell: ({ row }) => {
-            const v = row['商品CD']
+            const v = row['商品コード']
             return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
@@ -358,7 +362,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
 
     if (hasItems) {
       for (const key of orderedKeys) {
-        if (key === 'customer' || key === 'タイプ' || key === '受注先CD' || key === '小売先CD' || key === '商品CD' || key === '仕切' || key === '本部長') continue
+        if (key === 'customer' || key === 'タイプ' || key === '受注先コード' || key === '小売先コード' || key === '商品コード' || key === '仕切' || key === '本部長') continue
         const firstValue = items[0]?.item_data?.[key]
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))
@@ -469,6 +473,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     createItemPending,
     deleteItemPending,
     onOpenUnitPriceModal,
+    onOpenAttachments,
     readOnly,
     pageRole,
   ])

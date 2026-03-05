@@ -22,6 +22,7 @@ import {
 import { parseCellNum } from './utils'
 import { ComplexFieldDetail } from './ComplexFieldDetail'
 import { UnitPriceMatchModal } from './UnitPriceMatchModal'
+import { AttachmentModal } from './AttachmentModal'
 import { useItemsGridColumns } from './useItemsGridColumns'
 import './ItemsGridRdg.css'
 
@@ -63,6 +64,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const [hoveredRowId, setHoveredRowId] = useState<number | null>(null) // 호버된 행 ID
   const [reviewTooltip, setReviewTooltip] = useState<{ text: string; x: number; y: number } | null>(null) // 1次/2次 증빙 툴팁
   const [unitPriceModalRow, setUnitPriceModalRow] = useState<GridRow | null>(null) // 단가 후보 모달
+  const [attachmentModalOpen, setAttachmentModalOpen] = useState(false) // 첨부 파일 모달
   
   // 컨테이너 너비 측정
   useEffect(() => {
@@ -164,7 +166,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
-      // 검토 탭 frozen: 受注先CD/小売先CD/商品CD → item_data 원천만 사용 (타입과 동일)
+      // 검토 탭 frozen: 受注先コード/小売先コード/商品コード → item_data 원천만 사용 (타입과 동일)
 
       return row
     })
@@ -694,6 +696,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     createItemPending: createItem.isPending,
     deleteItemPending: deleteItem.isPending,
     onOpenUnitPriceModal: setUnitPriceModalRow,
+    onOpenAttachments: () => setAttachmentModalOpen(true),
     readOnly,
     pageRole: pageMetaData?.page_role ?? null,
   })
@@ -1088,7 +1091,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         ...unitPriceModalRow,
         仕切: match.시키리 ?? unitPriceModalRow['仕切'],
         本部長: match.본부장 ?? unitPriceModalRow['本部長'],
-        商品CD: match.제품코드 != null ? String(match.제품코드) : unitPriceModalRow['商品CD'],
+        商品コード: match.제품코드 != null ? String(match.제품코드) : unitPriceModalRow['商品コード'],
       }
       // FINET 01 + 数量単位=CS → 仕切・本部長 *= 入数 (매핑 모달에서 단가 적용 시에도 동일 계산)
       if (data?.form_type === '01' && data?.upload_channel === 'finet' && String(unitPriceModalRow['数量単位'] ?? '').trim() === 'CS') {
@@ -1143,9 +1146,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     [unitPriceModalRow, sessionId, pdfFilename, pageNumber, items, updateItem, data?.form_type, data?.upload_channel]
   )
 
-  /** 동일 得意先CD or 得意先인 행을 그룹 키로 식별 (페이지 내 일괄 적용용) */
+  /** 동일 得意先コード or 得意先인 행을 그룹 키로 식별 (페이지 내 일괄 적용용) */
   const getRetailGroupKey = useCallback((r: GridRow): string => {
-    const code = r['得意先CD'] != null ? String(r['得意先CD']).trim() : ''
+    const code = r['得意先コード'] != null ? String(r['得意先コード']).trim() : ''
     if (code) return `code:${code}`
     const name = String(r['得意先'] ?? r['得意先名'] ?? r['customer'] ?? '').trim()
     return `name:${name}`
@@ -1158,7 +1161,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       setRows((prev) =>
         prev.map((r) =>
           getRetailGroupKey(r) === groupKey
-            ? { ...r, 受注先CD: match.판매처코드, 小売先CD: match.소매처코드 }
+            ? { ...r, 受注先コード: match.판매처코드, 小売先コード: match.소매처코드 }
             : r
         )
       )
@@ -1189,6 +1192,11 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         row={unitPriceModalRow}
         onSelectUnitPrice={handleUnitPriceSelect}
         onSelectRetail={handleRetailSelect}
+      />
+      <AttachmentModal
+        open={attachmentModalOpen}
+        onClose={() => setAttachmentModalOpen(false)}
+        pdfFilename={pdfFilename}
       />
       {/* 복잡한 구조 필드 배지 영역 (좌측) */}
       {/* cover/summary 페이지인 경우 page_meta의 최상위 키들을 배지로 표시 (totals, recipient 등) */}
