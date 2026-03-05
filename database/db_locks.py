@@ -50,7 +50,7 @@ class LocksMixin:
             user_id = user_info['user_id']
             print(f"✅ [acquire_item_lock] 사용자 확인: user_id={user_id}")
             
-            # 먼저 아이템 존재 여부 확인 (current 또는 archive에서)
+            # 아이템 존재 확인 + 락 처리 한 연결로 수행 (풀 점유 시간 단축)
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -59,14 +59,10 @@ class LocksMixin:
                     SELECT item_id FROM items_archive WHERE item_id = %s
                     LIMIT 1
                 """, (item_id, item_id))
-                item_exists = cursor.fetchone()
-                if not item_exists:
+                if not cursor.fetchone():
                     print(f"❌ [acquire_item_lock] 아이템이 존재하지 않음: item_id={item_id}")
                     return False, f"Item not found: item_id={item_id}"
                 print(f"✅ [acquire_item_lock] 아이템 존재 확인: item_id={item_id}")
-            
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
                 
                 # 1. 해당 item_id의 모든 락 확인 및 정리 (current와 archive 모두 확인)
                 cursor.execute("""

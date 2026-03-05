@@ -288,11 +288,11 @@ CREATE TABLE form_field_mappings (
 -- 기본값 시드 (거래처는 코드에서 항상 得意先로 통일, customer 매핑 없음)
 INSERT INTO form_field_mappings (form_code, logical_key, physical_key, is_active)
 VALUES
-    ('01', 'customer_code', '得意先CD', TRUE),
-    ('02', 'customer_code', '得意先CD', TRUE),
-    ('03', 'customer_code', '得意先CD', TRUE),
-    ('04', 'customer_code', '得意先CD', TRUE),
-    ('05', 'customer_code', '得意先CD', TRUE),
+    ('01', 'customer_code', '得意先コード', TRUE),
+    ('02', 'customer_code', '得意先コード', TRUE),
+    ('03', 'customer_code', '得意先コード', TRUE),
+    ('04', 'customer_code', '得意先コード', TRUE),
+    ('05', 'customer_code', '得意先コード', TRUE),
     ('01', 'management_id', '請求伝票番号', TRUE),
     ('02', 'management_id', '請求No（契約No）', TRUE),
     ('03', 'management_id', '請求No', TRUE),
