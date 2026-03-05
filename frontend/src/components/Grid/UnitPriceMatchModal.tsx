@@ -1,7 +1,7 @@
 /**
  * 매핑 모달: 単価(제품) | 代表スーパー(소매처) 탭.
  * 単価: 最終候補 폼(適用 후 수정 가능) + sap_product 검색 → 確定 시 그리드 반영.
- * 代表スーパー: 1) 得意先CD→domae_retail_1, 2) retail_user 유사도, 3) domae_retail_2, 4) RAG. 最終候補는 sap_retail 검색.
+ * 代表スーパー: 1) 得意先コード→domae_retail_1, 2) retail_user 유사도, 3) domae_retail_2, 4) RAG. 最終候補는 sap_retail 검색.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { searchApi } from '@/api/client'
@@ -9,19 +9,19 @@ import type { GridRow } from './types'
 
 /** 最終候補 입력 폼 (適用 후 수정 가능, 確定 시 이 값 사용) */
 export interface RetailFinalForm {
-  受注先CD: string
+  受注先コード: string
   受注先: string
   SAP受注先: string
-  小売先CD: string
+  小売先コード: string
   小売先: string
   SAP小売先: string
 }
 
 const EMPTY_FINAL_FORM: RetailFinalForm = {
-  受注先CD: '',
+  受注先コード: '',
   受注先: '',
   SAP受注先: '',
-  小売先CD: '',
+  小売先コード: '',
   小売先: '',
   SAP小売先: '',
 }
@@ -32,7 +32,7 @@ export interface UnitPriceMatch {
   제품용량?: number | string
   시키리?: number
   본부장?: number
-  JANCD?: string | number
+  JANコード?: string | number
   제품명_similarity?: number
   제품용량_similarity?: number
   _avg_similarity?: number
@@ -74,7 +74,7 @@ function getCustomerName(row: GridRow | null): string {
 
 function getCustomerCode(row: GridRow | null): string {
   if (!row) return ''
-  const v = row['得意先CD']
+  const v = row['得意先コード']
   return v != null ? String(v).trim() : ''
 }
 
@@ -110,7 +110,7 @@ function splitNameAndCapacity(name: string): { baseName: string; capacity: strin
   return { baseName: s.slice(0, m.index).trim(), capacity: cap }
 }
 
-/** 1번 API match에 도매소매처코드가 빠져있을 수 있으므로 得意先CD로 보정 */
+/** 1번 API match에 도매소매처코드가 빠져있을 수 있으므로 得意先コード로 보정 */
 function normalizeByCodeMatch(m: RetailMatch, customerCode: string): RetailMatch {
   return {
     ...m,
@@ -147,14 +147,14 @@ function RetailTable({
             <th className="key-column">得意先</th>
           )}
           {domaeColumn === 'code' && (
-            <th className={keyHeader === 'domae_code' ? 'key-column' : undefined}>得意先CD</th>
+            <th className={keyHeader === 'domae_code' ? 'key-column' : undefined}>得意先コード</th>
           )}
           {domaeColumn === 'name' && (
             <th className={keyHeader === 'domae_name' ? 'key-column' : undefined}>卸小売先名</th>
           )}
-          <th>小売先CD</th>
+          <th>小売先コード</th>
           <th className={keyHeader === 'retail_name' ? 'key-column' : undefined}>小売先名</th>
-          <th>受注先CD</th>
+          <th>受注先コード</th>
           <th>受注先名</th>
           {showSimilarity && <th>類似度</th>}
           <th></th>
@@ -290,10 +290,10 @@ export function UnitPriceMatchModal({
     }
   }, [sapProductQuery])
 
-  /** 小売先CD가 있는데 SAP 필드가 비어 있으면 sap_retail 조회로 채움 (適用 후 누락 방지) */
+  /** 小売先コード가 있는데 SAP 필드가 비어 있으면 sap_retail 조회로 채움 (適用 후 누락 방지) */
   useEffect(() => {
     if (!open || activeTab !== 'retail') return
-    const rc = finalForm.小売先CD.trim()
+    const rc = finalForm.小売先コード.trim()
     if (!rc) return
     const needSap = !finalForm.SAP受注先.trim() || !finalForm.SAP小売先.trim()
     if (!needSap || lastSapFetchedRef.current === rc) return
@@ -310,7 +310,7 @@ export function UnitPriceMatchModal({
         }
       })
       .catch(() => {})
-  }, [open, activeTab, finalForm.小売先CD, finalForm.SAP受注先, finalForm.SAP小売先])
+  }, [open, activeTab, finalForm.小売先コード, finalForm.SAP受注先, finalForm.SAP小売先])
 
   useEffect(() => {
     if (!open || !productName) {
@@ -470,9 +470,9 @@ export function UnitPriceMatchModal({
   const handleSelectToFinal = useCallback(
     (m: RetailMatch) => {
       const baseForm: RetailFinalForm = {
-        受注先CD: m.판매처코드 ?? '',
+        受注先コード: m.판매처코드 ?? '',
         受注先: m.판매처명 ?? '',
-        小売先CD: m.소매처코드 ?? '',
+        小売先コード: m.소매처코드 ?? '',
         小売先: m.소매처명 ?? '',
         SAP受注先: '',
         SAP小売先: '',
@@ -501,8 +501,8 @@ export function UnitPriceMatchModal({
   )
 
   const handleConfirmRetail = () => {
-    const dc = finalForm.受注先CD.trim()
-    const rc = finalForm.小売先CD.trim()
+    const dc = finalForm.受注先コード.trim()
+    const rc = finalForm.小売先コード.trim()
     if (!dc || !rc) return
     onSelectRetail({ 판매처코드: dc, 소매처코드: rc })
     onClose()
@@ -538,10 +538,10 @@ export function UnitPriceMatchModal({
 
   const applySapMatchToForm = useCallback((m: RetailMatch) => {
     setFinalForm({
-      受注先CD: m.판매처코드 ?? '',
+      受注先コード: m.판매처코드 ?? '',
       受注先: m.판매처명 ?? '',
       SAP受注先: m.판매처명 ?? '',
-      小売先CD: m.소매처코드 ?? '',
+      小売先コード: m.소매처코드 ?? '',
       小売先: m.소매처명 ?? '',
       SAP小売先: m.소매처명 ?? '',
     })
@@ -702,7 +702,7 @@ export function UnitPriceMatchModal({
             <>
               <p className="mapping-modal-subtitle">
                 得意先: {customerName || '—'}
-                {customerCode ? ` / 得意先CD: ${customerCode}` : ''}
+                {customerCode ? ` / 得意先コード: ${customerCode}` : ''}
               </p>
 
               <section className="retail-final-section">
@@ -711,13 +711,13 @@ export function UnitPriceMatchModal({
                   <p className="unit-price-match-modal-hint">下で「適用」で候補を反映。反映後も入力で修正できます。</p>
                   <div className="retail-final-form">
                     <label className="retail-final-label">
-                      <span>受注先CD</span>
+                      <span>受注先コード</span>
                       <input
                         type="text"
                         className="retail-final-input"
-                        value={finalForm.受注先CD}
-                        onChange={(e) => setFinalForm((f) => ({ ...f, 受注先CD: e.target.value }))}
-                        placeholder="受注先CD"
+                        value={finalForm.受注先コード}
+                        onChange={(e) => setFinalForm((f) => ({ ...f, 受注先コード: e.target.value }))}
+                        placeholder="受注先コード"
                       />
                     </label>
                     <label className="retail-final-label">
@@ -741,13 +741,13 @@ export function UnitPriceMatchModal({
                       />
                     </label>
                     <label className="retail-final-label">
-                      <span>小売先CD</span>
+                      <span>小売先コード</span>
                       <input
                         type="text"
                         className="retail-final-input"
-                        value={finalForm.小売先CD}
-                        onChange={(e) => setFinalForm((f) => ({ ...f, 小売先CD: e.target.value }))}
-                        placeholder="小売先CD"
+                        value={finalForm.小売先コード}
+                        onChange={(e) => setFinalForm((f) => ({ ...f, 小売先コード: e.target.value }))}
+                        placeholder="小売先コード"
                       />
                     </label>
                     <label className="retail-final-label">
@@ -802,7 +802,7 @@ export function UnitPriceMatchModal({
                   <button
                     type="button"
                     className="retail-confirm-btn"
-                    disabled={!finalForm.受注先CD.trim() || !finalForm.小売先CD.trim()}
+                    disabled={!finalForm.受注先コード.trim() || !finalForm.小売先コード.trim()}
                     onClick={handleConfirmRetail}
                   >
                     確定
@@ -811,7 +811,7 @@ export function UnitPriceMatchModal({
               </section>
 
               <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">1) 得意先CD基準（domae_retail_1）</h4>
+                <h4 className="retail-mapping-section-title">1) 得意先コード基準（domae_retail_1）</h4>
                 {byCode.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
                 {byCode.error && <p className="unit-price-match-modal-error">{byCode.error}</p>}
                 {!byCode.loading && !byCode.error && byCode.skippedReason && (

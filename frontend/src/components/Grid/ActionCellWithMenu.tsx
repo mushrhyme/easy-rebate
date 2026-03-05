@@ -14,6 +14,7 @@ interface ActionCellWithMenuProps {
   onAdd: () => void
   onDelete: () => void
   onUnitPrice: () => void
+  onAttachments?: () => void
   createItemPending: boolean
   deleteItemPending: boolean
 }
@@ -28,6 +29,7 @@ export function ActionCellWithMenu({
   onAdd,
   onDelete,
   onUnitPrice,
+  onAttachments,
   createItemPending,
   deleteItemPending,
 }: ActionCellWithMenuProps) {
@@ -107,6 +109,19 @@ export function ActionCellWithMenu({
       >
         💰 マッピング
       </button>
+      {onAttachments && (
+        <button
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onAttachments()
+          }}
+          className="action-menu-item action-menu-attachments"
+          title="添付ファイル（PDF）"
+        >
+          📎 添付
+        </button>
+      )}
       <button
         onClick={(e) => {
           e.preventDefault()
