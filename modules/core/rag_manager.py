@@ -1294,7 +1294,7 @@ class RAGManager:
                     query_text, top_k, similarity_threshold, form_type
                 )
 
-    # ---- 판매처-소매처 RAG 정답지 전용 인덱스 (得意先 검색 → 受注先CD/小売先CD) ----
+    # ---- 판매처-소매처 RAG 정답지 전용 인덱스 (得意先 검색 → 受注先コード/小売先コード) ----
     def _load_retail_rag_index_from_db(
         self,
     ) -> Tuple[Optional[Any], Dict[str, Any], Dict[str, int], Dict[int, str]]:
@@ -1389,7 +1389,7 @@ class RAGManager:
 
     def build_retail_rag_answer_index(self) -> int:
         """
-        정답지 문서(created_by_user_id IS NOT NULL) item에서 得意先/受注先CD/小売先CD 중복 제거 후
+        정답지 문서(created_by_user_id IS NOT NULL) item에서 得意先/受注先コード/小売先コード 중복 제거 후
         得意先 텍스트만 임베딩해 retail_rag_answer FAISS 인덱스 구축 후 DB 저장.
         반환: 저장된 벡터 수.
         """
@@ -1402,19 +1402,19 @@ class RAGManager:
                 cursor.execute("""
                     SELECT DISTINCT
                         i.item_data->>'得意先' AS "得意先",
-                        i.item_data->>'受注先CD' AS "受注先CD",
-                        i.item_data->>'小売先CD' AS "小売先CD"
+                        i.item_data->>'受注先コード' AS "受注先コード",
+                        i.item_data->>'小売先コード' AS "小売先コード"
                     FROM items_current i
                     INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
                     WHERE d.created_by_user_id IS NOT NULL
-                    ORDER BY "得意先", "受注先CD", "小売先CD"
+                    ORDER BY "得意先", "受注先コード", "小売先コード"
                 """)
                 for row in cursor.fetchall():
                     tokuisaki = (row[0] or "").strip()
                     juchu_cd = (row[1] or "").strip()
                     kouri_cd = (row[2] or "").strip()
                     if tokuisaki:
-                        rows.append({"得意先": tokuisaki, "受注先CD": juchu_cd, "小売先CD": kouri_cd})
+                        rows.append({"得意先": tokuisaki, "受注先コード": juchu_cd, "小売先コード": kouri_cd})
         except Exception as e:
             print(f"⚠️ retail RAG 정답지 조회 실패: {e}")
             return 0
@@ -1431,7 +1431,7 @@ class RAGManager:
         index_to_id = {}
         for i, r in enumerate(rows):
             doc_id = f"retail_{i}"
-            metadata[doc_id] = {"得意先": r["得意先"], "受注先CD": r["受注先CD"], "小売先CD": r["小売先CD"]}
+            metadata[doc_id] = {"得意先": r["得意先"], "受注先コード": r["受注先コード"], "小売先コード": r["小売先コード"]}
             id_to_index[doc_id] = i
             index_to_id[i] = doc_id
         self._save_retail_rag_index_to_db(index, metadata, id_to_index, index_to_id)
@@ -1445,7 +1445,7 @@ class RAGManager:
     ) -> List[Dict[str, Any]]:
         """
         得意先 문자열로 retail_rag_answer 인덱스 검색.
-        반환: [{"得意先", "受注先CD", "小売先CD", "similarity"}, ...]
+        반환: [{"得意先", "受注先コード", "小売先コード", "similarity"}, ...]
         """
         query_text = (query_text or "").strip()
         if not query_text:
@@ -1471,8 +1471,8 @@ class RAGManager:
             data = metadata.get(doc_id, {})
             results.append({
                 "得意先": data.get("得意先", ""),
-                "受注先CD": data.get("受注先CD", ""),
-                "小売先CD": data.get("小売先CD", ""),
+                "受注先コード": data.get("受注先コード", ""),
+                "小売先コード": data.get("小売先コード", ""),
                 "similarity": round(similarity, 4),
             })
         return results

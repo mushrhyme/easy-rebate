@@ -24,6 +24,31 @@ def _parse_num(v: Any) -> Optional[float]:
         return None
 
 
+def _get_item_str(item_dict: Dict[str, Any], key_candidates: tuple) -> str:
+    """키 후보로 값 조회 (키 앞뒤 공백 무시). 반환: str, 없으면 ''."""
+    for k in key_candidates:
+        v = item_dict.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    # 키 이름에 공백 있는 경우: '数量単位 ' 등
+    for k, v in item_dict.items():
+        if v is None:
+            continue
+        if k.strip() in key_candidates:
+            return str(v).strip()
+    return ""
+
+
+def _normalize_cs(s: str) -> str:
+    """数量単位 값을 CS 비교용으로 정규화: 全角ＣＳ→CS, 소문자→대문자."""
+    if not s:
+        return ""
+    s = s.strip()
+    s = s.replace("\uFF23", "C").replace("\uFF33", "S")  # 全角
+    s = s.replace("\uFF43", "c").replace("\uFF53", "s")
+    return s.upper()
+
+
 def apply_finet01_cs_irisu(
     item_dict: Dict[str, Any],
     form_type: Optional[str],
@@ -31,19 +56,28 @@ def apply_finet01_cs_irisu(
 ) -> None:
     """
     FINET 01이고 数量単位가 CS일 때 仕切・本部長에 入数 곱셈 적용 (in-place).
-
-    Args:
-        item_dict: 한 행 아이템 딕셔너리 (仕切, 本部長, 入数, 数量単位 등)
-        form_type: 양식지 번호 (예: "01")
-        upload_channel: 업로드 채널 ("finet" | "mail")
+    form_type은 "01" 또는 "1", 数量単位는 "CS"/"ＣＳ"/"cs" 등 정규화 후 비교.
     """
-    if upload_channel != "finet" or (form_type or "").strip() != "01":
+    ch = (upload_channel or "").strip().lower()
+    ft = (form_type or "").strip()
+    # form_type 01인데 upload_channel 비어 있으면 finet으로 간주 (구 문서 호환)
+    if ch != "finet":
+        if ft in ("01", "1"):
+            ch = "finet"
+        else:
+            return
+    if ft not in ("01", "1"):
         return
-    if (item_dict.get("数量単位") or "").strip() != "CS":
+
+    unit_raw = _get_item_str(item_dict, ("数量単位",))
+    unit_norm = _normalize_cs(unit_raw)
+    if unit_norm != "CS":
         return
-    irisu = _parse_num(item_dict.get("入数"))
+
+    irisu = _parse_num(item_dict.get("入数") or item_dict.get("ケース入数"))
     if irisu is None or irisu <= 0:
         return
+
     for key in ("仕切", "本部長"):
         val = item_dict.get(key)
         num = _parse_num(val)
