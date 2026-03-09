@@ -6,9 +6,10 @@
  */
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
-import { documentsApi, itemsApi, searchApi } from '@/api/client'
+import { documentsApi, itemsApi, searchApi, ragAdminApi } from '@/api/client'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import { useAuth } from '@/contexts/AuthContext'
+import { useToast } from '@/contexts/ToastContext'
 import { getPageImageAbsoluteUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
 import {
@@ -35,8 +36,10 @@ import './AnswerKeyTab.css'
 export type { InitialDocumentForAnswerKey }
 
 export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevokeSuccess }: AnswerKeyTabProps) {
-  useAuth()
+  const { user } = useAuth()
+  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const queryClient = useQueryClient()
+  const { showToast } = useToast()
   const [selectedDoc, setSelectedDoc] = useState<{ pdf_filename: string; total_pages: number } | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   /** 検索タブから「このページのみ」で開いた場合の 실제 페이지 번호. 있으면 브릿지는 이 1페이지만 표시·저장 */
@@ -104,6 +107,29 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     queryFn: () => documentsApi.getDocumentAnswerJson(selectedDoc!.pdf_filename),
     enabled: !!selectedDoc?.pdf_filename,
   })
+
+  const [analyzingPage, setAnalyzingPage] = useState<number | null>(null)
+  const analyzeSinglePageMutation = useMutation({
+    mutationFn: async ({ pdfFilename, pageNumber }: { pdfFilename: string; pageNumber: number }) => {
+      return documentsApi.analyzeSinglePage(pdfFilename, pageNumber)
+    },
+    onSuccess: (_, { pdfFilename }) => {
+      queryClient.invalidateQueries({ queryKey: ['document-answer-json', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['items', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['page-meta', pdfFilename] })
+      setAnalyzingPage(null)
+    },
+    onError: (e: unknown) => {
+      setAnalyzingPage(null)
+      const msg = e && typeof e === 'object' && 'response' in e
+        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        : (e as Error)?.message
+      setSaveMessage(msg ? `ページ分析に失敗しました: ${msg}` : 'ページ分析に失敗しました。')
+      setSaveStatus('error')
+    },
+  })
+
+  // 解答作成は検討タブからブリッジされた1ページのみ表示。ページ遷移の自動分析は検討タブ(検索)でのみ行う。
 
   const generateAnswerMutation = useMutation({
     mutationFn: async ({
@@ -500,26 +526,17 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     setSaveStatus('saving')
     setSaveMessage('')
     try {
-      const pages =
-        bridgeSinglePageNumber != null
-          ? (() => {
-              const pageRows = latestRows.filter((r) => r.page_number === bridgeSinglePageNumber)
-              const single = buildPagesPayload(
-                1,
-                pageRows.map((r) => ({ ...r, page_number: 1 })),
-                pageMetaFlatEdits,
-                () => getPageRoleForSave(bridgeSinglePageNumber),
-                () => buildPageMetaFromEdits(bridgeSinglePageNumber) as Record<string, unknown>
-              )[0]
-              return single ? [{ ...single, page_number: bridgeSinglePageNumber }] : []
-            })()
-          : buildPagesPayload(
-              selectedDoc.total_pages,
-              latestRows,
-              pageMetaFlatEdits,
-              getPageRoleForSave,
-              (p) => buildPageMetaFromEdits(p) as Record<string, unknown>
-            )
+      // Phase 1: 해당 페이지만 저장 (단일 페이지 저장 API 호출)
+      const pageNum = bridgeSinglePageNumber ?? currentPage
+      const pageRows = latestRows.filter((r) => r.page_number === pageNum)
+      const single = buildPagesPayload(
+        1,
+        pageRows.map((r) => ({ ...r, page_number: 1 })),
+        pageMetaFlatEdits,
+        () => getPageRoleForSave(pageNum),
+        () => buildPageMetaFromEdits(pageNum) as Record<string, unknown>
+      )[0]
+      const pages = single ? [{ ...single, page_number: pageNum }] : []
       attachOcrToPages(pages, selectedDoc.pdf_filename, queryClient)
       await documentsApi.saveAnswerJson(selectedDoc.pdf_filename, { pages })
       skipNextSyncRef.current = true
@@ -542,6 +559,18 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     }
   }, [selectedDoc, dirtyIds.size, pageMetaDirtyPages, pageMetaFlatEdits, getPageRoleForSave, buildPageMetaFromEdits, rowsRef, skipNextSyncRef, setDirtyIds, setPageMetaFlatEdits, setPageMetaDirtyPages, setPageRoleEdits, queryClient, bridgeSinglePageNumber])
 
+  // to_do: 保存 버튼 또는 Ctrl+S — 키보드 단축키
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        handleSaveGrid()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleSaveGrid])
+
   const imageUrls = useMemo(() => {
     return pageImageQueries.map((q) => {
       const data = q.data as { image_url?: string } | undefined
@@ -549,12 +578,24 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     })
   }, [pageImageQueries])
 
+  /** Phase 3: 현재 페이지 히스토리 (last_edited_at, is_rag_candidate) — 좌측 패널에 표시 */
+  const currentPageHistory = useMemo(() => {
+    if (!answerJsonFromDb?.pages) return null
+    const pn = bridgeSinglePageNumber ?? currentPage
+    const page = answerJsonFromDb.pages.find((p: { page_number?: number }) => Number(p?.page_number) === pn)
+    if (!page) return null
+    return {
+      last_edited_at: (page as { last_edited_at?: string | null }).last_edited_at ?? null,
+      is_rag_candidate: !!(page as { is_rag_candidate?: boolean }).is_rag_candidate,
+    }
+  }, [answerJsonFromDb?.pages, currentPage, bridgeSinglePageNumber])
+
   return (
     <div className="answer-key-tab">
       <div className="answer-key-header">
         <h2 className="answer-key-title">解答作成</h2>
         <p className="answer-key-desc">
-          検索タブで「解答作成」を押して指定した文書のみここに表示されます。左のPDFを見ながら右のキー・値で正解を編集し、「保存」でDBに反映します。検討タブへは「検討タブに復帰」で戻ります。ベクターDBへの反映は別画面で一括登録できます。
+          検索タブで「解答作成」を押して指定した文書のみここに表示されます。左のPDFを見ながら右のキー・値で正解を編集し、「保存」でDBに反映します。「再分析」で該当ページのみOCR＋RAG＋LLMを再実行してDBを更新できます。検討タブへは「検討タブに復帰」で戻ります。管理者は「学習リクエスト」で該当ページをベクターDBに反映できます。
         </p>
       </div>
 
@@ -588,10 +629,65 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             >
               {saveStatus === 'saving' ? '保存中…' : '保存'}
             </button>
+            <button
+              type="button"
+              className="answer-key-btn answer-key-btn-reanalyze"
+              onClick={() => {
+                if (!selectedDoc) return
+                const pn = bridgeSinglePageNumber ?? currentPage
+                setAnalyzingPage(pn)
+                analyzeSinglePageMutation.mutate(
+                  { pdfFilename: selectedDoc.pdf_filename, pageNumber: pn },
+                  { onSettled: () => setAnalyzingPage(null) }
+                )
+              }}
+              disabled={analyzingPage != null || analyzeSinglePageMutation.isPending}
+              title="該当ページのみ再分析してDBを更新します（OCR＋RAG＋LLM）"
+            >
+              {analyzingPage != null || analyzeSinglePageMutation.isPending ? '分析中…' : '再分析'}
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className="answer-key-btn answer-key-btn-learning"
+                onClick={async () => {
+                  if (!selectedDoc) return
+                  const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
+                  if (hasDirty) {
+                    alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
+                    return
+                  }
+                  try {
+                    await ragAdminApi.learningRequestPage(selectedDoc.pdf_filename, effectivePageNumber)
+                    queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
+                    queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
+                    setSaveMessage('해당 페이지를 벡터 DB에 반영했습니다.')
+                    setSaveStatus('done')
+                    showToast(
+                      '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
+                      'success'
+                    )
+                  } catch (e: any) {
+                    const msg = e?.response?.data?.detail || e?.message || '학습 요청에 실패했습니다.'
+                    setSaveMessage(msg)
+                    setSaveStatus('error')
+                    showToast(msg, 'error')
+                  }
+                }}
+                title="현재 페이지만 벡터 DB에 반영 (관리자 전용)"
+              >
+                学習リクエスト
+              </button>
+            )}
           </>
         )}
       </div>
 
+      {selectedDoc && analyzingPage != null && (
+        <div className="answer-key-analyzing-banner" role="status">
+          페이지 {analyzingPage} 분석 중…
+        </div>
+      )}
       {selectedDoc && pageMetaErrorPageNumbers.length > 0 && (
         <div className="answer-key-meta-error-banner" role="alert">
           一部ページでメタデータを読み込めませんでした (p.{pageMetaErrorPageNumbers.join(', p.')})。該当ページには行・page_metaが無い場合があります。該当ページはスキップするか、検討タブで先にOCR・抽出を実行してください。
@@ -630,6 +726,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             imageSize={imageSize}
             setImageSize={setImageSize}
             pageOcrTextQueries={pageOcrTextQueries}
+            pageHistory={currentPageHistory}
           />
 
           <AnswerKeyRightPanel

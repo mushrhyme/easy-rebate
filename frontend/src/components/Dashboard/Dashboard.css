@@ -231,6 +231,7 @@
   margin-top: 0.5rem;
   width: 100%;
   max-height: 360px;
+  overflow-x: auto;
   overflow-y: auto;
   border: 1px solid #e2e8f0;
   border-radius: 8px;

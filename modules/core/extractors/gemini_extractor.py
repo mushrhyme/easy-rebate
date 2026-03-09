@@ -283,7 +283,7 @@ def extract_pages_with_gemini(
     pdf_path: str,
     gemini_api_key: Optional[str] = None,
     gemini_model: str = "gemini-3-pro-preview",
-        dpi: int = 300,
+        dpi: int = 200,
     use_gemini_cache: bool = False,  # 캐시 비활성화 (DB 사용)
     gemini_cache_path: Optional[str] = None,
     save_images: bool = False,  # 로컬 저장 비활성화 (기본값: False)
@@ -301,7 +301,7 @@ def extract_pages_with_gemini(
         pdf_path: PDF 파일 경로
         gemini_api_key: Gemini API 키 (None이면 환경변수 또는 기본값 사용)
         gemini_model: Gemini 모델 이름
-        dpi: PDF 변환 해상도 (기본값: 300)
+        dpi: PDF 변환 해상도 (기본값: 200)
         use_gemini_cache: Gemini 캐시 사용 여부 (기본값: False, 사용 안 함)
         gemini_cache_path: Gemini 캐시 파일 경로 (사용 안 함)
         save_images: 이미지를 파일로 저장할지 여부 (기본값: False, 사용 안 함)

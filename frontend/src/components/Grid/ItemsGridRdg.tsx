@@ -1055,6 +1055,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     save() {
       void saveAllEditingRows()
     },
+    hasUnsavedEdits() {
+      return editingItemIdsRef.current.size > 0
+    },
     async checkAllFirst() {
       const currentRows = rowsRef.current
       const updates = currentRows

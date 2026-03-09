@@ -150,6 +150,36 @@ export const documentsApi = {
   },
 
   /**
+   * 단일 페이지 분석 (Phase 1). 버튼으로만 실행. 페이지 이동 시 자동 호출 없음.
+   * body: { pdf_filename, page_number } → { success, page }
+   */
+  analyzeSinglePage: async (
+    pdfFilename: string,
+    pageNumber: number
+  ): Promise<{ success: boolean; page: Record<string, unknown> }> => {
+    const response = await client.post<{ success: boolean; page: Record<string, unknown> }>(
+      '/api/documents/analyze-single-page',
+      { pdf_filename: pdfFilename, page_number: pageNumber }
+    )
+    return response.data
+  },
+
+  /**
+   * 이 페이지 이후 전체 재분석 (Phase 1). 병렬 실행. 학습 요청 시 진행 중이면 중단.
+   * body: { pdf_filename, from_page_number } → { success, analyzed, cancelled, from_page, total_pages }
+   */
+  analyzeFromPage: async (
+    pdfFilename: string,
+    fromPageNumber: number
+  ): Promise<{ success: boolean; analyzed: number[]; cancelled: boolean; from_page: number; total_pages: number }> => {
+    const response = await client.post(
+      '/api/documents/analyze-from-page',
+      { pdf_filename: pdfFilename, from_page_number: fromPageNumber }
+    )
+    return response.data
+  },
+
+  /**
    * 文書の解答 answer.json 一式取得（様式別「既存解答」参照用・DB由来）
    */
   getDocumentAnswerJson: async (
@@ -187,26 +217,6 @@ export const documentsApi = {
     by_form_type: Record<string, Array<{ pdf_name: string; relative_path: string | null; total_pages: number }>>
   }> => {
     const response = await client.get('/api/documents/answer-keys-from-img')
-    return response.data
-  },
-
-  /**
-   * ベクターDB反映タブ用: 文書ごとにページ単位の in_vector / modified 一覧
-   */
-  getVectorReflectPages: async (): Promise<{
-    documents: Array<{
-      pdf_filename: string
-      total_pages: number
-      pages: Array<{ page_number: number; in_vector: boolean; modified: boolean }>
-    }>
-  }> => {
-    const response = await client.get<{
-      documents: Array<{
-        pdf_filename: string
-        total_pages: number
-        pages: Array<{ page_number: number; in_vector: boolean; modified: boolean }>
-      }>
-    }>('/api/documents/vector-reflect-pages')
     return response.data
   },
 
@@ -1285,6 +1295,20 @@ export const ragAdminApi = {
       payload.form_type = formType
     }
     const response = await client.post('/api/rag-admin/build-from-learning-pages', payload)
+    return response.data
+  },
+
+  /**
+   * 단일 페이지 학습 요청 (Phase 1). 해당 페이지만 벡터 DB에 반영.
+   */
+  learningRequestPage: async (
+    pdfFilename: string,
+    pageNumber: number
+  ): Promise<{ success: boolean; message: string }> => {
+    const response = await client.post<{ success: boolean; message: string }>(
+      '/api/rag-admin/learning-request-page',
+      { pdf_filename: pdfFilename, page_number: pageNumber }
+    )
     return response.data
   },
 

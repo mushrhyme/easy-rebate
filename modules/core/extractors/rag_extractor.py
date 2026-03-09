@@ -306,10 +306,10 @@ def extract_json_with_rag(
         else:
             progress_callback("벡터 DB에서 유사한 예제 검색 중...")
 
-    # 전체 통합 검색 (form_type=None으로 모든 양식에서 검색, 최상위 유사 예제의 양식지를 따름)
-    effective_form_type = None
-    
-    # 하이브리드 검색 사용 (전체 DB 통합 검색)
+    # 문서에 form_type이 있으면 같은 양식 정답지만 검색 → 유사 형태 새 문서가 같은 양식 예제를 참고하도록
+    effective_form_type = (form_type or "").strip() or None
+
+    # 하이브리드 검색 사용
     similar_examples = rag_manager.search_similar_advanced(
         query_text=ocr_text,
         top_k=top_k,
@@ -319,23 +319,26 @@ def extract_json_with_rag(
         form_type=effective_form_type,
     )
     
-    # 검색 결과가 없으면 threshold를 낮춰서 재검색 (notepad 예제와 동일하게 최상위 결과 사용)
+    # 검색 결과가 없으면: 같은 양식에서도 없으면 양식 제한 해제 후 재검색, 그다음 threshold 완화
     if not similar_examples:
-        print(f"  ⚠️ 검색 결과 없음 (threshold: {similarity_threshold}), threshold를 0.0으로 낮춰 재검색...")
+        if effective_form_type:
+            similar_examples = rag_manager.search_similar_advanced(
+                query_text=ocr_text,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+                search_method=search_method,
+                hybrid_alpha=hybrid_alpha,
+                form_type=None,
+            )
+    if not similar_examples:
         similar_examples = rag_manager.search_similar_advanced(
             query_text=ocr_text,
-            top_k=1,  # 최상위 1개만
-            similarity_threshold=0.0,  # threshold 무시
+            top_k=1,
+            similarity_threshold=0.0,
             search_method=search_method,
             hybrid_alpha=hybrid_alpha,
-            form_type=effective_form_type,
+            form_type=effective_form_type or None,
         )
-        if similar_examples:
-            score_key = "hybrid_score" if "hybrid_score" in similar_examples[0] else \
-                       "final_score" if "final_score" in similar_examples[0] else \
-                       "similarity"
-            score_value = similar_examples[0].get(score_key, 0)
-            print(f"  ✅ 재검색 성공: {score_key}: {score_value:.4f} (threshold 무시하고 최상위 결과 사용)")
     
     # RAG에서 선택된 최상위 예제 메타데이터 (문서/페이지/form_type)를 추출해 둔다.
     # - debug JSON 저장뿐만 아니라, LLM 결과(JSON)에도 _rag_reference로 포함시키기 위함.
@@ -364,52 +367,38 @@ def extract_json_with_rag(
         else:
             progress_callback("유사한 예제 없음 (예제 없이 진행)")
     
-    # 디버깅: OCR 텍스트 저장
+    # OCR 텍스트 저장 (정답지/브릿지에서 재사용 시 debug2에서 읽음)
     if debug_dir and page_num:
         try:
-            # 디버깅 폴더가 없으면 생성
             os.makedirs(debug_dir, exist_ok=True)
-            if not os.path.exists(debug_dir):
-                raise Exception(f"디버깅 폴더 생성 실패: {debug_dir}")
-            
             ocr_file = os.path.join(debug_dir, f"page_{page_num}_ocr_text.txt")
             with open(ocr_file, 'w', encoding='utf-8') as f:
                 f.write(ocr_text)
-            # print(f"  💾 디버깅: OCR 텍스트 저장 완료 - {ocr_file}")
-            
-            # RAG 검색 결과 저장
-            if similar_examples and top_example_metadata:
+        except Exception:
+            pass
+        # debug2: RAG 검색 결과 (rag_example.json)
+        if similar_examples and top_example_metadata:
+            try:
                 rag_example_file = os.path.join(debug_dir, f"page_{page_num}_rag_example.json")
                 top_example = similar_examples[0]
-
-                # NumPy 타입을 Python 네이티브 타입으로 변환
                 example_data = {
                     "similarity": top_example.get('similarity', 0),
                     "ocr_text": top_example.get('ocr_text', ''),
                     "answer_json": top_example.get('answer_json', {}),
-                    # 어떤 문서를 참조했는지 확인하기 위한 정보
                     "reference": top_example_metadata,
                 }
-                # 추가 점수 필드도 포함 (hybrid_score, bm25_score 등)
                 if 'hybrid_score' in top_example:
                     example_data["hybrid_score"] = top_example.get('hybrid_score', 0)
                 if 'bm25_score' in top_example:
                     example_data["bm25_score"] = top_example.get('bm25_score', 0)
                 if 'final_score' in top_example:
                     example_data["final_score"] = top_example.get('final_score', 0)
-                
-                # NumPy 타입 변환 후 JSON 저장
                 example_data = convert_numpy_types(example_data)
                 with open(rag_example_file, 'w', encoding='utf-8') as f:
                     json.dump(example_data, f, ensure_ascii=False, indent=2)
-                # print(f"  💾 디버깅: RAG 예제 저장 완료 - {rag_example_file}")
-            else:
-                print(f"  💾 디버깅: RAG 예제 없음")
-        except Exception as debug_error:
-            import traceback
-            print(f"⚠️ 디버깅 정보 저장 실패: {debug_error}")
-            print(f"  상세:\n{traceback.format_exc()}")
-    
+            except Exception:
+                pass
+
     # 2. 프롬프트 구성 (include_bbox이고 ocr_words 있을 때만 단어 인덱스·좌표용 지시 추가)
     prompt_template = load_rag_prompt()
     text_for_prompt = ocr_text
@@ -450,31 +439,16 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         )
     if word_index_instruction:
         prompt = prompt.replace("ANSWER:\n", word_index_instruction.strip() + "\n\nANSWER:\n", 1)
-    
-    # 디버깅: 프롬프트 저장 (항상 저장)
-    try:
-        # debug_dir이 없으면 프로젝트 루트의 debug 폴더에 저장
-        if not debug_dir:
-            project_root = get_project_root()  # 이미 상단에서 import됨
-            debug_dir = project_root / "debug"
-            debug_dir.mkdir(parents=True, exist_ok=True)
-            debug_dir = str(debug_dir)
-        
-        # page_num이 없으면 타임스탬프 사용
-        if page_num:
+
+    # debug2: 프롬프트 저장 (prompt.txt)
+    if debug_dir and page_num:
+        try:
             prompt_file = os.path.join(debug_dir, f"page_{page_num}_prompt.txt")
-        else:
-            timestamp = int(time.time())
-            prompt_file = os.path.join(debug_dir, f"prompt_{timestamp}.txt")
-        
-        with open(prompt_file, 'w', encoding='utf-8') as f:
-            f.write(prompt)
-        # print(f"  💾 프롬프트 저장 완료: {prompt_file}")
-    except Exception as debug_error:
-        import traceback
-        print(f"⚠️ 프롬프트 저장 실패: {debug_error}")
-        print(f"  상세:\n{traceback.format_exc()}")
-    
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(prompt)
+        except Exception:
+            pass
+
     # 3. LLM API 호출 (provider에 따라 Gemini 또는 GPT 사용)
     if progress_callback:
         progress_callback(f"🤖 LLM ({model_name})에 요청 중...")
@@ -486,7 +460,6 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             import google.generativeai as genai
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name)
-            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature}")
             gen_config = {"max_output_tokens": 8000, "temperature": temperature}
             response = model.generate_content(prompt, generation_config=gen_config)
             llm_end_time = time.time()
@@ -498,17 +471,9 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                 if hasattr(part, "text") and part.text:
                     result_parts.append(part.text)
             result_text = "".join(result_parts) if result_parts else ""
-            usage = None
-            if hasattr(response, "usage_metadata") and response.usage_metadata:
-                um = response.usage_metadata
-                usage = f"prompt={getattr(um, 'prompt_token_count', 'N/A')}, completion={getattr(um, 'candidates_token_count', 'N/A')}"
-            print(f"  📥 API 응답: 길이={len(result_text) if result_text else 0} 문자, 소요 시간={llm_duration:.2f}초")
-            if usage:
-                print(f"  📊 토큰 사용량: {usage}")
         else:
             # GPT (OpenAI) 사용
             client = OpenAI(api_key=api_key)
-            print(f"  📝 API 호출: 프롬프트 길이={len(prompt)} 문자, 모델={model_name}, temperature={temperature}")
             api_params = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
@@ -522,28 +487,8 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                 llm_end_time = time.time()
                 llm_duration = llm_end_time - llm_start_time
                 result_text = response.choices[0].message.content or ""
-                usage = response.usage if hasattr(response, "usage") else None
-                if usage:
-                    print(f"  📊 토큰 사용량: prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
             except Exception as api_error:
-                llm_end_time = time.time()
-                llm_duration = llm_end_time - llm_start_time
-                print(f"  ❌ API 호출 실패 (소요 시간: {llm_duration:.2f}초): {api_error}")
                 raise
-            print(f"  📥 API 응답: 길이={len(result_text) if result_text else 0} 문자, 소요 시간={llm_duration:.2f}초")
-        
-        # 디버깅: LLM 원본 응답 저장
-        if debug_dir and page_num:
-            try:
-                llm_response_file = os.path.join(debug_dir, f"page_{page_num}_llm_response.txt")
-                with open(llm_response_file, 'w', encoding='utf-8') as f:
-                    f.write(result_text)
-                # print(f"  💾 디버깅: LLM 응답 저장 완료 - {llm_response_file}")
-            except Exception as debug_error:
-                import traceback
-                print(f"⚠️ LLM 응답 저장 실패: {debug_error}")
-                print(f"  상세:\n{traceback.format_exc()}")
-        
         if progress_callback:
             progress_callback("LLM 응답 수신 완료, JSON 파싱 중...")
         
@@ -611,8 +556,6 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             # result_json이 딕셔너리가 아닌 경우 처리 (리스트인 경우 등)
             if not isinstance(result_json, dict):
                 if isinstance(result_json, list):
-                    # 리스트인 경우: items 배열로 간주하고 딕셔너리로 변환
-                    print(f"  ⚠️ LLM 응답이 리스트 형식입니다. 딕셔너리로 변환합니다.")
                     result_json = {
                         "items": result_json,
                         "page_role": "detail"
@@ -640,21 +583,13 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             # null 값 정규화: items가 null이면 빈 리스트로, page_role이 null이면 기본값으로
             if result_json.get("items") is None:
                 result_json["items"] = []
-                print(f"  ⚠️ items가 null이어서 빈 리스트로 변환했습니다.")
-            
             if result_json.get("page_role") is None:
-                result_json["page_role"] = "detail"  # 기본값
-                print(f"  ⚠️ page_role이 null이어서 'detail'로 변환했습니다.")
-            
-            # items가 리스트가 아닌 경우 빈 리스트로 변환
+                result_json["page_role"] = "detail"
             if not isinstance(result_json.get("items"), list):
-                print(f"  ⚠️ items가 리스트가 아닙니다 ({type(result_json.get('items'))}). 빈 리스트로 변환합니다.")
                 result_json["items"] = []
-            # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
             items_list = result_json.get("items") or []
             if len(items_list) == 0 and result_json.get("page_role") == "detail":
                 result_json["page_role"] = "cover" if page_num == 1 else "summary"
-                print(f"  ⚠️ items가 비어 있어 page_role을 '{result_json['page_role']}'로 보정했습니다.")
 
             # items 내부의 각 항목에서 NaN 값 정규화
             if isinstance(result_json.get("items"), list):
@@ -663,7 +598,6 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                         for key in ['quantity', 'case_count', 'bara_count', 'units_per_case', 'amount']:
                             if key in item and isinstance(item[key], float) and (math.isnan(item[key]) or math.isinf(item[key])):
                                 item[key] = None
-                                print(f"  ⚠️ {key}가 NaN이어서 null로 변환했습니다.")
             # 金額 등 금액 필드: OCR 점선이 "1:500"처럼 읽힌 경우 콜론 제거 후처리 ("1500")
             if isinstance(result_json.get("items"), list):
                 for item in result_json["items"]:
@@ -687,20 +621,16 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             # RAG에서 사용한 참조 예제 메타데이터를 LLM 결과에도 포함시켜,
             # 이후 DB 저장 시 form_type 등을 결정할 때 사용할 수 있게 한다.
             if top_example_metadata:
-                # 충돌을 피하기 위해 내부 메타 키 이름은 _rag_reference로 사용
                 result_json["_rag_reference"] = top_example_metadata
 
-            # 디버깅: 파싱된 JSON 저장
+            # debug2: 파싱된 JSON 저장 (llm_response_parsed.json)
             if debug_dir and page_num:
                 try:
                     parsed_json_file = os.path.join(debug_dir, f"page_{page_num}_llm_response_parsed.json")
                     with open(parsed_json_file, 'w', encoding='utf-8') as f:
                         json.dump(result_json, f, ensure_ascii=False, indent=2)
-                    # print(f"  💾 디버깅: 파싱된 JSON 저장 완료 - {parsed_json_file}")
-                except Exception as debug_error:
-                    import traceback
-                    print(f"⚠️ 파싱된 JSON 저장 실패: {debug_error}")
-                    print(f"  상세:\n{traceback.format_exc()}")
+                except Exception:
+                    pass
         except json.JSONDecodeError as e:
             # 파싱 실패 시 더 자세한 정보 제공
             error_pos = e.pos if hasattr(e, 'pos') else None

@@ -286,7 +286,7 @@ class AzureExtractor:
         self,
         pdf_path: Path,
         page_num: int,
-        dpi: int = 300,
+        dpi: int = 200,
     ) -> Optional[str]:
         """PDF 한 페이지를 이미지로 변환 후 Azure OCR로 텍스트 추출."""
         cache_path = self.get_cache_path(pdf_path, page_num)
@@ -321,7 +321,7 @@ class AzureExtractor:
         self,
         pdf_path: Path,
         page_num: int,
-        dpi: int = 300,
+        dpi: int = 200,
     ) -> Optional[dict]:
         """PDF 한 페이지를 이미지로 변환 후 Azure OCR raw 결과(Upstage 호환 형식) 반환."""
         try:

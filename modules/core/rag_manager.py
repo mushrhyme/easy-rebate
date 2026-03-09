@@ -6,6 +6,9 @@ FAISS를 사용하여 OCR 텍스트와 정답 JSON 쌍을 저장하고 검색합
 
 import os
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 import numpy as np
 from typing import Dict, Any, List, Optional, Set, Tuple
 from threading import Lock
@@ -74,6 +77,7 @@ class RAGManager:
             import psycopg2
             self.db = get_db()
             self._ensure_vector_index_table_exists()
+            self._ensure_pgvector_table_exists()
         else:
             os.makedirs(persist_directory, exist_ok=True, mode=0o755)
             self.base_index_path = os.path.join(persist_directory, "base.faiss")
@@ -217,7 +221,137 @@ class RAGManager:
                         """)
         except Exception as e:
             print(f"⚠️ 테이블 생성 중 오류 발생: {e}")
-    
+
+    def _ensure_pgvector_table_exists(self) -> None:
+        """Phase 2: rag_page_embeddings 테이블 생성 (pgvector). 차원 384 = paraphrase-multilingual-MiniLM-L12-v2."""
+        if not self.use_db or not getattr(self, "db", None):
+            return
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+                if not cursor.fetchone():
+                    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    conn.commit()
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_schema = 'public' AND table_name = 'rag_page_embeddings'
+                    )
+                """)
+                if not cursor.fetchone()[0]:
+                    cursor.execute("""
+                        CREATE TABLE rag_page_embeddings (
+                            id SERIAL PRIMARY KEY,
+                            pdf_filename VARCHAR(500) NOT NULL,
+                            page_number INTEGER NOT NULL,
+                            ocr_text TEXT NOT NULL,
+                            embedding vector(384) NOT NULL,
+                            answer_json JSONB NOT NULL,
+                            form_type VARCHAR(10),
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            UNIQUE(pdf_filename, page_number)
+                        )
+                    """)
+                    cursor.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_form_type ON rag_page_embeddings(form_type)"
+                    )
+                    conn.commit()
+        except Exception as e:
+            print(f"⚠️ pgvector 테이블 생성 중 오류 (무시 가능): {e}")
+
+    def _search_vector_only_pgvector(
+        self,
+        query_embedding: np.ndarray,
+        top_k: int,
+        similarity_threshold: float,
+        form_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Phase 2: pgvector 테이블에서 유사 검색. 반환 형식은 _create_search_result와 동일."""
+        if not self.use_db or not getattr(self, "db", None):
+            return []
+        from modules.utils.hash_utils import get_page_key
+        try:
+            # 벡터를 PostgreSQL vector 리터럴 문자열로 전달 (pgvector Python 패키지 없이 동작)
+            emb_list = query_embedding.flatten().tolist()
+            emb_str = "[" + ",".join(str(float(x)) for x in emb_list) + "]"
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                if form_type and form_type.strip():
+                    cursor.execute("""
+                        SELECT pdf_filename, page_number, ocr_text, answer_json, form_type,
+                               (embedding <=> %s::vector) AS dist
+                        FROM rag_page_embeddings
+                        WHERE form_type = %s
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    """, (emb_str, form_type, emb_str, top_k * 2))
+                else:
+                    cursor.execute("""
+                        SELECT pdf_filename, page_number, ocr_text, answer_json, form_type,
+                               (embedding <=> %s::vector) AS dist
+                        FROM rag_page_embeddings
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT %s
+                    """, (emb_str, emb_str, top_k * 2))
+                rows = cursor.fetchall()
+            results = []
+            for row in rows:
+                pdf_filename, page_number, ocr_text, answer_json, ft, dist = row[0], row[1], row[2], row[3], row[4], float(row[5])
+                similarity = max(0.0, 1.0 - (dist / 100.0))
+                if similarity < similarity_threshold:
+                    continue
+                pdf_name = pdf_filename[:-4] if (pdf_filename or "").lower().endswith(".pdf") else (pdf_filename or "")
+                page_key = get_page_key(pdf_name, page_number)
+                metadata = {"pdf_name": pdf_name, "page_num": page_number, "form_type": ft or ""}
+                data = {"ocr_text": ocr_text or "", "answer_json": answer_json or {}, "metadata": metadata}
+                results.append(self._create_search_result(page_key, data, similarity, dist, "pgvector"))
+            seen = set()
+            unique = []
+            for r in sorted(results, key=lambda x: x["similarity"], reverse=True):
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    unique.append(r)
+            out = unique[:top_k]
+            logger.info("RAG 검색: pgvector(최신 학습 반영) 사용, 결과 %d건", len(out))
+            return out
+        except Exception as e:
+            logger.warning("pgvector 검색 실패: %s", e)
+            return []
+
+    def upsert_page_embedding(
+        self,
+        pdf_filename: str,
+        page_number: int,
+        ocr_text: str,
+        answer_json: Dict[str, Any],
+        form_type: Optional[str] = None,
+    ) -> bool:
+        """Phase 2: 해당 (pdf_filename, page_number) 1건을 pgvector에 INSERT 또는 UPDATE."""
+        if not self.use_db or not getattr(self, "db", None):
+            return False
+        from modules.utils.text_normalizer import normalize_ocr_text
+        processed = self.preprocess_ocr_text(normalize_ocr_text(ocr_text or "", use_fullwidth=True))
+        model = self._get_embedding_model()
+        emb_arr = model.encode([processed], convert_to_numpy=True).astype("float32").flatten().tolist()
+        emb_str = "[" + ",".join(str(float(x)) for x in emb_arr) + "]"
+        form_val = (form_type or "").strip() or None
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO rag_page_embeddings (pdf_filename, page_number, ocr_text, embedding, answer_json, form_type, updated_at)
+                    VALUES (%s, %s, %s, %s::vector, %s::jsonb, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (pdf_filename, page_number)
+                    DO UPDATE SET ocr_text = EXCLUDED.ocr_text, embedding = EXCLUDED.embedding,
+                        answer_json = EXCLUDED.answer_json, form_type = EXCLUDED.form_type, updated_at = CURRENT_TIMESTAMP
+                """, (pdf_filename, page_number, ocr_text or "", emb_str, json.dumps(answer_json or {}, ensure_ascii=False), form_val))
+                conn.commit()
+            return True
+        except Exception as e:
+            print(f"⚠️ pgvector upsert 실패: {e}")
+            return False
+
     def _load_index_from_db(self, form_type: Optional[str] = None) -> Tuple[Optional[Any], Dict[str, Any], Dict[str, int], Dict[int, str]]:
         """
         DB에서 FAISS 인덱스를 로드합니다. 단일 글로벌 인덱스만 사용합니다.
@@ -1114,8 +1248,16 @@ class RAGManager:
         processed_query = self.preprocess_ocr_text(query_text)
         model = self._get_embedding_model()
         query_embedding = model.encode([processed_query], convert_to_numpy=True).astype('float32')
+        # 재분석 시 최신 벡터(학습 리퀘스트 반영분) 사용: use_db면 pgvector(rag_page_embeddings) 직접 조회
+        if self.use_db and getattr(self, "db", None):
+            try:
+                return self._search_vector_only_pgvector(
+                    query_embedding, top_k, similarity_threshold, form_type
+                )
+            except Exception as e:
+                print(f"⚠️ pgvector 검색 실패, FAISS 폴백: {e}")
         all_results = []
-        # 단일 글로벌 인덱스만 사용 (form_type 무시)
+        # FAISS 경로 (use_db=False)
         index = self.index
         metadata = self.metadata
         id_to_index = self.id_to_index

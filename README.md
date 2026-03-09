@@ -133,3 +133,7 @@ API는 백엔드 주소를 가리키도록 `frontend` 쪽 설정(`.env` 또는 `
 
 - **DB 스키마:** `database/SCHEMA.md`
 - **SAP 엑셀·RAG·처리 흐름:** `sap_upload.md` 등
+
+
+
+python -m modules.core.build_pgvector_db

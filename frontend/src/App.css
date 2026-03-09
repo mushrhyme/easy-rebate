@@ -591,3 +591,71 @@
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
+
+/* 전역 토스트 (학습 리クエ스트 성공 등) */
+.app-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  max-width: 28rem;
+  padding: 0.875rem 1rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  z-index: 10000;
+  animation: app-toast-in 0.25s ease-out;
+}
+.app-toast-success {
+  background: #0f766e;
+  color: #fff;
+}
+.app-toast-error {
+  background: #b91c1c;
+  color: #fff;
+}
+.app-toast-icon {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.875rem;
+  font-weight: bold;
+}
+.app-toast-icon-error {
+  background: rgba(255, 255, 255, 0.4);
+}
+.app-toast-message {
+  flex: 1;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.app-toast-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.85;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.app-toast-close:hover {
+  opacity: 1;
+}
+@keyframes app-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

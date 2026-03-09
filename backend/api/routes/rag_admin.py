@@ -19,6 +19,7 @@ from psycopg2.extras import RealDictCursor
 
 from database.registry import get_db
 from backend.core.auth import get_current_user
+from backend.api.routes.documents import request_cancel_reanalysis_for_document, _ensure_phase1_rag_columns
 from modules.core.build_faiss_db import build_faiss_db
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.hash_utils import compute_page_hash, get_page_key
@@ -35,29 +36,36 @@ def _ensure_rag_candidate_column(db):
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            # 컬럼 존재 여부 확인
             cursor.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'page_data_current' 
-                AND column_name = 'is_rag_candidate'
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'page_data_current' AND column_name = 'is_rag_candidate'
             """)
             if cursor.fetchone():
-                # 컬럼이 이미 존재
                 return
-            
-            # 컬럼이 없으면 추가
-            cursor.execute("""
-                ALTER TABLE page_data_current
-                ADD COLUMN IF NOT EXISTS is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE
-            """)
-            cursor.execute("""
-                ALTER TABLE page_data_archive
-                ADD COLUMN IF NOT EXISTS is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE
-            """)
+            cursor.execute("ALTER TABLE page_data_current ADD COLUMN IF NOT EXISTS is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE")
+            cursor.execute("ALTER TABLE page_data_archive ADD COLUMN IF NOT EXISTS is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE")
             conn.commit()
-    except Exception as e:
-        # 마이그레이션 실패해도 계속 진행 (이미 컬럼이 있을 수도 있음)
+    except Exception:
+        pass
+
+
+def _ensure_last_edited_columns(db):
+    """last_edited_at, last_edited_by_user_id 컬럼이 없으면 추가 (Phase 1 마이그레이션)"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'page_data_current' AND column_name = 'last_edited_at'
+            """)
+            if cursor.fetchone():
+                return
+            cursor.execute("ALTER TABLE page_data_current ADD COLUMN IF NOT EXISTS last_edited_at TIMESTAMPTZ NULL")
+            cursor.execute("ALTER TABLE page_data_current ADD COLUMN IF NOT EXISTS last_edited_by_user_id INTEGER NULL")
+            cursor.execute("ALTER TABLE page_data_archive ADD COLUMN IF NOT EXISTS last_edited_at TIMESTAMPTZ NULL")
+            cursor.execute("ALTER TABLE page_data_archive ADD COLUMN IF NOT EXISTS last_edited_by_user_id INTEGER NULL")
+            conn.commit()
+    except Exception:
         pass
 
 
@@ -72,38 +80,38 @@ def _ensure_admin(user: Dict[str, Any]) -> None:
 def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     """
     학습 리퀘스트 시 임베딩용 OCR 추출.
-    해답 생성 브릿지 문서는 debug2가 있으므로 DB → debug2만 사용, Azure/PDF 호출 없음.
+    우선순위: page_meta._ocr_text → page_data_current.ocr_text → debug2 파일. (debug2 없어도 DB ocr_text로 동작)
     """
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
-    ocr_text = ""
 
-    # 0) DB 저장분 (_ocr_text)
+    # 0) DB: page_meta._ocr_text 또는 ocr_text 컬럼
     try:
         with db.get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                "SELECT page_meta FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
+                "SELECT page_meta, ocr_text FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
                 (pdf_filename, page_number),
             )
             row = cur.fetchone()
-            if row and row[0]:
-                meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if isinstance(row[0], str) else None)
-                if isinstance(meta, dict) and meta.get("_ocr_text"):
+            if row:
+                meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if row[0] and isinstance(row[0], str) else None)
+                if isinstance(meta, dict) and (meta.get("_ocr_text") or "").strip():
                     return (meta["_ocr_text"] or "").strip()
+                if row[1] and (row[1] or "").strip():
+                    return (row[1] or "").strip()
     except Exception:
         pass
 
-    # 1) debug2 — 외부 API 호출 없음
+    # 1) debug2 (선택) — 없어도 위에서 DB ocr_text로 처리됨
     try:
         root = get_project_root()
         debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
         if debug2_file.exists():
-            ocr_text = debug2_file.read_text(encoding="utf-8").strip()
+            return debug2_file.read_text(encoding="utf-8").strip()
     except Exception:
         pass
 
-    # 없으면 빈 문자열 반환 (해당 페이지만 스킵, Azure/PDF 호출 안 함)
-    return ocr_text.strip()
+    return ""
 
 
 @router.post("/build")
@@ -160,17 +168,44 @@ async def get_vector_db_status(
 ):
     """
     현재 벡터 DB 상태 조회. 로그인 사용자 전체 허용 (읽기 전용).
-    - total_vectors: 인덱스 전체 벡터 수 (미사용 포함)
-    - merged_pages: rag_learning_status_current에서 status='merged'인 페이지 수 (사용 중인 정답지)
-    - unused_pages: total_vectors - merged_pages (미사용 정답지)
-    - answer_key_pages_in_period: year/month 지정 시 해당 연월에 merged된 페이지 수
+    - total_vectors: pgvector(rag_page_embeddings) 우선, 없으면 FAISS(rag_vector_index) 벡터 수
+    - merged_pages: pgvector 사용 시 = total_vectors(전부 사용중), 아니면 rag_learning_status_current merged 수
+    - unused_pages: total_vectors - merged_pages
+    - answer_key_pages_in_period: year/month 지정 시 해당 연월 merged 수 (pgvector 시 updated_at 기준)
     """
     rag_manager = get_rag_manager()
-    total_vectors = rag_manager.count_examples()
 
     def _fetch_status_sync(database, y, m):
         with database.get_connection() as conn:
             cursor = conn.cursor()
+            # pgvector(rag_page_embeddings)가 있으면 여기 기준으로 집계 — 학습リクエスト 반영
+            cursor.execute("""
+                SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'rag_page_embeddings')
+            """)
+            row = cursor.fetchone()
+            use_pgvector = bool(row and row[0])
+
+            if use_pgvector:
+                cursor.execute("SELECT COUNT(*) FROM rag_page_embeddings")
+                total_vectors = int(cursor.fetchone()[0] or 0)
+                cursor.execute("""
+                    SELECT COALESCE(form_type, '') AS form_type, COUNT(*) AS cnt
+                    FROM rag_page_embeddings GROUP BY form_type ORDER BY form_type
+                """)
+                per_form = [{"form_type": (row[0] or "").strip() or None, "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
+                merged_pages = total_vectors  # pgvector 행은 모두 검색에 사용 중
+                answer_key_pages_in_period = None
+                if y is not None and m is not None:
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM rag_page_embeddings
+                        WHERE updated_at >= date_trunc('month', make_date(%s, %s, 1))
+                          AND updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
+                    """, (y, m, y, m))
+                    answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
+                return total_vectors, per_form, merged_pages, answer_key_pages_in_period
+
+            # FAISS(rag_vector_index) + rag_learning_status_current 기준
+            total_vectors = rag_manager.count_examples()
             cursor.execute("SELECT form_type, SUM(vector_count) AS total_vectors FROM rag_vector_index GROUP BY form_type ORDER BY form_type")
             per_form = [{"form_type": row[0], "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
             cursor.execute("SELECT COUNT(*) FROM rag_learning_status_current WHERE status = 'merged'")
@@ -185,9 +220,10 @@ async def get_vector_db_status(
                            OR EXISTS (SELECT 1 FROM documents_archive a WHERE a.pdf_filename = r.pdf_filename AND a.created_by_user_id IS NOT NULL))
                 """, (y, m, y, m))
                 answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
-        return per_form, merged_pages, answer_key_pages_in_period
+            return total_vectors, per_form, merged_pages, answer_key_pages_in_period
+
     db = get_db()
-    per_form, merged_pages, answer_key_pages_in_period = await db.run_sync(_fetch_status_sync, db, year, month)
+    total_vectors, per_form, merged_pages, answer_key_pages_in_period = await db.run_sync(_fetch_status_sync, db, year, month)
     unused_pages = max(0, total_vectors - merged_pages)
     return {
         "total_vectors": int(total_vectors),
@@ -256,6 +292,153 @@ async def set_learning_flag(
     db = get_db()
     await db.run_sync(_set_flag_sync, db)
     return {"success": True}
+
+
+class LearningRequestPageRequest(BaseModel):
+    """단일 페이지 학습 요청 (Phase 1)"""
+    pdf_filename: str
+    page_number: int
+
+
+@router.post("/learning-request-page")
+async def learning_request_page(
+    body: LearningRequestPageRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    해당 페이지만 벡터 DB에 반영. is_rag_candidate=TRUE 설정 후 pgvector에 INSERT/UPDATE.
+    Phase 2: pgvector 사용. 이미 (pdf, page) 있으면 UPDATE, 없으면 INSERT. 인덱스 재로딩 불필요.
+    """
+    _ensure_admin(current_user)
+    db = get_db()
+    _ensure_rag_candidate_column(db)
+    _ensure_last_edited_columns(db)
+    _ensure_phase1_rag_columns(db)
+    # 해당 문서에 이 페이지 이후 전체 재분석이 진행 중이면 중단 (to_do 6.3)
+    request_cancel_reanalysis_for_document(body.pdf_filename)
+
+    def _set_and_fetch_sync(database):
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE page_data_current SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP WHERE pdf_filename = %s AND page_number = %s",
+                (body.pdf_filename, body.page_number),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Page not found")
+        return _fetch_one_learning_page(database, body.pdf_filename, body.page_number)
+
+    shard_page = await db.run_sync(_set_and_fetch_sync, db)
+    if not shard_page:
+        raise HTTPException(status_code=400, detail="벡터화할 수 있는 데이터가 없습니다(OCR 텍스트 등).")
+
+    form_type = (shard_page.get("metadata") or {}).get("form_type") or None
+    rag_manager = get_rag_manager()
+    ok = await asyncio.to_thread(
+        rag_manager.upsert_page_embedding,
+        body.pdf_filename,
+        body.page_number,
+        shard_page.get("ocr_text", ""),
+        shard_page.get("answer_json", {}),
+        form_type,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="pgvector 반영에 실패했습니다.")
+    logger.info("학습 리퀘스트 반영: %s p.%s → pgvector(재분석 시 최신 벡터로 사용됨)", body.pdf_filename, body.page_number)
+    # 학습 반영 후 문서의 current_vector_version 증가 (to_do 7)
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE documents_current SET current_vector_version = COALESCE(current_vector_version, 1) + 1 WHERE pdf_filename = %s",
+                (body.pdf_filename,),
+            )
+            conn.commit()
+    except Exception:
+        pass
+    return {"success": True, "message": "해당 페이지를 벡터 DB에 반영했습니다."}
+
+
+def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> Optional[Dict[str, Any]]:
+    """단일 페이지에 대해 build-from-learning-pages와 동일한 shard_page 딕셔너리 생성."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute("""
+            SELECT p.pdf_filename, p.page_number, p.page_role, p.page_meta, i.item_id, i.item_order, i.item_data, d.form_type, d.data_year, d.data_month
+            FROM page_data_current p
+            LEFT JOIN items_current i ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
+            LEFT JOIN documents_current d ON p.pdf_filename = d.pdf_filename
+            WHERE p.pdf_filename = %s AND p.page_number = %s
+            ORDER BY i.item_order NULLS LAST
+        """, (pdf_filename, page_number))
+        rows = cursor.fetchall()
+    if not rows:
+        return None
+    first_row = rows[0]
+    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    page_meta = first_row.get("page_meta") or {}
+    if isinstance(page_meta, str):
+        try:
+            page_meta = json.loads(page_meta)
+        except json.JSONDecodeError:
+            page_meta = {}
+    merged_items = []
+    for row in rows:
+        if row.get("item_id") is None:
+            continue
+        item_data = row.get("item_data") or {}
+        merged_items.append(dict(item_data) if isinstance(item_data, dict) else {})
+    page_role = first_row.get("page_role") or "detail"
+    ocr_text = _extract_ocr_for_page_sync(database, pdf_filename, page_number)
+    if not ocr_text:
+        return None
+    answer_json = {**page_meta, "page_role": page_role, "items": merged_items}
+    metadata = {
+        "pdf_name": pdf_name,
+        "page_num": page_number,
+        "form_type": (first_row.get("form_type") or "").strip(),
+        "source": "db_learning_pages",
+        "data_year": first_row.get("data_year"),
+        "data_month": first_row.get("data_month"),
+    }
+    return {
+        "pdf_name": pdf_name,
+        "page_num": page_number,
+        "ocr_text": ocr_text,
+        "answer_json": answer_json,
+        "metadata": metadata,
+        "page_key": get_page_key(pdf_name, page_number),
+        "page_hash": compute_page_hash(ocr_text, answer_json),
+    }
+
+
+def _extract_ocr_for_page_sync(database, pdf_filename: str, page_number: int) -> str:
+    """동기 버전: OCR 추출 (page_meta._ocr_text → page_data_current.ocr_text → debug2)."""
+    try:
+        with database.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT page_meta, ocr_text FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
+                (pdf_filename, page_number),
+            )
+            row = cur.fetchone()
+            if row:
+                meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if row[0] and isinstance(row[0], str) else None)
+                if isinstance(meta, dict) and (meta.get("_ocr_text") or "").strip():
+                    return (meta["_ocr_text"] or "").strip()
+                if row[1] and (row[1] or "").strip():
+                    return (row[1] or "").strip()
+    except Exception:
+        pass
+    try:
+        root = get_project_root()
+        pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+        debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
+        if debug2_file.exists():
+            return debug2_file.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return ""
 
 
 @router.get("/learning-pages")

@@ -85,7 +85,8 @@ class ItemsMixin:
         notes: Optional[str] = None,
         user_id: Optional[int] = None,
         data_year: Optional[int] = None,
-        data_month: Optional[int] = None
+        data_month: Optional[int] = None,
+        total_pages_override: Optional[int] = None,  # page_numbers 사용 시 실제 PDF 전체 페이지 수
     ) -> bool:
         """
         문서 데이터 저장 (새 스키마: page_data는 메타데이터만, items는 행 단위로 저장)
@@ -102,6 +103,7 @@ class ItemsMixin:
         """
         if not page_results:
             raise ValueError("page_results가 비어있습니다.")
+        total_pages = total_pages_override if total_pages_override is not None else len(page_results)
 
         print(f"[form_type] save_document_data 진입: pdf_filename={pdf_filename!r}, form_type={form_type!r} (type={type(form_type).__name__})")
         
@@ -119,7 +121,6 @@ class ItemsMixin:
                 doc_meta_json = json.dumps(document_metadata, ensure_ascii=False) if document_metadata else None
                 
                 # 1. 문서 생성 (항상 documents_current에 저장 - 현재 연월이므로)
-                total_pages = len(page_results)
                 # 지정한 년월이 있으면 created_at을 해당 년월 1일로 설정
                 from datetime import datetime
                 if data_year and data_month:
@@ -169,7 +170,8 @@ class ItemsMixin:
                 
                 # 3. 페이지별 데이터 저장 (page_data: 메타데이터만, items: 행 단위)
                 for page_idx, page_json in enumerate(page_results):
-                    page_number = page_idx + 1
+                    # page_numbers 사용 시 page_json에 실제 페이지 번호 있음
+                    page_number = int(page_json.get("page_number", page_idx + 1))
                     
                     # page_json이 딕셔너리인지 확인
                     if not isinstance(page_json, dict):
@@ -183,31 +185,45 @@ class ItemsMixin:
                     if not isinstance(items, list):
                         items = []
                     
-                    # page_meta 구성 (items, RAG 내부 메타 제외 — 정답지에 불필요)
+                    # page_meta 구성 (items, RAG 내부 메타 제외 — 정답지에 불필요). ocr_text는 별도 컬럼으로도 저장
                     page_meta = {}
                     for key, value in page_json.items():
-                        if key not in ["items", "page_role", "page_number", "_rag_reference"]:
+                        if key not in ["items", "page_role", "page_number", "_rag_reference", "ocr_text"]:
                             page_meta[key] = value
                     
-                    # page_data 저장 (메타데이터만)
                     page_role = page_json.get("page_role")
                     page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
-                    
-                    cursor.execute("""
-                        INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
-                        VALUES (%s, %s, %s, %s::jsonb)
-                        ON CONFLICT (pdf_filename, page_number)
-                        DO UPDATE SET
-                            page_role = EXCLUDED.page_role,
-                            page_meta = EXCLUDED.page_meta,
-                            updated_at = CURRENT_TIMESTAMP
-                    """, (pdf_filename, page_number, page_role, page_meta_json))
+                    ocr_text_val = page_json.get("ocr_text") or (page_meta.get("_ocr_text") if isinstance(page_meta.get("_ocr_text"), str) else None)
+                    if ocr_text_val and not str(ocr_text_val).strip():
+                        ocr_text_val = None
+                    try:
+                        cursor.execute("""
+                            INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, ocr_text)
+                            VALUES (%s, %s, %s, %s::jsonb, %s)
+                            ON CONFLICT (pdf_filename, page_number)
+                            DO UPDATE SET
+                                page_role = EXCLUDED.page_role,
+                                page_meta = EXCLUDED.page_meta,
+                                ocr_text = COALESCE(EXCLUDED.ocr_text, page_data_current.ocr_text),
+                                updated_at = CURRENT_TIMESTAMP
+                        """, (pdf_filename, page_number, page_role, page_meta_json, ocr_text_val))
+                    except Exception:
+                        cursor.execute("""
+                            INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
+                            VALUES (%s, %s, %s, %s::jsonb)
+                            ON CONFLICT (pdf_filename, page_number)
+                            DO UPDATE SET
+                                page_role = EXCLUDED.page_role,
+                                page_meta = EXCLUDED.page_meta,
+                                updated_at = CURRENT_TIMESTAMP
+                        """, (pdf_filename, page_number, page_role, page_meta_json))
                     
                     # items 저장 (행 단위). 1→2→3 매핑 확정값을 넣어 DB에 受注先コード/小売先コード/商品コード 저장
                     _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
                     for item_order, item_dict in enumerate(items, 1):
                         if not isinstance(item_dict, dict):
                             continue
+                        honbu = None  # product_result 없을 때 UnboundLocalError 방지
                         customer_name = (
                             item_dict.get("得意先")
                             or item_dict.get("得意先名")
@@ -229,8 +245,8 @@ class ItemsMixin:
                                 item_dict["商品コード"] = code
                             if shikiri is not None:
                                 item_dict["仕切"] = shikiri
-                        if honbu is not None:
-                            item_dict["本部長"] = honbu
+                            if honbu is not None:
+                                item_dict["本部長"] = honbu
                         apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                         apply_form04_mishu_decimal(item_dict, form_type)
                         # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
@@ -289,7 +305,170 @@ class ItemsMixin:
             print("[DEBUG] save_document_data 실패:", type(e).__name__, str(e))
             traceback.print_exc()
             return False
-    
+
+    def create_document_with_images(
+        self,
+        pdf_filename: str,
+        total_pages: int,
+        image_data_list: List[bytes],
+        upload_channel: Optional[str] = None,
+        user_id: Optional[int] = None,
+        data_year: Optional[int] = None,
+        data_month: Optional[int] = None,
+    ) -> bool:
+        """
+        업로드 초기: 문서 행 생성 + 전체 페이지 이미지 저장 (분석 전 검토 탭에서 문서 노출용).
+        page_data/items는 건드리지 않음.
+        """
+        try:
+            from datetime import datetime
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if data_year and data_month:
+                    created_at = datetime(data_year, data_month, 1)
+                    cursor.execute("""
+                        INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, notes, created_by_user_id, updated_by_user_id, created_at, data_year, data_month)
+                        VALUES (%s, %s, NULL, %s, NULL, %s, %s, %s, %s, %s)
+                        ON CONFLICT (pdf_filename) DO UPDATE SET
+                            total_pages = EXCLUDED.total_pages,
+                            upload_channel = COALESCE(EXCLUDED.upload_channel, documents_current.upload_channel),
+                            updated_by_user_id = EXCLUDED.updated_by_user_id,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, (pdf_filename, total_pages, upload_channel, user_id, user_id, created_at, data_year, data_month))
+                else:
+                    cursor.execute("""
+                        INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, notes, created_by_user_id, updated_by_user_id)
+                        VALUES (%s, %s, NULL, %s, NULL, %s, %s)
+                        ON CONFLICT (pdf_filename) DO UPDATE SET
+                            total_pages = EXCLUDED.total_pages,
+                            upload_channel = COALESCE(EXCLUDED.upload_channel, documents_current.upload_channel),
+                            updated_by_user_id = EXCLUDED.updated_by_user_id,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, (pdf_filename, total_pages, upload_channel, user_id, user_id))
+                for page_idx, image_data in enumerate(image_data_list):
+                    if not image_data:
+                        continue
+                    page_number = page_idx + 1
+                    try:
+                        image_path = self.save_image_to_file(pdf_filename, page_number, image_data)
+                        cursor.execute("""
+                            INSERT INTO page_images_current (pdf_filename, page_number, image_path, image_format, image_size)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (pdf_filename, page_number)
+                            DO UPDATE SET image_path = EXCLUDED.image_path, image_format = EXCLUDED.image_format, image_size = EXCLUDED.image_size, created_at = CURRENT_TIMESTAMP
+                        """, (pdf_filename, page_number, image_path, 'JPEG', len(image_data)))
+                    except Exception:
+                        continue
+                return True
+        except Exception as e:
+            import traceback
+            print("[DEBUG] create_document_with_images 실패:", type(e).__name__, str(e))
+            traceback.print_exc()
+            return False
+
+    def save_single_page_data(
+        self,
+        pdf_filename: str,
+        page_json: Dict[str, Any],
+        form_type: Optional[str] = None,
+        upload_channel: Optional[str] = None,
+        image_data: Optional[bytes] = None,
+    ) -> bool:
+        """
+        단일 페이지만 upsert (다른 페이지 데이터는 삭제하지 않음). Phase 1 단일 페이지 분석/저장용.
+        """
+        page_number = int(page_json.get("page_number", 1))
+        page_role = (page_json.get("page_role") or "detail").strip() or "detail"
+        if page_role not in ("cover", "detail", "summary", "reply"):
+            page_role = "detail"
+        items = page_json.get("items") or []
+        if not isinstance(items, list):
+            items = []
+        if not items and page_role == "detail":
+            page_role = "cover" if page_number == 1 else "summary"
+        page_meta = {k: v for k, v in page_json.items() if k not in ("items", "page_role", "page_number", "_rag_reference", "ocr_text", "analyzed_vector_version", "last_analyzed_at")}
+        page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
+        ocr_text_val = page_json.get("ocr_text") or (page_meta.get("_ocr_text") if isinstance(page_meta.get("_ocr_text"), str) else None)
+        if ocr_text_val and not str(ocr_text_val).strip():
+            ocr_text_val = None
+        _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                current_vector_version = 1
+                try:
+                    cursor.execute("SELECT current_vector_version FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
+                    row = cursor.fetchone()
+                    if row and row[0] is not None:
+                        current_vector_version = int(row[0])
+                except Exception:
+                    pass
+                cursor.execute(
+                    "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
+                    (pdf_filename, page_number),
+                )
+                try:
+                    cursor.execute("""
+                        INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, ocr_text, analyzed_vector_version, last_analyzed_at)
+                        VALUES (%s, %s, %s, %s::jsonb, %s, %s, CURRENT_TIMESTAMP)
+                        ON CONFLICT (pdf_filename, page_number)
+                        DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta,
+                            ocr_text = COALESCE(EXCLUDED.ocr_text, page_data_current.ocr_text),
+                            analyzed_vector_version = EXCLUDED.analyzed_vector_version,
+                            last_analyzed_at = EXCLUDED.last_analyzed_at,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, (pdf_filename, page_number, page_role, page_meta_json, ocr_text_val, current_vector_version))
+                except Exception:
+                    cursor.execute("""
+                        INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
+                        VALUES (%s, %s, %s, %s::jsonb)
+                        ON CONFLICT (pdf_filename, page_number)
+                        DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta, updated_at = CURRENT_TIMESTAMP
+                    """, (pdf_filename, page_number, page_role, page_meta_json))
+                for item_order, item_dict in enumerate(items, 1):
+                    if not isinstance(item_dict, dict):
+                        continue
+                    retail_code, dist_code = resolve_retail_dist(
+                        item_dict.get("得意先"), item_dict.get("得意先コード")
+                    )
+                    if retail_code:
+                        item_dict["小売先コード"] = retail_code
+                    if dist_code:
+                        item_dict["受注先コード"] = dist_code
+                    product_result = resolve_product_and_prices(item_dict.get("商品名"), _unit_price_csv)
+                    if product_result:
+                        code, shikiri, honbu = product_result
+                        if code:
+                            item_dict["商品コード"] = code
+                        if shikiri is not None:
+                            item_dict["仕切"] = shikiri
+                        if honbu is not None:
+                            item_dict["本部長"] = honbu
+                    apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
+                    apply_form04_mishu_decimal(item_dict, form_type)
+                    separated = self._separate_item_fields(item_dict, form_type=form_type)
+                    cursor.execute("""
+                        INSERT INTO items_current (pdf_filename, page_number, item_order, first_review_checked, second_review_checked, item_data)
+                        VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+                    """, (pdf_filename, page_number, item_order, json.dumps(separated.get("item_data") or {}, ensure_ascii=False)))
+                if image_data:
+                    try:
+                        image_path = self.save_image_to_file(pdf_filename, page_number, image_data)
+                        cursor.execute("""
+                            INSERT INTO page_images_current (pdf_filename, page_number, image_path, image_format, image_size)
+                            VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (pdf_filename, page_number)
+                            DO UPDATE SET image_path = EXCLUDED.image_path, image_format = EXCLUDED.image_format, image_size = EXCLUDED.image_size, created_at = CURRENT_TIMESTAMP
+                        """, (pdf_filename, page_number, image_path, "JPEG", len(image_data)))
+                    except Exception:
+                        pass
+                conn.commit()
+                return True
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return False
+
     def get_items(
         self,
         pdf_filename: str,
@@ -448,14 +627,14 @@ class ItemsMixin:
                         """, (pdf_filename, pdf_filename))
                         rows = cursor.fetchall()
                 
-                # form_type·키 순서: 이 문서가 파싱할 때 사용한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
+                # form_type·키 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys 사용
                 if form_type is None or item_key_order is None:
                     try:
                         doc_info = self.get_document(pdf_filename)
                         if doc_info:
                             if form_type is None:
                                 form_type = doc_info.get("form_type")
-                            # 이 문서가 파싱 시 참조한 RAG 예제의 키 순서 (4번 양식지 등 다른 문서 key_order 사용 방지)
+                            # fallback: 문서 저장 시 키 순서 (RAG에서 못 가져올 때만)
                             if item_key_order is None:
                                 doc_meta = doc_info.get("document_metadata")
                                 if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
@@ -463,21 +642,19 @@ class ItemsMixin:
                     except Exception:
                         pass
                 
-                if item_key_order is None and form_type:
+                # form_type 있으면 RAG 기준 정답 키 순서 우선 (순서 깨짐 방지)
+                if form_type:
                     try:
                         from modules.core.rag_manager import get_rag_manager
                         rag_manager = get_rag_manager()
                         key_order = rag_manager.get_key_order_by_form_type(form_type)
-                        if key_order:
+                        if key_order and key_order.get("item_keys"):
                             item_key_order = key_order.get("item_keys")
-                            print(f"[db_items get_items] form_type={form_type} RAG key_order 적용 개수={len(item_key_order) if item_key_order else 0} 순서={item_key_order}")
-                        else:
-                            print(f"[db_items get_items] form_type={form_type} key_order 없음 -> 재정렬 안 함")
+                            print(f"[db_items get_items] form_type={form_type} RAG key_order 적용 개수={len(item_key_order)} 순서={item_key_order[:15]}{'...' if len(item_key_order) > 15 else ''}")
                     except Exception as e:
                         print(f"[db_items get_items] key_order 조회 예외: {e}")
-                        pass
-                elif item_key_order is None:
-                    print(f"[db_items get_items] form_type 없음 -> 재정렬 안 함")
+                if item_key_order is None:
+                    print(f"[db_items get_items] form_type 없음 또는 key_order 없음 -> 재정렬 안 함")
                 
                 results = []
                 for row in rows:
@@ -598,46 +775,64 @@ class ItemsMixin:
                     table_suffix = get_table_suffix(data_year, data_month)
                     page_data_table = f"page_data_{table_suffix}"
                     cursor.execute(f"""
-                        SELECT page_role, page_meta
+                        SELECT page_role, page_meta, last_edited_at, is_rag_candidate, ocr_text, analyzed_vector_version, last_analyzed_at
                         FROM {page_data_table}
                         WHERE pdf_filename = %s AND page_number = %s
                     """, (pdf_filename, page_num))
                     page_row = cursor.fetchone()
                 else:
-                    # current에서 먼저 찾고, 없으면 archive에서 찾기
-                    cursor.execute("""
-                        SELECT page_role, page_meta
-                        FROM page_data_current
-                        WHERE pdf_filename = %s AND page_number = %s
-                        LIMIT 1
-                    """, (pdf_filename, page_num))
-                    page_row = cursor.fetchone()
-                    
-                    if not page_row:
+                    # current에서 먼저 찾고, 없으면 archive에서 찾기 (ocr_text 등 Phase 1 컬럼 포함)
+                    try:
                         cursor.execute("""
-                            SELECT page_role, page_meta
-                            FROM page_data_archive
+                            SELECT page_role, page_meta, last_edited_at, is_rag_candidate, ocr_text, analyzed_vector_version, last_analyzed_at
+                            FROM page_data_current
                             WHERE pdf_filename = %s AND page_number = %s
                             LIMIT 1
                         """, (pdf_filename, page_num))
                         page_row = cursor.fetchone()
+                    except Exception:
+                        cursor.execute("""
+                            SELECT page_role, page_meta, last_edited_at, is_rag_candidate
+                            FROM page_data_current
+                            WHERE pdf_filename = %s AND page_number = %s
+                            LIMIT 1
+                        """, (pdf_filename, page_num))
+                        page_row = cursor.fetchone()
+                    
+                    if not page_row:
+                        try:
+                            cursor.execute("""
+                                SELECT page_role, page_meta, last_edited_at, is_rag_candidate, ocr_text, analyzed_vector_version, last_analyzed_at
+                                FROM page_data_archive
+                                WHERE pdf_filename = %s AND page_number = %s
+                                LIMIT 1
+                            """, (pdf_filename, page_num))
+                            page_row = cursor.fetchone()
+                        except Exception:
+                            cursor.execute("""
+                                SELECT page_role, page_meta, last_edited_at, is_rag_candidate
+                                FROM page_data_archive
+                                WHERE pdf_filename = %s AND page_number = %s
+                                LIMIT 1
+                            """, (pdf_filename, page_num))
+                            page_row = cursor.fetchone()
             
                     
-            # 3. 키 순서: 이 문서가 파싱 시 참조한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
+            # 3. 키 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys
             item_key_order = None
-            if doc_info:
-                doc_meta = doc_info.get("document_metadata")
-                if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
-                    item_key_order = doc_meta["item_data_keys"]
-            if item_key_order is None and form_type:
+            if form_type:
                 try:
                     from modules.core.rag_manager import get_rag_manager
                     rag_manager = get_rag_manager()
                     key_order = rag_manager.get_key_order_by_form_type(form_type)
-                    if key_order:
+                    if key_order and key_order.get("item_keys"):
                         item_key_order = key_order.get("item_keys")
                 except Exception:
                     pass
+            if item_key_order is None and doc_info:
+                doc_meta = doc_info.get("document_metadata")
+                if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
+                    item_key_order = doc_meta["item_data_keys"]
             
             # 4. items 조회 (form_type과 키 순서를 전달하여 중복 조회 방지)
             query_start = time.perf_counter()  # get_items 시간 측정 시작
@@ -672,13 +867,24 @@ class ItemsMixin:
                     except Exception:
                         page_meta = {}
             
-            # 8. 페이지별 JSON 구조 생성 (page_data + items 병합)
+            # 8. 페이지별 JSON 구조 생성 (page_data + items 병합). Phase 3: 히스토리 표시용. Phase 1: ocr_text는 컬럼 우선, 없으면 page_meta._ocr_text
+            ocr_text = (page_row or {}).get('ocr_text') if page_row else None
+            if not (ocr_text and str(ocr_text).strip()) and isinstance(page_meta.get('_ocr_text'), str):
+                ocr_text = page_meta.get('_ocr_text', '').strip() or None
             page_json = {
                 'page_number': page_num,
                 'page_role': page_row.get('page_role') if page_row else 'detail',
                 **page_meta,  # page_meta의 모든 필드 추가
-                'items': items  # 빈 리스트일 수 있음
+                'items': items,  # 빈 리스트일 수 있음
+                'last_edited_at': page_row.get('last_edited_at') if page_row else None,
+                'is_rag_candidate': page_row.get('is_rag_candidate') if page_row else False,
             }
+            if ocr_text is not None:
+                page_json['ocr_text'] = ocr_text
+            if page_row and 'analyzed_vector_version' in page_row:
+                page_json['analyzed_vector_version'] = page_row.get('analyzed_vector_version')
+            if page_row and 'last_analyzed_at' in page_row:
+                page_json['last_analyzed_at'] = page_row.get('last_analyzed_at')
             
             # 원본 answer.json 파일 기준으로 키 순서 재정렬 (이미 조회한 키 순서 재사용)
             # item_key_order가 None이 아니면 이미 조회한 것이므로 재사용

@@ -34,6 +34,10 @@ def extract_pages_with_rag(
     upload_channel: Optional[str] = None,  # finet | mail. mail일 때 Azure OCR(표 복원) 사용
     debug_dir_name: str = "debug",  # 디버깅 폴더명
     include_bbox: bool = False,  # True일 때만 03/04에서 단어 좌표 추출·LLM _word_indices·_bbox 부여 (새 탭 전용)
+    page_numbers: Optional[List[int]] = None,  # 지정 시 해당 페이지만 분석 (1-based). None이면 전체
+    convert_all_images: bool = False,  # True(업로드): 전체 이미지 변환 후 page_numbers만 분석. False: page_numbers 페이지만 변환·분석
+    on_document_ready: Optional[Callable[[int, List[Image.Image]], None]] = None,  # (total_pages, pil_images) 업로드 시 문서·이미지 저장용
+    on_page_complete: Optional[Callable[[int, Dict[str, Any]], None]] = None,  # (page_number, page_json) 페이지별 완료 시 DB 저장·알림용
 ) -> tuple[List[Dict[str, Any]], List[str], Optional[List[Image.Image]]]:
     """
     PDF 파일을 RAG 기반으로 분석하여 페이지별 JSON 결과 반환
@@ -90,9 +94,9 @@ def extract_pages_with_rag(
     else:
         print(f"📋 양식지 번호 (전달받음): {form_type}")
     
-    # 1. DB에서 먼저 확인 (include_bbox=True면 캐시 스킵하고 항상 좌표 포함 재파싱)
+    # 1. DB에서 먼저 확인. page_numbers 지정 시 특정 페이지만 분석이므로 캐시 스킵
     page_jsons = None
-    if not include_bbox:
+    if not include_bbox and not page_numbers:
         try:
             from database.registry import get_db
             db_manager = get_db()
@@ -114,14 +118,23 @@ def extract_pages_with_rag(
         import shutil
         shutil.rmtree(debug_dir)
     debug_dir.mkdir(parents=True, exist_ok=True)
-    print(f"🔍 디버깅 정보 저장 위치: {debug_dir}")
     # PDF를 이미지로 변환
     if progress_callback:
         progress_callback(0, 0, "🔄 PDF를 이미지로 변환 중...")
     
     from modules.core.extractors.pdf_processor import PdfImageConverter
     pdf_processor = PdfImageConverter(dpi=dpi)
-    images = pdf_processor.convert_pdf_to_images(pdf_path)
+    # 업로드: 전체 이미지 변환. 단일 페이지 분석: 해당 페이지만
+    img_page_nums = None if (page_numbers and convert_all_images) else page_numbers
+    images = pdf_processor.convert_pdf_to_images(pdf_path, page_numbers=img_page_nums)
+    # 실제 페이지 번호 매핑. convert_all_images면 page_numbers 인덱스만 분석
+    if page_numbers and convert_all_images:
+        actual_page_numbers = page_numbers  # 분석 대상만, images는 전체라 인덱스 매핑 필요
+        # OCR/LLM은 page_numbers 인덱스에 해당하는 이미지만 사용 (indices = [p-1 for p in page_numbers])
+        analysis_indices = [p - 1 for p in page_numbers if 1 <= p <= len(images)]
+    else:
+        actual_page_numbers = page_numbers if page_numbers else [i + 1 for i in range(len(images))]
+        analysis_indices = None  # 전체
 
     # 이미지 회전 보정 (프론트/디버깅에 보여줄 이미지도 바로잡기)
     try:
@@ -154,7 +167,12 @@ def extract_pages_with_rag(
 
     pil_images = images
     print(f"PDF 변환 완료: {len(images)}개 페이지")
-    
+    if on_document_ready:
+        try:
+            on_document_ready(len(images), images)
+        except Exception as e:
+            print(f"⚠️ on_document_ready 콜백 실패: {e}")
+
     # 이미지 경로 리스트 초기화
     image_paths = [None] * len(images)
     
@@ -173,6 +191,8 @@ def extract_pages_with_rag(
     pdf_path_obj = Path(pdf_path)
     ocr_texts = [None] * len(images)
     ocr_words_list = [None] * len(images)
+    # analysis_indices: convert_all_images 시 해당 인덱스만 OCR/LLM
+    indices_to_process = analysis_indices if analysis_indices is not None else list(range(len(images)))
 
     use_azure_for_mail = upload_channel == "mail"
     if use_azure_for_mail:
@@ -184,7 +204,8 @@ def extract_pages_with_rag(
 
     def _azure_ocr_one_page(idx: int) -> tuple:
         """한 페이지 Azure OCR (병렬 워커용). 반환: (idx, ocr_text|None, words_data|None)"""
-        page_num = idx + 1
+        pos = indices_to_process.index(idx) if idx in indices_to_process else idx
+        page_num = actual_page_numbers[pos] if pos < len(actual_page_numbers) else idx + 1
         image = images[idx]
         try:
             os.makedirs(debug_dir, exist_ok=True)
@@ -204,14 +225,14 @@ def extract_pages_with_rag(
         except Exception:
             return (idx, None, None)
 
-    use_parallel_azure = use_azure_for_mail and ocr_parallel_workers > 1 and len(images) > 1
+    use_parallel_azure = use_azure_for_mail and ocr_parallel_workers > 1 and len(indices_to_process) > 1
     try:
         if use_parallel_azure:
-            max_workers = min(ocr_parallel_workers, len(images))
-            print(f"🚀 1단계: Azure OCR 병렬 처리 (최대 {max_workers}개 스레드, {len(images)}개 페이지)")
+            max_workers = min(ocr_parallel_workers, len(indices_to_process))
+            print(f"🚀 1단계: Azure OCR 병렬 처리 (최대 {max_workers}개 스레드, {len(indices_to_process)}개 페이지)")
             completed = 0
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_idx = {executor.submit(_azure_ocr_one_page, idx): idx for idx in range(len(images))}
+                future_to_idx = {executor.submit(_azure_ocr_one_page, idx): idx for idx in indices_to_process}
                 for future in as_completed(future_to_idx):
                     idx, ocr_text, words_data = future.result()
                     ocr_texts[idx] = ocr_text
@@ -223,9 +244,10 @@ def extract_pages_with_rag(
                     w_count = len(words_data.get("words", [])) if words_data else 0
                     print(f"✅ 페이지 {idx + 1}/{len(images)} 완료 (길이: {n_items} 문자, 단어 {w_count}개) - 진행: {completed}/{len(images)}")
         else:
-            for idx, image in enumerate(images):
-                page_num = idx + 1
-                total_pages = len(images)
+            for idx in indices_to_process:
+                image = images[idx]
+                page_num = actual_page_numbers[indices_to_process.index(idx)] if indices_to_process else idx + 1
+                total_pages = len(indices_to_process)
                 if progress_callback:
                     progress_callback(page_num, total_pages, f"🔍 페이지 {page_num}/{total_pages}: 텍스트 추출 중...")
                 print(f"페이지 {page_num}/{total_pages} 텍스트 추출 중...", end="", flush=True)
@@ -264,11 +286,8 @@ def extract_pages_with_rag(
     stats_lock = Lock()
     
     def process_rag_llm(idx: int, ocr_text: str, ocr_words_data: Optional[Dict[str, Any]] = None) -> tuple[int, Dict[str, Any], Optional[str]]:
-        """
-        RAG+LLM 처리 함수 (스레드에서 실행)
-        ocr_words_data가 있으면(03/04) 단어 인덱스→좌표를 LLM 출력에 붙인다.
-        """
-        page_num = idx + 1
+        """RAG+LLM 처리 (스레드에서 실행). page_numbers 사용 시 실제 페이지 번호 반영."""
+        page_num = actual_page_numbers[idx] if idx < len(actual_page_numbers) else idx + 1
         total_pages = len(images)
         page_detail = {"page_num": page_num, "status": "unknown", "items_count": 0, "error": None}
         process_start_time = time.time()
@@ -393,7 +412,17 @@ def extract_pages_with_rag(
                 idx, page_json, error = future.result()
                 page_results[idx] = page_json
                 completed_count += 1
-                
+                if on_page_complete:
+                    page_num = actual_page_numbers[idx] if idx < len(actual_page_numbers) else idx + 1
+                    pj = dict(page_json)
+                    pj["page_number"] = page_num
+                    if idx < len(ocr_texts) and ocr_texts[idx] and str(ocr_texts[idx]).strip():
+                        pj["ocr_text"] = (ocr_texts[idx] or "").strip()
+                    try:
+                        on_page_complete(page_num, pj)
+                    except Exception as cb_err:
+                        print(f"⚠️ on_page_complete 콜백 실패 (페이지 {page_num}): {cb_err}")
+
                 # 진행 상황 출력
                 elapsed = time.time() - parallel_start_time
                 if error:
@@ -412,37 +441,36 @@ def extract_pages_with_rag(
         idx, ocr_text, ocr_words_data = valid_ocr_indices[0]
         idx, page_json, error = process_rag_llm(idx, ocr_text, ocr_words_data)
         page_results[idx] = page_json
-    
-    # OCR 실패한 페이지는 빈 결과로 추가
-    for idx, ocr_text in enumerate(ocr_texts):
-        if ocr_text is None:
-            page_results[idx] = {
-                "items": [],
-                "page_role": "detail",
-                "error": "OCR 실패"
-            }
-    
-    # 모든 페이지 인덱스가 page_results에 있는지 확인 (누락된 경우 빈 결과로 추가)
-    for idx in range(len(images)):
+        if on_page_complete:
+            page_num = actual_page_numbers[idx] if idx < len(actual_page_numbers) else idx + 1
+            pj = dict(page_json)
+            pj["page_number"] = page_num
+            if idx < len(ocr_texts) and ocr_texts[idx] and str(ocr_texts[idx]).strip():
+                pj["ocr_text"] = (ocr_texts[idx] or "").strip()
+            try:
+                on_page_complete(page_num, pj)
+            except Exception as cb_err:
+                print(f"⚠️ on_page_complete 콜백 실패 (페이지 {page_num}): {cb_err}")
+
+    # OCR 실패한 페이지는 빈 결과로 추가 (분석 대상 인덱스만)
+    for idx in indices_to_process:
         if idx not in page_results:
-            page_results[idx] = {
-                "items": [],
-                "page_role": "detail",
-                "error": "처리되지 않음"
-            }
+            page_results[idx] = {"items": [], "page_role": "detail", "error": "OCR 실패"}
     
-    # 모든 페이지 인덱스가 page_results에 있는지 확인 (누락된 경우 빈 결과로 추가)
-    for idx in range(len(images)):
-        if idx not in page_results:
-            print(f"⚠️ 페이지 {idx+1} 결과가 없어 빈 결과로 추가합니다.")
-            page_results[idx] = {
-                "items": [],
-                "page_role": "detail",
-                "error": "처리되지 않음"
-            }
+    # convert_all_images(업로드): 분석한 페이지만 반환. 그 외: 전체 이미지 대비 결과
+    if analysis_indices is not None:
+        out_indices = indices_to_process
+    else:
+        out_indices = list(range(len(images)))
     
-    # 인덱스 순서대로 결과 리스트 생성
-    page_jsons = [page_results[i] for i in range(len(images))]
+    # 최초 분석 시 OCR 결과를 각 페이지에 포함 (재분석 시 DB에서만 읽기 위해 저장용)
+    page_jsons = []
+    for i in out_indices:
+        pj = dict(page_results.get(i, {"items": [], "page_role": "detail"}))
+        pj["page_number"] = actual_page_numbers[out_indices.index(i)] if i in out_indices and out_indices.index(i) < len(actual_page_numbers) else (i + 1)
+        if i < len(ocr_texts) and ocr_texts[i] and str(ocr_texts[i]).strip():
+            pj["ocr_text"] = (ocr_texts[i] or "").strip()
+        page_jsons.append(pj)
     
     # 후처리: 請求番号와 得意先가 비어있는 경우 앞 페이지에서 가져오기
     def fill_missing_management_id_and_customer(page_jsons: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -531,4 +559,69 @@ def extract_pages_with_rag(
     print(f"\n✅ extract_pages_with_rag 반환 준비 완료: {len(page_jsons)}개 페이지, {len(image_paths) if image_paths else 0}개 이미지 경로, {len(pil_images) if pil_images else 0}개 PIL 이미지")
     
     return page_jsons, image_paths, pil_images
+
+
+def extract_single_page_from_image_path(
+    image_path: str,
+    page_number: int,
+    pdf_filename: str,
+    form_type: Optional[str] = None,
+    openai_model: Optional[str] = None,
+    question: Optional[str] = None,
+    top_k: Optional[int] = None,
+    similarity_threshold: Optional[float] = None,
+    debug_dir_name: str = "debug2",
+) -> Dict[str, Any]:
+    """
+    DB에 저장된 페이지 이미지(static) 경로로 단일 페이지만 분석 (OCR + RAG + LLM).
+    PDF 없이 검토 탭 재분석/자동분석 시 사용.
+    """
+    from modules.utils.config import rag_config, get_project_root
+    from modules.core.extractors.azure_extractor import get_azure_extractor
+    from modules.utils.table_ocr_utils import raw_to_table_restored_text
+
+    path = Path(image_path)
+    if not path.is_absolute():
+        path = get_project_root() / image_path
+    if not path.exists():
+        raise FileNotFoundError(f"Image not found: {path}")
+
+    openai_model = openai_model or rag_config.openai_model
+    question = question or rag_config.question
+    top_k = top_k if top_k is not None else rag_config.top_k
+    similarity_threshold = similarity_threshold if similarity_threshold is not None else rag_config.similarity_threshold
+
+    debug_base = get_project_root() / debug_dir_name / Path(pdf_filename).stem
+    debug_base.mkdir(parents=True, exist_ok=True)
+
+    azure_extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
+    raw = azure_extractor.extract_from_image_raw(image_path=path)
+    if not raw:
+        raise RuntimeError("OCR returned no result")
+    ocr_text = raw_to_table_restored_text(raw)
+    ocr_text = normalize_ocr_text(ocr_text or "", use_fullwidth=True)
+    if not ocr_text or not ocr_text.strip():
+        raise RuntimeError("OCR text is empty")
+    words = (raw.get("pages") or [{}])[0].get("words") or []
+    ocr_words_data = {"words": words, "width": 1, "height": 1} if words else None
+
+    page_json = extract_json_with_rag(
+        ocr_text=ocr_text,
+        question=question,
+        model_name=openai_model,
+        temperature=0,
+        top_k=top_k,
+        similarity_threshold=similarity_threshold,
+        debug_dir=str(debug_base),
+        page_num=page_number,
+        form_type=form_type,
+        ocr_words=ocr_words_data["words"] if ocr_words_data else None,
+        page_width=ocr_words_data.get("width") if ocr_words_data else None,
+        page_height=ocr_words_data.get("height") if ocr_words_data else None,
+        include_bbox=False,
+    )
+    if not isinstance(page_json, dict):
+        raise ValueError(f"Unexpected response type: {type(page_json)}")
+    page_json["page_number"] = page_number
+    return page_json
 
