@@ -246,14 +246,14 @@ class UpstageExtractor:
             traceback.print_exc()
             return None
 
-    def extract_from_pdf_page(self, pdf_path: Path, page_num: int, dpi: int = 300) -> Optional[str]:
+    def extract_from_pdf_page(self, pdf_path: Path, page_num: int, dpi: int = 200) -> Optional[str]:
         """
         PDF 페이지를 이미지로 변환한 후 Upstage OCR로 텍스트를 추출합니다.
         
         Args:
             pdf_path: PDF 파일 경로
             page_num: 페이지 번호 (1부터 시작)
-            dpi: PDF 변환 해상도 (기본값: 300)
+            dpi: PDF 변환 해상도 (기본값: 200)
         
         Returns:
             추출된 텍스트 또는 None
@@ -328,7 +328,7 @@ class UpstageExtractor:
             print(f"⚠️ PDF 페이지 이미지 변환 실패 ({pdf_path}, 페이지 {page_num}): {e}")
             return None
 
-    def extract_from_pdf_page_raw(self, pdf_path: Path, page_num: int, dpi: int = 300) -> Optional[dict]:
+    def extract_from_pdf_page_raw(self, pdf_path: Path, page_num: int, dpi: int = 200) -> Optional[dict]:
         """
         PDF 페이지를 이미지로 변환한 후 Upstage OCR을 호출하고,
         **전체 API 응답(words + bbox 포함)** 을 그대로 반환합니다. 캐시 미사용.

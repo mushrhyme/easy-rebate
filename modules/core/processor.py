@@ -7,7 +7,7 @@ PDF 처리 로직을 중앙화하여 관리합니다.
 import os
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, Callable
+from typing import Dict, Any, Optional, Tuple, Callable, List
 
 # PdfRegistry 제거됨 - DB와 st.session_state로 대체
 
@@ -19,7 +19,7 @@ class PdfProcessor:
     PDF 파일을 OCR 분석하고 결과를 저장하는 로직을 중앙화합니다.
     """
     
-    DEFAULT_DPI = 300
+    DEFAULT_DPI = 200
     
     @staticmethod
     def process_pdf(
@@ -33,6 +33,10 @@ class PdfProcessor:
         data_year: Optional[int] = None,
         data_month: Optional[int] = None,
         include_bbox: bool = False,
+        page_numbers: Optional[list] = None,  # 지정 시 해당 페이지만 분석 (1-based). None=전체
+        convert_all_images: bool = False,  # True면 전체 이미지 변환 후 page_numbers만 분석 (구 레거시)
+        on_document_ready: Optional[Callable[[int, Any], None]] = None,  # (total_pages, pil_images) 문서·이미지 선저장용
+        on_page_complete: Optional[Callable[[int, Dict[str, Any]], None]] = None,  # (page_number, page_json) 페이지별 완료 시
     ) -> Tuple[bool, int, Optional[str], float]:
         """
         저장된 PDF 파일 처리
@@ -40,7 +44,7 @@ class PdfProcessor:
         Args:
             pdf_name: PDF 파일명 (확장자 제외)
             pdf_path: PDF 파일 경로 (None이면 자동으로 찾음)
-            dpi: PDF 변환 해상도 (기본값: 300)
+            dpi: PDF 변환 해상도 (기본값: 200)
             progress_callback: 진행률 콜백 함수 (page_num, total_pages, message)
             form_type: 양식지 번호 (01, 02, 03, 04, 05). None이면 자동 추출 시도
             
@@ -94,6 +98,10 @@ class PdfProcessor:
                     upload_channel=upload_channel,
                     debug_dir_name="debug2",
                     include_bbox=include_bbox,
+                    page_numbers=page_numbers,
+                    convert_all_images=convert_all_images,
+                    on_document_ready=on_document_ready,
+                    on_page_complete=on_page_complete,
                 )
             except Exception as parse_error:
                 raise RuntimeError(f"PDF 파싱 실패: {parse_error}") from parse_error
@@ -219,7 +227,13 @@ class PdfProcessor:
                     pass
 
                 # DB에 저장 (이미지 데이터 직접 전달)
+                # convert_all_images(업로드) 또는 page_numbers 사용 시 total_pages는 PDF 전체 페이지 수
                 try:
+                    total_pages_override = None
+                    if page_numbers or convert_all_images:
+                        import fitz
+                        with fitz.open(pdf_path) as doc:
+                            total_pages_override = len(doc)
                     print(f"[DEBUG] save_document_data 호출: pdf_filename={pdf_filename!r}, pages={len(page_results)}, images={len(image_data_list or [])}")
                     success = db_manager.save_document_data(
                         pdf_filename=pdf_filename,
@@ -230,7 +244,8 @@ class PdfProcessor:
                         notes="RAG 기반 분석",
                         user_id=user_id,
                         data_year=data_year,
-                        data_month=data_month
+                        data_month=data_month,
+                        total_pages_override=total_pages_override,
                     )
                     print(f"[DEBUG] save_document_data 결과: success={success}")
                     if not success:
@@ -277,7 +292,7 @@ class PdfProcessor:
         Args:
             uploaded_file: Streamlit UploadedFile 객체
             pdf_name: PDF 파일명 (확장자 제외)
-            dpi: PDF 변환 해상도 (기본값: 300)
+            dpi: PDF 변환 해상도 (기본값: 200)
             progress_callback: 진행률 콜백 함수
             form_type: 양식지 번호 (01, 02, 03, 04, 05). None이면 자동 추출 시도
             
@@ -331,11 +346,7 @@ class PdfProcessor:
             from database.registry import get_db
             db_manager = get_db()
             pdf_filename = f"{pdf_name}.pdf"
-            page_results = db_manager.get_page_results(
-                pdf_filename=pdf_filename,
-                session_id=None,
-                is_latest=True
-            )
+            page_results = db_manager.get_page_results(pdf_filename=pdf_filename)
             pages = len(page_results) if page_results else 0
             status = "completed" if pages > 0 else "pending"
         except Exception:

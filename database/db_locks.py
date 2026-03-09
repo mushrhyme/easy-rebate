@@ -33,23 +33,16 @@ class LocksMixin:
         try:
             from datetime import datetime, timedelta
             
-            print(f"🔵 [acquire_item_lock] 시작: item_id={item_id}, session_id={session_id[:8] if session_id else 'None'}..., duration={lock_duration_minutes}분")
-            
             # session_id 검증
             if not session_id or not isinstance(session_id, str) or len(session_id.strip()) == 0:
-                print(f"❌ [acquire_item_lock] session_id가 유효하지 않음: session_id={session_id}")
                 return False, "Session expired or invalid. Please refresh the page."
             
-            # session_id로 user_id 조회
-            print(f"🔵 [acquire_item_lock] 세션 조회 시도: session_id={session_id[:20]}...")
             user_info = self.get_session_user(session_id)
             if not user_info:
-                print(f"❌ [acquire_item_lock] 세션을 찾을 수 없음: session_id={session_id[:20] if session_id else 'None'}...")
                 return False, "Session expired or invalid. Please refresh the page."
             
             user_id = user_info['user_id']
-            print(f"✅ [acquire_item_lock] 사용자 확인: user_id={user_id}")
-            
+
             # 아이템 존재 확인 + 락 처리 한 연결로 수행 (풀 점유 시간 단축)
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -60,10 +53,8 @@ class LocksMixin:
                     LIMIT 1
                 """, (item_id, item_id))
                 if not cursor.fetchone():
-                    print(f"❌ [acquire_item_lock] 아이템이 존재하지 않음: item_id={item_id}")
                     return False, f"Item not found: item_id={item_id}"
-                print(f"✅ [acquire_item_lock] 아이템 존재 확인: item_id={item_id}")
-                
+
                 # 1. 해당 item_id의 모든 락 확인 및 정리 (current와 archive 모두 확인)
                 cursor.execute("""
                     SELECT locked_by_user_id, expires_at, locked_at
@@ -76,8 +67,7 @@ class LocksMixin:
                 """, (item_id, item_id))
                 
                 all_locks = cursor.fetchall()
-                print(f"🔵 [acquire_item_lock] 기존 락 확인: {len(all_locks)}개")
-                
+
                 # 1-1. 만료된 락 모두 정리 (current와 archive 모두)
                 cursor.execute("""
                     DELETE FROM item_locks_current
@@ -94,9 +84,7 @@ class LocksMixin:
                 deleted_expired_archive = cursor.rowcount
                 
                 deleted_expired = deleted_expired_current + deleted_expired_archive
-                if deleted_expired > 0:
-                    print(f"🔵 [acquire_item_lock] 만료된 락 정리: {deleted_expired}개")
-                
+
                 # 1-2. 추가로 모든 만료된 락 정리 (혹시 모를 경우 대비)
                 if force_cleanup:
                     cursor.execute("""
@@ -139,7 +127,6 @@ class LocksMixin:
                 if existing_lock:
                     existing_locked_by_user_id = existing_lock[0]
                     expires_at_value = existing_lock[1]
-                    print(f"🔵 [acquire_item_lock] 기존 활성 락 발견: locked_by_user_id={existing_locked_by_user_id}, expires_at={expires_at_value}")
                     
                     # locked_by_user_id가 None인 경우는 잘못된 락이므로 정리하고 새 락 생성
                     if existing_locked_by_user_id is None:
@@ -154,7 +141,6 @@ class LocksMixin:
                         """, (item_id,))
                         conn.commit()
                         # 새 락 생성으로 계속 진행 (아래 로직으로 넘어감)
-                        print(f"🔵 [acquire_item_lock] 잘못된 락 정리 후 새 락 생성 계속: item_id={item_id}")
                         # existing_lock을 None으로 설정하여 새 락 생성 로직으로 넘어가도록 함
                         existing_lock = None
                     # 자신이 가진 락이면 갱신
@@ -177,7 +163,6 @@ class LocksMixin:
                                   AND locked_by_user_id = %s
                             """, (expires_at, item_id, user_id))
                         conn.commit()
-                        print(f"✅ [acquire_item_lock] 자신의 락 갱신 성공: item_id={item_id}")
                         return True, "Lock acquired successfully"
                     else:
                         # 다른 사용자가 가진 락이 있지만, 만료 시간이 가까우면 강제로 정리
@@ -196,7 +181,6 @@ class LocksMixin:
                                 """, (item_id,))
                                 conn.commit()
                                 # 재시도
-                                print(f"🔵 [acquire_item_lock] 재시도: item_id={item_id}")
                                 success, reason = self.acquire_item_lock(item_id, session_id, lock_duration_minutes, force_cleanup=False)
                                 return success, reason
                         # 다른 사용자의 활성 락
@@ -207,7 +191,6 @@ class LocksMixin:
                 # existing_lock이 None이거나 user_id가 None인 락을 정리한 경우 새 락 생성
                 if not existing_lock or (existing_lock and existing_lock[0] is None):
                     # item_id가 current 또는 archive에 있는지 확인하여 해당 테이블에 저장
-                    print(f"🔵 [acquire_item_lock] 새 락 생성 시도: item_id={item_id}")
                     expires_at = datetime.now() + timedelta(minutes=lock_duration_minutes)
 
                     # item_id가 어느 테이블에 있는지 확인
@@ -229,7 +212,6 @@ class LocksMixin:
 
                         if cursor.rowcount > 0:
                             conn.commit()
-                            print(f"✅ [acquire_item_lock] 새 락 생성 성공: item_id={item_id}, locked_by_user_id={user_id}, expires_at={expires_at}")
                             return True, "Lock acquired successfully"
                         else:
                             # INSERT 실패 - 다시 확인
@@ -249,7 +231,6 @@ class LocksMixin:
                                 check_locked_by_user_id = check_lock[0]
                                 if check_locked_by_user_id == user_id:
                                     conn.commit()
-                                    print(f"✅ [acquire_item_lock] 재확인 후 성공: item_id={item_id}")
                                     return True, "Lock acquired successfully"
                                 else:
                                     print(f"⚠️ [acquire_item_lock] 재확인 후 다른 사용자 락 발견: item_id={item_id}, locked_by_user_id={check_locked_by_user_id}")
@@ -280,7 +261,6 @@ class LocksMixin:
                         check_lock = cursor.fetchone()
                         if check_lock and check_lock[0] == user_id:
                             conn.commit()
-                            print(f"✅ [acquire_item_lock] 예외 후 재확인 성공: item_id={item_id}")
                             return True, "Lock acquired successfully"
                         print(f"❌ [acquire_item_lock] 최종 실패: item_id={item_id}")
                         return False, f"Failed to create lock: {str(insert_error)}"

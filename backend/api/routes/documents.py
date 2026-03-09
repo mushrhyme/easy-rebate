@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from io import BytesIO
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse, FileResponse
@@ -49,6 +49,9 @@ _user_semaphore_lock = asyncio.Lock()
 _global_analysis_semaphore = asyncio.Semaphore(_MAX_GLOBAL)
 # PDF 분석 전용 스레드 풀: run_sync(DB)와 분리해 경합 완화
 _analysis_executor = ThreadPoolExecutor(max_workers=min(10, _MAX_GLOBAL), thread_name_prefix="pdf_analysis")
+# 이 페이지 이후 전체 재분석 진행 시 학습 요청으로 중단하기 위한 이벤트 (key=pdf_filename)
+_reanalysis_cancel_events: dict[str, asyncio.Event] = {}
+_reanalysis_lock = asyncio.Lock()
 
 
 async def _get_user_analysis_semaphore(user_id: int) -> asyncio.Semaphore:
@@ -60,6 +63,26 @@ async def _get_user_analysis_semaphore(user_id: int) -> asyncio.Semaphore:
 
 
 router = APIRouter()
+
+
+def _ensure_last_edited_columns(db):
+    """last_edited_at, last_edited_by_user_id 컬럼 마이그레이션 (Phase 1)"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'page_data_current' AND column_name = 'last_edited_at'
+            """)
+            if cursor.fetchone():
+                return
+            cursor.execute("ALTER TABLE page_data_current ADD COLUMN IF NOT EXISTS last_edited_at TIMESTAMPTZ NULL")
+            cursor.execute("ALTER TABLE page_data_current ADD COLUMN IF NOT EXISTS last_edited_by_user_id INTEGER NULL")
+            cursor.execute("ALTER TABLE page_data_archive ADD COLUMN IF NOT EXISTS last_edited_at TIMESTAMPTZ NULL")
+            cursor.execute("ALTER TABLE page_data_archive ADD COLUMN IF NOT EXISTS last_edited_by_user_id INTEGER NULL")
+            conn.commit()
+    except Exception:
+        pass
 
 
 def _ensure_answer_key_designated_by_column(db):
@@ -81,6 +104,44 @@ def _ensure_answer_key_designated_by_column(db):
                 ALTER TABLE documents_archive
                 ADD COLUMN IF NOT EXISTS answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
             """)
+            conn.commit()
+    except Exception:
+        pass
+
+
+def _ensure_phase1_rag_columns(db):
+    """Phase 1: current_vector_version(documents), ocr_text/analyzed_vector_version/last_analyzed_at(page_data) 추가."""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'documents_current' AND column_name = 'current_vector_version'
+            """)
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE documents_current ADD COLUMN current_vector_version INTEGER NOT NULL DEFAULT 1")
+                cursor.execute("ALTER TABLE documents_archive ADD COLUMN current_vector_version INTEGER NOT NULL DEFAULT 1")
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'page_data_current' AND column_name = 'ocr_text'
+            """)
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE page_data_current ADD COLUMN ocr_text TEXT")
+                cursor.execute("ALTER TABLE page_data_archive ADD COLUMN ocr_text TEXT")
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'page_data_current' AND column_name = 'analyzed_vector_version'
+            """)
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE page_data_current ADD COLUMN analyzed_vector_version INTEGER")
+                cursor.execute("ALTER TABLE page_data_archive ADD COLUMN analyzed_vector_version INTEGER")
+            cursor.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'page_data_current' AND column_name = 'last_analyzed_at'
+            """)
+            if not cursor.fetchone():
+                cursor.execute("ALTER TABLE page_data_current ADD COLUMN last_analyzed_at TIMESTAMPTZ")
+                cursor.execute("ALTER TABLE page_data_archive ADD COLUMN last_analyzed_at TIMESTAMPTZ")
             conn.commit()
     except Exception:
         pass
@@ -331,6 +392,20 @@ def extract_year_month_from_billing_date(billing_date_str: str) -> Optional[Tupl
     return None
 
 
+def _get_analyzed_page_numbers_sync(db, pdf_filename: str) -> List[int]:
+    """문서별 분석 완료된 페이지 번호 목록 (page_data_current 기준)."""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT page_number FROM page_data_current WHERE pdf_filename = %s ORDER BY page_number",
+                (pdf_filename,),
+            )
+            return [row[0] for row in cursor.fetchall()]
+    except Exception:
+        return []
+
+
 def get_document_year_month(db, pdf_filename: str, year: Optional[int] = None, month: Optional[int] = None) -> Optional[Tuple[int, int]]:
     """
     문서의 첫 번째 페이지에서 請求年月 추출
@@ -416,6 +491,7 @@ class DocumentResponse(BaseModel):
     data_year: Optional[int] = None  # 문서 데이터 연도 (請求年月에서 추출)
     data_month: Optional[int] = None  # 문서 데이터 월 (請求年月에서 추출)
     is_answer_key_document: bool = False  # 정답지 생성 대상 여부 (true면 검토 탭에서 제외)
+    analyzed_page_numbers: Optional[List[int]] = None  # 분석 완료된 페이지 번호 목록 (검토 탭에서 "분석 중" 구분용)
 
 
 class DocumentListResponse(BaseModel):
@@ -616,6 +692,36 @@ async def upload_documents_with_bbox(
     }
 
 
+def _create_document_on_analysis_failure_sync(
+    database,
+    pdf_filename: str,
+    total_pages: int,
+    upload_channel: str,
+    user_id: int,
+    data_year: Optional[int],
+    data_month: Optional[int],
+):
+    """1페이지 분석 실패 시 문서만 생성 (form_type=null). 검토 탭에서 미분류로 표시."""
+    with database.get_connection() as conn:
+        cursor = conn.cursor()
+        if data_year and data_month:
+            created_at = datetime(data_year, data_month, 1)
+            cursor.execute("""
+                INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, created_by_user_id, updated_by_user_id, created_at, data_year, data_month)
+                VALUES (%s, %s, NULL, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (pdf_filename) DO UPDATE SET total_pages = EXCLUDED.total_pages, form_type = COALESCE(documents_current.form_type, NULL),
+                    upload_channel = EXCLUDED.upload_channel, updated_at = CURRENT_TIMESTAMP
+            """, (pdf_filename, total_pages, upload_channel, user_id, user_id, created_at, data_year, data_month))
+        else:
+            cursor.execute("""
+                INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, created_by_user_id, updated_by_user_id)
+                VALUES (%s, %s, NULL, %s, %s, %s)
+                ON CONFLICT (pdf_filename) DO UPDATE SET total_pages = EXCLUDED.total_pages, form_type = COALESCE(documents_current.form_type, NULL),
+                    upload_channel = EXCLUDED.upload_channel, updated_at = CURRENT_TIMESTAMP
+            """, (pdf_filename, total_pages, upload_channel, user_id, user_id))
+        conn.commit()
+
+
 def _update_doc_after_upload_sync(
     database,
     upload_channel: str,
@@ -670,6 +776,8 @@ async def process_pdf_background(
     """
     pdf_path = None
     try:
+        db = get_db()
+        _ensure_phase1_rag_columns(db)
         main_loop = asyncio.get_event_loop()
 
         def progress_callback(page_num: int, total_pages: int, message: str):
@@ -698,9 +806,58 @@ async def process_pdf_background(
             session_id=session_id
         )
 
+        pdf_filename = f"{pdf_name}.pdf"
+
+        def _on_document_ready(total_pages: int, pil_images: list):
+            """전체 이미지 변환 직후: 문서 행 생성 + 이미지 저장 → 검토 탭에서 즉시 문서 노출"""
+            import io
+            image_data_list = []
+            for img in pil_images:
+                if img is None:
+                    image_data_list.append(None)
+                    continue
+                buf = io.BytesIO()
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(buf, format="JPEG", quality=95, optimize=True)
+                image_data_list.append(buf.getvalue())
+            db_sync = get_db()
+            db_sync.create_document_with_images(
+                pdf_filename=pdf_filename,
+                total_pages=total_pages,
+                image_data_list=image_data_list,
+                upload_channel=upload_channel,
+                user_id=user_id,
+                data_year=data_year,
+                data_month=data_month,
+            )
+
+        def _on_page_complete(page_number: int, page_json: dict):
+            """페이지별 RAG+LLM 완료 시: DB 저장 + WebSocket으로 검토 탭 갱신 유도"""
+            db_sync = get_db()
+            db_sync.save_single_page_data(
+                pdf_filename=pdf_filename,
+                page_json=page_json,
+                form_type=form_type,
+                upload_channel=upload_channel,
+                image_data=None,
+            )
+            asyncio.run_coroutine_threadsafe(
+                manager.send_progress(
+                    session_id,
+                    {
+                        "type": "page_complete",
+                        "file_name": pdf_filename,
+                        "page_number": page_number,
+                    },
+                ),
+                main_loop,
+            )
+
         user_sem = await _get_user_analysis_semaphore(user_id)
         async with user_sem:
             async with _global_analysis_semaphore:
+                # 업로드 시: OCR·분석은 전체 페이지, 페이지 완료 시마다 DB 저장 + page_complete 전송
                 success, pages, error_msg, elapsed_time = await main_loop.run_in_executor(
                     _analysis_executor,
                     lambda: PdfProcessor.process_pdf(
@@ -714,7 +871,11 @@ async def process_pdf_background(
                         data_year=data_year,
                         data_month=data_month,
                         include_bbox=include_bbox,
-                    )
+                        page_numbers=None,
+                        convert_all_images=False,
+                        on_document_ready=_on_document_ready,
+                        on_page_complete=_on_page_complete,
+                    ),
                 )
 
         if success:
@@ -742,7 +903,17 @@ async def process_pdf_background(
                 "message": f"Processing completed: {pages} pages in {elapsed_time:.1f}s"
             })
         else:
-            # 실패 메시지 전송
+            # Phase 1: 1페이지 분석 실패 시에도 문서만 생성 (form_type=null)
+            try:
+                import fitz
+                db = get_db()
+                pdf_filename = f"{pdf_name}.pdf"
+                with fitz.open(str(pdf_path)) as doc:
+                    total_pages = len(doc)
+                await db.run_sync(_create_document_on_analysis_failure_sync,
+                    db, pdf_filename, total_pages, upload_channel, user_id, data_year, data_month)
+            except Exception:
+                pass
             await manager.send_progress(session_id, {
                 "type": "error",
                 "file_name": f"{pdf_name}.pdf",
@@ -809,6 +980,7 @@ async def get_documents(
     exclude_img_seed 기본 True: created_by_user_id IS NULL(img 시드) 문서 제외 (업로드/검토 탭 기본).
     현황 탭 등 전체 포함 필요 시 exclude_img_seed=false 로 호출.
     """
+    _ensure_phase1_rag_columns(db)
     try:
         def _get_documents_sync(database, **kwargs):
             rows = query_documents_table(database, **kwargs)
@@ -861,59 +1033,6 @@ def _extract_pdf_filenames_from_index_metadata(meta) -> list:
     ]
 
 
-@router.get("/vector-reflect-pages")
-async def get_vector_reflect_pages(
-    current_user: dict = Depends(get_current_user),
-    db=Depends(get_db),
-):
-    """
-    ベクターDB反映タブ用: 文書一覧をページ単位で返す。
-    各ページに in_vector(反映済), modified(学習対象指定済み) を付与。
-    """
-    def _fetch_sync(database):
-        rows = query_documents_table(database, exclude_img_seed=True)
-        merged_set = set()
-        with database.get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT pdf_filename, page_number FROM rag_learning_status_current WHERE status = 'merged'")
-            for r in cur.fetchall():
-                if r[0] and r[1] is not None:
-                    merged_set.add((r[0], int(r[1])))
-            modified_set = set()
-            try:
-                cur.execute("""
-                    SELECT pdf_filename, page_number FROM page_data_current
-                    WHERE is_rag_candidate = TRUE
-                    UNION
-                    SELECT pdf_filename, page_number FROM page_data_archive
-                    WHERE is_rag_candidate = TRUE
-                """)
-                for r in cur.fetchall():
-                    if r[0] and r[1] is not None:
-                        modified_set.add((r[0], int(r[1])))
-            except Exception:
-                pass
-        result = []
-        for row in rows:
-            pdf_filename = row[0]
-            total_pages = int(row[1]) if row[1] is not None else 0
-            pages = []
-            for p in range(1, total_pages + 1):
-                pages.append({
-                    "page_number": p,
-                    "in_vector": (pdf_filename, p) in merged_set,
-                    "modified": (pdf_filename, p) in modified_set,
-                })
-            result.append({
-                "pdf_filename": pdf_filename,
-                "total_pages": total_pages,
-                "pages": pages,
-            })
-        return {"documents": result}
-
-    return await db.run_sync(_fetch_sync, db)
-
-
 @router.get("/in-vector-index")
 async def get_documents_in_vector_index(db=Depends(get_db)):
     """
@@ -954,12 +1073,35 @@ async def get_documents_in_vector_index(db=Depends(get_db)):
         return {"pdf_filenames": []}
 
 
+def _query_analyzed_page_numbers_batch(db, pdf_filenames: List[str]) -> Dict[str, List[int]]:
+    """문서별 분석 완료 페이지 번호 목록 배치 조회. 반환: { pdf_filename: [page_number, ...] }"""
+    if not pdf_filenames:
+        return {}
+    out = {fn: [] for fn in pdf_filenames}
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT pdf_filename, page_number FROM page_data_current
+                WHERE pdf_filename = ANY(%s) ORDER BY pdf_filename, page_number
+                """,
+                (pdf_filenames,),
+            )
+            for pdf_fn, page_no in cursor.fetchall():
+                out.setdefault(pdf_fn, []).append(page_no)
+    except Exception:
+        pass
+    return out
+
+
 def _build_document_list_from_rows(db, rows, year=None, month=None) -> List:
     """query_documents_table 결과 rows를 DocumentResponse 리스트로 변환 (get_documents / for_answer_key_tab 공용)."""
     if not rows:
         return []
     pdf_filenames = [row[0] for row in rows]
     page_meta_rows = query_page_meta_batch(db, pdf_filenames, year=year, month=month)
+    analyzed_pages_map = _query_analyzed_page_numbers_batch(db, pdf_filenames)
     documents = []
     for row in rows:
         pdf_filename = row[0]
@@ -1007,7 +1149,8 @@ def _build_document_list_from_rows(db, rows, year=None, month=None) -> List:
             created_at=created_at_str,
             data_year=data_year,
             data_month=data_month,
-            is_answer_key_document=is_answer_key_document
+            is_answer_key_document=is_answer_key_document,
+            analyzed_page_numbers=analyzed_pages_map.get(pdf_filename),
         ))
     return documents
 
@@ -1144,6 +1287,89 @@ def _find_pdf_path_for_document(db, pdf_filename: str) -> Optional[Path]:
     return None
 
 
+def _reanalyze_page_rag_only_sync(
+    pdf_filename: str,
+    page_number: int,
+    form_type: Optional[str],
+    ocr_text: str,
+) -> Dict:
+    """
+    재분석 전용: OCR은 실행하지 않고 DB에서 받은 ocr_text로 RAG+LLM만 실행.
+    Returns: page_json (page_number 포함).
+    """
+    from modules.utils.config import rag_config, get_project_root
+    from modules.core.extractors.rag_extractor import extract_json_with_rag
+
+    debug_base = get_project_root() / "debug2" / Path(pdf_filename).stem
+    debug_base.mkdir(parents=True, exist_ok=True)
+
+    page_json = extract_json_with_rag(
+        ocr_text=ocr_text,
+        question=rag_config.question,
+        model_name=rag_config.openai_model,
+        temperature=0,
+        top_k=rag_config.top_k,
+        similarity_threshold=rag_config.similarity_threshold,
+        debug_dir=str(debug_base),
+        page_num=page_number,
+        form_type=form_type,
+        ocr_words=None,
+        page_width=None,
+        page_height=None,
+        include_bbox=False,
+    )
+    if not isinstance(page_json, dict):
+        raise ValueError(f"Unexpected response type: {type(page_json)}")
+    page_json["page_number"] = page_number
+    return page_json
+
+
+def _get_ocr_text_from_db(db, pdf_filename: str, page_number: int) -> Optional[str]:
+    """DB에서 해당 페이지의 ocr_text 반환 (컬럼 또는 page_meta._ocr_text). 없으면 None."""
+    page_result = db.get_page_result(pdf_filename, page_number)
+    if not page_result:
+        return None
+    ocr = page_result.get("ocr_text")
+    if isinstance(ocr, str) and ocr.strip():
+        return ocr.strip()
+    meta = page_result.get("page_meta") or page_result
+    ocr = meta.get("_ocr_text") if isinstance(meta, dict) else None
+    if isinstance(ocr, str) and ocr.strip():
+        return ocr.strip()
+    return None
+
+
+def _analyze_one_page_sync(
+    db,
+    pdf_filename: str,
+    page_number: int,
+    form_type: Optional[str],
+    upload_channel: str,
+) -> Tuple[int, Optional[Dict], Optional[str]]:
+    """
+    단일 페이지 재분석: OCR은 DB에서만 읽고, RAG+LLM만 실행 (analyze-from-page 병렬용).
+    Returns: (page_number, page_json or None, error_message or None)
+    """
+    ocr_text = _get_ocr_text_from_db(db, pdf_filename, page_number)
+    if not ocr_text:
+        return (page_number, None, "OCR not in DB. Run initial analysis first.")
+    try:
+        page_json = _reanalyze_page_rag_only_sync(pdf_filename, page_number, form_type, ocr_text)
+    except Exception as e:
+        return (page_number, None, str(e))
+    try:
+        from modules.utils.fill_empty_values_utils import normalize_ditto_like_values_in_page_results, fill_empty_values_in_page_results
+        from modules.utils.form2_rebate_utils import normalize_form2_rebate_conditions
+        page_results = normalize_ditto_like_values_in_page_results([page_json])
+        page_results = fill_empty_values_in_page_results(page_results, form_type=form_type)
+        page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)
+        page_json = page_results[0]
+    except Exception:
+        pass
+    page_json["ocr_text"] = ocr_text  # 저장 시 DB에 유지
+    return (page_number, page_json, None)
+
+
 def _generate_all_page_images_sync(
     pdf_path_str: str,
     total_pages: int,
@@ -1217,7 +1443,7 @@ async def generate_page_images(
             status_code=404,
             detail="PDFファイルが見つかりません。一覧から該当文書を再度アップロードして解析を実行してください。",
         )
-    dpi = getattr(rag_config, "dpi", 300)
+    dpi = getattr(rag_config, "dpi", 200)
     try:
         saved = await asyncio.to_thread(
             _generate_all_page_images_sync,
@@ -1319,6 +1545,166 @@ def _get_answer_pages_from_db(pdf_filename: str):
     return pages
 
 
+class AnalyzeSinglePageRequest(BaseModel):
+    """단일 페이지 분석 요청 (Phase 1)"""
+    pdf_filename: str
+    page_number: int
+
+
+@router.post("/analyze-single-page")
+async def analyze_single_page(
+    body: AnalyzeSinglePageRequest,
+    db=Depends(get_db),
+):
+    """
+    단일 페이지 재분석: OCR은 DB에서만 읽고, RAG+LLM만 실행 후 해당 페이지만 DB 저장.
+    OCR은 최초 분석(업로드) 시에만 실행. 재분석은 RAG+LLM만 의미.
+    """
+    doc = db.get_document(body.pdf_filename)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    form_type = doc.get("form_type")
+    upload_channel = doc.get("upload_channel") or "mail"
+
+    ocr_text = await db.run_sync(_get_ocr_text_from_db, db, body.pdf_filename, body.page_number)
+    if not ocr_text:
+        raise HTTPException(
+            status_code=400,
+            detail="該当ページにOCR結果がありません。先に初回分析（アップロード）を実行してください。",
+        )
+
+    try:
+        page_json = await asyncio.get_event_loop().run_in_executor(
+            _analysis_executor,
+            lambda: _reanalyze_page_rag_only_sync(
+                body.pdf_filename, body.page_number, form_type, ocr_text
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    try:
+        from modules.utils.fill_empty_values_utils import normalize_ditto_like_values_in_page_results, fill_empty_values_in_page_results
+        from modules.utils.form2_rebate_utils import normalize_form2_rebate_conditions
+        page_results = normalize_ditto_like_values_in_page_results([page_json])
+        page_results = fill_empty_values_in_page_results(page_results, form_type=form_type)
+        page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)
+        page_json = page_results[0]
+    except Exception:
+        pass
+    page_json["ocr_text"] = ocr_text  # 저장 시 DB에 유지
+
+    success = db.save_single_page_data(
+        pdf_filename=body.pdf_filename,
+        page_json=page_json,
+        form_type=form_type,
+        upload_channel=upload_channel,
+        image_data=None,
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save page")
+    return {"success": True, "page": page_json}
+
+
+class AnalyzeFromPageRequest(BaseModel):
+    """이 페이지 이후 전체 재분석 요청 (Phase 1)"""
+    pdf_filename: str
+    from_page_number: int
+
+
+# 동시 재분석 페이지 수 상한 (API rate limit·리소스 고려)
+_ANALYZE_FROM_PAGE_CONCURRENCY = min(5, max(1, int(os.getenv("ANALYZE_FROM_PAGE_CONCURRENCY", "4"))))
+
+
+@router.post("/analyze-from-page")
+async def analyze_from_page(
+    body: AnalyzeFromPageRequest,
+    db=Depends(get_db),
+):
+    """
+    이 페이지(from_page_number)부터 마지막 페이지까지 병렬 재분석.
+    학습 요청 시 해당 문서의 진행 중인 재분석은 중단됨 (6.3).
+    """
+    _ensure_phase1_rag_columns(db)
+    doc = db.get_document(body.pdf_filename)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    total_pages = doc.get("total_pages") or 0
+    if total_pages < 1:
+        raise HTTPException(status_code=400, detail="Document has no pages")
+    from_page = max(1, min(body.from_page_number, total_pages))
+    form_type = doc.get("form_type")
+    upload_channel = doc.get("upload_channel") or "mail"
+
+    async with _reanalysis_lock:
+        if body.pdf_filename in _reanalysis_cancel_events:
+            raise HTTPException(status_code=409, detail="Re-analysis already in progress for this document")
+        cancel_ev = asyncio.Event()
+        _reanalysis_cancel_events[body.pdf_filename] = cancel_ev
+
+    analyzed = []
+    cancelled = False
+    sem = asyncio.Semaphore(_ANALYZE_FROM_PAGE_CONCURRENCY)
+
+    async def run_one(pg: int):
+        nonlocal cancelled
+        if cancelled:
+            return (pg, None, "cancelled")
+        async with sem:
+            if cancel_ev.is_set():
+                cancelled = True
+                return (pg, None, "cancelled")
+            loop = asyncio.get_event_loop()
+            res = await loop.run_in_executor(
+                _analysis_executor,
+                lambda: _analyze_one_page_sync(db, body.pdf_filename, pg, form_type, upload_channel),
+            )
+            pnum, pjson, err = res
+            if cancel_ev.is_set():
+                cancelled = True
+                return (pnum, None, "cancelled")
+            return (pnum, pjson, err)
+
+    try:
+        pages_to_run = list(range(from_page, total_pages + 1))
+        tasks = [run_one(pg) for pg in pages_to_run]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                continue
+            pnum, pjson, err = r
+            if err == "cancelled":
+                cancelled = True
+                continue
+            if pjson and not err:
+                success = db.save_single_page_data(
+                    pdf_filename=body.pdf_filename,
+                    page_json=pjson,
+                    form_type=form_type,
+                    upload_channel=upload_channel,
+                    image_data=None,
+                )
+                if success:
+                    analyzed.append(pnum)
+    finally:
+        async with _reanalysis_lock:
+            _reanalysis_cancel_events.pop(body.pdf_filename, None)
+
+    return {
+        "success": True,
+        "analyzed": analyzed,
+        "cancelled": cancelled,
+        "from_page": from_page,
+        "total_pages": total_pages,
+    }
+
+
+def request_cancel_reanalysis_for_document(pdf_filename: str) -> None:
+    """학습 요청 시 해당 문서의 진행 중인 이 페이지 이후 전체 재분석을 중단시키기 위해 호출."""
+    if pdf_filename in _reanalysis_cancel_events:
+        _reanalysis_cancel_events[pdf_filename].set()
+
+
 @router.get("/{pdf_filename}/answer-json")
 async def get_document_answer_json(
     pdf_filename: str,
@@ -1364,12 +1750,15 @@ class SaveAnswerJsonRequest(BaseModel):
 async def save_document_answer_json(
     pdf_filename: str,
     body: SaveAnswerJsonRequest,
+    current_user_id: int = Depends(get_current_user_id),
     db=Depends(get_db)
 ):
     """
     현재 상태를 문서 전체 answer-json으로 DB에 한 번에 반영.
     행마다 PUT 하지 않으므로 빠르고, refetch 시 null 덮어쓰기 없음.
     """
+    _ensure_last_edited_columns(db)
+    _ensure_phase1_rag_columns(db)
     doc = db.get_document(pdf_filename)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1399,12 +1788,14 @@ async def save_document_answer_json(
                 if not items and page_role == "detail":
                     page_role = "cover" if page_number == 1 else "summary"
 
+                # last_edited_at, last_edited_by_user_id: 그리드 保存 시 갱신 (Phase 1)
                 cursor.execute("""
-                    INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
-                    VALUES (%s, %s, %s, %s::jsonb)
+                    INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, last_edited_at, last_edited_by_user_id)
+                    VALUES (%s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP, %s)
                     ON CONFLICT (pdf_filename, page_number)
-                    DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta
-                """, (pdf_filename, page_number, page_role, page_meta_json))
+                    DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta,
+                        last_edited_at = CURRENT_TIMESTAMP, last_edited_by_user_id = EXCLUDED.last_edited_by_user_id
+                """, (pdf_filename, page_number, page_role, page_meta_json, current_user_id))
 
                 cursor.execute(
                     "DELETE FROM items_current WHERE pdf_filename = %s AND page_number = %s",
@@ -1495,6 +1886,9 @@ async def get_document(
         data_month = year_month[1] if year_month else None
         
         is_answer_key = bool(doc.get('is_answer_key_document', False))
+        analyzed_page_numbers = await db.run_sync(
+            _get_analyzed_page_numbers_sync, db, pdf_filename
+        )
         return DocumentResponse(
             pdf_filename=doc['pdf_filename'],
             total_pages=doc['total_pages'],
@@ -1504,7 +1898,8 @@ async def get_document(
             created_at=created_at_str,
             data_year=data_year,
             data_month=data_month,
-            is_answer_key_document=is_answer_key
+            is_answer_key_document=is_answer_key,
+            analyzed_page_numbers=analyzed_page_numbers,
         )
     
     except HTTPException:

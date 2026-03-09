@@ -42,11 +42,14 @@ CREATE TABLE user_sessions (
 -- pg_trgm: 슈퍼명 유사도 검색(90% 이상)용 (retail_user.csv 기반 담당 필터에 사용)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
+-- pgvector: Phase 2 페이지 단위 벡터 검색용 (paraphrase-multilingual-MiniLM-L12-v2 = 384차원)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- ============================================
 -- 2. 문서 메타데이터 테이블 (current/archive)
 -- ============================================
 
--- documents_current 테이블
+-- documents_current 테이블 (Phase 1: current_vector_version — 학습 요청 시 버전 관리)
 CREATE TABLE documents_current (
     document_id SERIAL PRIMARY KEY,
     pdf_filename VARCHAR(500) UNIQUE NOT NULL,
@@ -63,10 +66,11 @@ CREATE TABLE documents_current (
     is_answer_key_document BOOLEAN NOT NULL DEFAULT FALSE,
     created_by_user_id INTEGER REFERENCES users(user_id),
     updated_by_user_id INTEGER REFERENCES users(user_id),
-    answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
+    answer_key_designated_by_user_id INTEGER REFERENCES users(user_id),
+    current_vector_version INTEGER NOT NULL DEFAULT 1
 );
 
--- documents_archive 테이블
+-- documents_archive 테이블 (Phase 1: current_vector_version)
 CREATE TABLE documents_archive (
     document_id SERIAL PRIMARY KEY,
     pdf_filename VARCHAR(500) UNIQUE NOT NULL,
@@ -83,14 +87,15 @@ CREATE TABLE documents_archive (
     is_answer_key_document BOOLEAN NOT NULL DEFAULT FALSE,
     created_by_user_id INTEGER REFERENCES users(user_id),
     updated_by_user_id INTEGER REFERENCES users(user_id),
-    answer_key_designated_by_user_id INTEGER REFERENCES users(user_id)
+    answer_key_designated_by_user_id INTEGER REFERENCES users(user_id),
+    current_vector_version INTEGER NOT NULL DEFAULT 1
 );
 
 -- ============================================
 -- 3. 페이지 데이터 테이블 (current/archive)
 -- ============================================
 
--- page_data_current 테이블
+-- page_data_current 테이블 (Phase 1: ocr_text 업로드 시 저장·이후 분석 시 DB만 사용, analyzed_vector_version/last_analyzed_at)
 CREATE TABLE page_data_current (
     page_data_id SERIAL PRIMARY KEY,
     pdf_filename VARCHAR(500) NOT NULL REFERENCES documents_current(pdf_filename) ON DELETE CASCADE,
@@ -99,12 +104,19 @@ CREATE TABLE page_data_current (
     page_meta JSONB,
     -- 이 페이지를 벡터DB(RAG) 학습에 사용할지 여부 (관리자 화면에서 토글)
     is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE,
+    -- 그리드에서 保存(Ctrl+S)으로 저장한 마지막 시각·사용자 (수정 이력 표시용)
+    last_edited_at TIMESTAMPTZ,
+    last_edited_by_user_id INTEGER REFERENCES users(user_id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    -- Phase 1: 업로드 시 OCR 결과 저장. 이후 분석 시 OCR 재실행 없이 DB에서만 읽음
+    ocr_text TEXT,
+    analyzed_vector_version INTEGER,
+    last_analyzed_at TIMESTAMPTZ,
     UNIQUE(pdf_filename, page_number)
 );
 
--- page_data_archive 테이블
+-- page_data_archive 테이블 (Phase 1: ocr_text, analyzed_vector_version, last_analyzed_at)
 CREATE TABLE page_data_archive (
     page_data_id SERIAL PRIMARY KEY,
     pdf_filename VARCHAR(500) NOT NULL REFERENCES documents_archive(pdf_filename) ON DELETE CASCADE,
@@ -113,8 +125,13 @@ CREATE TABLE page_data_archive (
     page_meta JSONB,
     -- 아카이브 테이블에도 동일한 플래그 유지
     is_rag_candidate BOOLEAN NOT NULL DEFAULT FALSE,
+    last_edited_at TIMESTAMPTZ,
+    last_edited_by_user_id INTEGER REFERENCES users(user_id),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    ocr_text TEXT,
+    analyzed_vector_version INTEGER,
+    last_analyzed_at TIMESTAMPTZ,
     UNIQUE(pdf_filename, page_number)
 );
 
@@ -269,6 +286,26 @@ CREATE TABLE rag_vector_index (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(index_name, form_type)
 );
+
+-- ============================================
+-- 8-2. pgvector 페이지 임베딩 테이블 (Phase 2)
+-- ============================================
+-- 페이지 1건 = 1행. 학습 요청 시 INSERT, 재학습 시 (pdf_filename, page_number) 기준 UPDATE.
+-- RAG 검색: ORDER BY embedding <=> query_embedding, form_type 필터 가능.
+-- embedding 차원: paraphrase-multilingual-MiniLM-L12-v2 = 384
+CREATE TABLE IF NOT EXISTS rag_page_embeddings (
+    id SERIAL PRIMARY KEY,
+    pdf_filename VARCHAR(500) NOT NULL,
+    page_number INTEGER NOT NULL,
+    ocr_text TEXT NOT NULL,
+    embedding vector(384) NOT NULL,
+    answer_json JSONB NOT NULL,
+    form_type VARCHAR(10),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(pdf_filename, page_number)
+);
+CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_form_type ON rag_page_embeddings(form_type);
+-- 벡터 인덱스(ivfflat/hnsw)는 데이터 적재 후 필요 시 별도 생성 (빈 테이블에선 실패 가능)
 
 -- ============================================
 -- 9. 필드 매핑 테이블 (논리키 → 양식별 실제 필드명)

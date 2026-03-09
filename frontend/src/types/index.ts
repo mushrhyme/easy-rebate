@@ -13,6 +13,7 @@ export interface Document {
   data_year?: number  // 문서 데이터 연도 (請求年月에서 추출)
   data_month?: number  // 문서 데이터 월 (請求年月에서 추출)
   is_answer_key_document?: boolean  // 정답지 생성 대상 여부 (true면 검토 탭에서 제외)
+  analyzed_page_numbers?: number[]  // 분석 완료된 페이지 번호 (검토 탭에서 "분석 중" 구분용)
 }
 
 export interface DocumentListResponse {
@@ -80,11 +81,12 @@ export interface PageImageResponse {
 }
 
 export interface WebSocketMessage {
-  type: 'connected' | 'start' | 'progress' | 'complete' | 'error' | 'ping' | 'pong'
+  type: 'connected' | 'start' | 'progress' | 'complete' | 'error' | 'ping' | 'pong' | 'page_complete'
   task_id?: string
   file_name?: string
   current_page?: number
   total_pages?: number
+  page_number?: number  // page_complete 시 완료된 페이지 번호
   message?: string
   progress?: number
   pages?: number

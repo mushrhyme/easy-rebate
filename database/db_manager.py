@@ -822,6 +822,23 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
             if key not in page_keys:
                 reordered[key] = json_data[key]
         
+        # page_keys가 비어 있어도 item_keys가 있으면 "items" 배열 내부 키 순서 재정렬 (form_type 기준)
+        if item_keys and "items" in reordered and isinstance(reordered["items"], list):
+            reordered_items = []
+            for item in reordered["items"]:
+                if isinstance(item, dict):
+                    reordered_item = {}
+                    for item_key in item_keys:
+                        if item_key in item:
+                            reordered_item[item_key] = item[item_key]
+                    for item_key in item.keys():
+                        if item_key not in item_keys:
+                            reordered_item[item_key] = item[item_key]
+                    reordered_items.append(reordered_item)
+                else:
+                    reordered_items.append(item)
+            reordered["items"] = reordered_items
+        
         return reordered
     
     def _reorder_by_original_file(

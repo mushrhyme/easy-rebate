@@ -43,7 +43,7 @@ class RAGConfig:
     
     이 클래스의 값만 수정하면 전체 애플리케이션의 설정이 변경됩니다.
     """
-    dpi: int = 300
+    dpi: int = 200
     text_extraction_method: str = None
 
     def __post_init__(self):

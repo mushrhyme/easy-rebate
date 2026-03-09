@@ -202,6 +202,23 @@ export const FormUploadSection = ({ uploadChannel, selectedYear: propYear, selec
             })
           }
           break
+        case 'page_complete':
+          // 페이지별 분석 완료 시 검토 탭에서 해당 문서 목록·분석 완료 페이지 갱신
+          invalidateDocumentLists()
+          if (message.file_name && message.page_number != null) {
+            setFileProgresses((prev) => {
+              const cur = prev[message.file_name!]
+              if (!cur || cur.status !== 'processing') return prev
+              return {
+                ...prev,
+                [message.file_name!]: {
+                  ...cur,
+                  message: `ページ ${message.page_number} 分析完了`,
+                },
+              }
+            })
+          }
+          break
         case 'complete':
           // 파일 처리 완료
           invalidateDocumentLists() // 파일별 완료 시마다 검토·업로드 탭 목록 동기화

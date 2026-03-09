@@ -7,7 +7,7 @@ PyMuPDF (fitz)를 사용하여 PDF를 이미지로 변환합니다.
 """
 
 import os
-from typing import List
+from typing import List, Optional
 import fitz  # PyMuPDF
 from PIL import Image
 from io import BytesIO
@@ -20,54 +20,42 @@ load_env()
 class PdfImageConverter:
     """PDF를 이미지로 변환하는 클래스 (PyMuPDF 사용)"""
     
-    def __init__(self, dpi: int = 300):
+    def __init__(self, dpi: int = 200):
         """
         Args:
-            dpi: PDF 변환 시 해상도 (기본값: 300)
+            dpi: PDF 변환 시 해상도 (기본값: 200)
         """
         self.dpi = dpi
         # PyMuPDF의 zoom factor 계산 (DPI를 기반으로)
-        # 72 DPI가 기본값이므로, 300 DPI는 300/72 = 약 4.17배
+        # 72 DPI가 기본값이므로, 200 DPI는 200/72 ≈ 2.78배
         self.zoom = dpi / 72.0
     
-    def convert_pdf_to_images(self, pdf_path: str) -> List[Image.Image]:
+    def convert_pdf_to_images(self, pdf_path: str, page_numbers: Optional[List[int]] = None) -> List[Image.Image]:
         """
         PDF 파일을 이미지 리스트로 변환 (PyMuPDF 사용)
-        
+
         Args:
             pdf_path: PDF 파일 경로
-            
+            page_numbers: 지정 시 해당 페이지만 변환 (1-based). None이면 전체.
+
         Returns:
-            PIL Image 객체 리스트 (각 페이지당 하나)
-            예: [<PIL.Image.Image object>, <PIL.Image.Image object>, ...]
+            PIL Image 객체 리스트. page_numbers 지정 시 해당 페이지만, 순서 유지.
         """
         images = []
-        
-        # PyMuPDF로 PDF 열기
         doc = fitz.open(pdf_path)
-        
         try:
-            # 각 페이지를 이미지로 변환
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                
-                # 픽셀맵 생성 (zoom factor 적용)
+            indices = list(range(len(doc))) if page_numbers is None else [p - 1 for p in page_numbers if 1 <= p <= len(doc)]
+            for page_idx in indices:
+                page = doc[page_idx]
                 mat = fitz.Matrix(self.zoom, self.zoom)
                 pix = page.get_pixmap(matrix=mat)
-                
-                # PIL Image로 변환
-                img_data = pix.tobytes("png")  # PNG 형식으로 변환
+                img_data = pix.tobytes("png")
                 img = Image.open(BytesIO(img_data))
-                
-                # RGB 모드로 변환 (일관성 유지)
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                
                 images.append(img)
-            
         finally:
             doc.close()
-        
         return images
     
     def save_images(self, images: List[Image.Image], output_dir: str, prefix: str = "page") -> List[str]:

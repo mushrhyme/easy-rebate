@@ -26,7 +26,6 @@ export interface DashboardProps {}
 export function Dashboard(_props: DashboardProps = {}) {
   const { user, logout } = useAuth()
   const queryClient = useQueryClient()
-  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const [chartByFormType, setChartByFormType] = useState(false)
   /** 연월 필터. null = 전체. RAG 섹션 제외한 현황 데이터에 적용 */
   const [selectedYearMonth, setSelectedYearMonth] = useState<{ year: number; month: number } | null>(null)
@@ -94,6 +93,7 @@ export function Dashboard(_props: DashboardProps = {}) {
     queryKey: ['rag-admin', 'status', ragStatusYearMonth.year, ragStatusYearMonth.month],
     queryFn: () => ragAdminApi.getStatus({ year: ragStatusYearMonth.year, month: ragStatusYearMonth.month }),
     refetchInterval: 60000,
+    refetchOnMount: 'always', // 학습 리퀘스트 후 현황 탭 전환 시 항상 최신 RAG 수치 반영
   })
 
   const { data: customerStatsData, isLoading: customerStatsLoading, error: customerStatsError } = useQuery({
@@ -523,16 +523,12 @@ export function Dashboard(_props: DashboardProps = {}) {
             </div>
           )}
 
-          {/* 文書様式・ページ役割 — 全員表示。管理人のみ様式名編集・保存/削除 */}
+          {/* 文書様式・ページ役割 — 全員に表示（編集はバックエンドで管理者のみ許可） */}
           <div className="dashboard-subsection dashboard-form-type-labels-section">
-            {isAdmin && (
-              <>
-                <h3 className="dashboard-subtitle">様式名の管理</h3>
-                <p className="dashboard-section-note">
-                  様式コード（01, 02…）の表示名を変更できます。一覧・フィルタ・検索などで使われる名前です。
-                </p>
-              </>
-            )}
+            <h3 className="dashboard-subtitle">様式名の管理</h3>
+            <p className="dashboard-section-note">
+              様式コード（01, 02…）の表示名を変更できます。一覧・フィルタ・検索などで使われる名前です。
+            </p>
             {formTypesLoading ? (
               <p className="dashboard-loading">読み込み中...</p>
             ) : (
@@ -542,97 +538,86 @@ export function Dashboard(_props: DashboardProps = {}) {
                     <col style={{ width: '5rem' }} />
                     <col />
                     <col style={{ width: '5rem' }} />
-                    <col style={{ width: '5rem' }} />
                     <col style={{ width: '12.5rem' }} />
                   </colgroup>
                   <thead>
                     <tr>
                       <th>様式コード</th>
                       <th>表示名</th>
-                      <th className="dashboard-th-num">嵌入文書数</th>
                       <th className="dashboard-th-num">p</th>
-                      <th className="dashboard-col-action">{isAdmin ? '操作' : ''}</th>
+                      <th className="dashboard-col-action">操作</th>
                     </tr>
                   </thead>
                   <tbody>
                     {(formTypesData?.form_types ?? []).map((opt) => {
-                      const ragDocs = answerKeysFromImgData?.by_form_type?.[opt.value] ?? []
-                      const docCount = ragDocs.length
-                      const pageCount = ragDocs.reduce((sum, d) => sum + (d.total_pages ?? 0), 0)
+                      // 상단 카드와 동일 소스(rag status) 사용 — 정답지 추가 시 카드·테이블 동시 반영
+                      const perForm = ragData?.per_form_type?.find((p) => (p.form_type ?? '') === opt.value)
+                      const pageCount = perForm?.vector_count ?? 0
                       return (
                         <tr key={opt.value}>
                           <td className="dashboard-form-type-code">{opt.value}</td>
                           <td>
-                            {isAdmin ? (
-                              <input
-                                type="text"
-                                className="dashboard-form-type-label-input"
-                                value={formTypeLabelDrafts[opt.value] ?? opt.label}
-                                onChange={(e) =>
-                                  setFormTypeLabelDrafts((prev) => ({ ...prev, [opt.value]: e.target.value }))
-                                }
-                                placeholder="表示名を入力"
-                              />
-                            ) : (
-                              <span>{opt.label}</span>
-                            )}
+                            <input
+                              type="text"
+                              className="dashboard-form-type-label-input"
+                              value={formTypeLabelDrafts[opt.value] ?? opt.label}
+                              onChange={(e) =>
+                                setFormTypeLabelDrafts((prev) => ({ ...prev, [opt.value]: e.target.value }))
+                              }
+                              placeholder="表示名を入力"
+                            />
                           </td>
-                          <td className="dashboard-td-num">{docCount.toLocaleString()}</td>
                           <td className="dashboard-td-num">{pageCount.toLocaleString()}</td>
                           <td className="dashboard-col-action">
-                            {isAdmin && (
-                              <>
-                                <button
-                                  type="button"
-                                  className="dashboard-button dashboard-button-small"
-                                  disabled={updateFormTypeLabelMutation.isPending}
-                                  onClick={() => {
-                                    const name = (formTypeLabelDrafts[opt.value] ?? opt.label).trim()
-                                    if (!name) return
-                                    updateFormTypeLabelMutation.mutate(
-                                      { formCode: opt.value, displayName: name },
-                                      {
-                                        onSuccess: () => alert('保存しました。'),
-                                        onError: (err: unknown) => {
-                                          const msg =
-                                            err && typeof err === 'object' && 'response' in err
-                                              ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                                              : null
-                                          alert(msg ? `保存に失敗しました: ${msg}` : '保存に失敗しました。')
-                                        },
-                                      }
-                                    )
-                                  }}
-                                >
-                                  {updateFormTypeLabelMutation.isPending ? '保存中...' : '保存'}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="dashboard-button dashboard-button-small dashboard-button-danger"
-                                  disabled={deleteFormTypeMutation.isPending}
-                                  onClick={() => {
-                                    if (
-                                      !window.confirm(
-                                        `様式「${opt.value}」を削除しますか？\n使用中の文書がある場合は削除できません。`
-                                      )
-                                    )
-                                      return
-                                    deleteFormTypeMutation.mutate(opt.value, {
-                                      onSuccess: () => alert('削除しました。'),
-                                      onError: (err: unknown) => {
-                                        const msg =
-                                          err && typeof err === 'object' && 'response' in err
-                                            ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                                            : null
-                                        alert(msg ? `削除に失敗しました: ${msg}` : '削除に失敗しました。')
-                                      },
-                                    })
-                                  }}
-                                >
-                                  {deleteFormTypeMutation.isPending ? '削除中...' : '削除'}
-                                </button>
-                              </>
-                            )}
+                            <button
+                              type="button"
+                              className="dashboard-button dashboard-button-small"
+                              disabled={updateFormTypeLabelMutation.isPending}
+                              onClick={() => {
+                                const name = (formTypeLabelDrafts[opt.value] ?? opt.label).trim()
+                                if (!name) return
+                                updateFormTypeLabelMutation.mutate(
+                                  { formCode: opt.value, displayName: name },
+                                  {
+                                    onSuccess: () => alert('保存しました。'),
+                                    onError: (err: unknown) => {
+                                      const msg =
+                                        err && typeof err === 'object' && 'response' in err
+                                          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                          : null
+                                      alert(msg ? `保存に失敗しました: ${msg}` : '保存に失敗しました。')
+                                    },
+                                  }
+                                )
+                              }}
+                            >
+                              {updateFormTypeLabelMutation.isPending ? '保存中...' : '保存'}
+                            </button>
+                            <button
+                              type="button"
+                              className="dashboard-button dashboard-button-small dashboard-button-danger"
+                              disabled={deleteFormTypeMutation.isPending}
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    `様式「${opt.value}」を削除しますか？\n使用中の文書がある場合は削除できません。`
+                                  )
+                                )
+                                  return
+                                deleteFormTypeMutation.mutate(opt.value, {
+                                  onSuccess: () => alert('削除しました。'),
+                                  onError: (err: unknown) => {
+                                    const msg =
+                                      err && typeof err === 'object' && 'response' in err
+                                        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                                        : null
+                                    alert(msg ? `削除に失敗しました: ${msg}` : '削除に失敗しました。')
+                                  },
+                                })
+                              }}
+                            >
+                              {deleteFormTypeMutation.isPending ? '削除中...' : '削除'}
+                            </button>
                           </td>
                         </tr>
                       )

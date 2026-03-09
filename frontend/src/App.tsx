@@ -12,18 +12,18 @@ import { CustomerSearch } from './components/Search/CustomerSearch'
 import { SAPUpload } from './components/SAPUpload/SAPUpload'
 import { RagAdminPanel } from './components/Admin/RagAdminPanel'
 import { AnswerKeyTab } from './components/AnswerKey/AnswerKeyTab'
-import { VectorReflectTab } from './components/VectorReflect/VectorReflectTab'
 import { Dashboard } from './components/Dashboard/Dashboard'
 import { documentsApi } from './api/client'
 import { UPLOAD_CHANNELS } from './config/formConfig'
 import type { UploadChannel } from './types'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { ToastProvider } from './contexts/ToastContext'
 import Login from './components/Auth/Login'
 import ChangePasswordModal from './components/Auth/ChangePasswordModal'
 import { getDocumentYearMonth } from './utils/documentDate'
 import './App.css'
 
-type Tab = 'dashboard' | 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin' | 'vector_reflect'
+type Tab = 'dashboard' | 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin'
 
 // 문서 인터페이스
 interface Document {
@@ -53,7 +53,7 @@ function AppContent() {
 
   // 비관리자가 관리자(기준정보) 탭이 선택된 상태면 업로드 탭으로 전환. 현황 탭은 모든 사용자 허용
   useEffect(() => {
-    if (!isAdmin && (activeTab === 'rag_admin' || activeTab === 'vector_reflect')) {
+    if (!isAdmin && activeTab === 'rag_admin') {
       setActiveTab('upload')
     }
   }, [isAdmin, activeTab])
@@ -210,20 +210,12 @@ function AppContent() {
             </button>
             {/* 解答作成は請求タブの「解答作成」ボタンからのみ遷移（サイドバーには出さない） */}
             {isAdmin && (
-              <>
-                <button
-                  className={`sidebar-button ${activeTab === 'vector_reflect' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('vector_reflect')}
-                >
-                  ベクターDB反映
-                </button>
-                <button
-                  className={`sidebar-button ${activeTab === 'rag_admin' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('rag_admin')}
-                >
-                  管理者画面
-                </button>
-              </>
+              <button
+                className={`sidebar-button ${activeTab === 'rag_admin' ? 'active' : ''}`}
+                onClick={() => setActiveTab('rag_admin')}
+              >
+                管理者画面
+              </button>
             )}
           </div>
         </div>
@@ -347,11 +339,6 @@ function AppContent() {
           </div>
         )}
 
-        {activeTab === 'vector_reflect' && isAdmin && (
-          <div className="sap-upload-tab-wrapper">
-            <VectorReflectTab />
-          </div>
-        )}
         {activeTab === 'rag_admin' && isAdmin && (
           <div className="sap-upload-tab-wrapper">
             <RagAdminPanel />
@@ -365,7 +352,9 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <AppWithAuth />
+      <ToastProvider>
+        <AppWithAuth />
+      </ToastProvider>
     </AuthProvider>
   )
 }

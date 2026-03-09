@@ -1,3 +1,9 @@
+/** Phase 3: 페이지 히스토리 표시용 */
+export interface PageHistory {
+  last_edited_at: string | null
+  is_rag_candidate: boolean
+}
+
 /**
  * 정답지 탭 — 좌측: 페이지 네비, 이미지, OCR 영역
  */
@@ -13,6 +19,18 @@ interface AnswerKeyLeftPanelProps {
   imageSize: { w: number; h: number } | null
   setImageSize: React.Dispatch<React.SetStateAction<{ w: number; h: number } | null>>
   pageOcrTextQueries: Array<{ data?: { ocr_text?: string }; isLoading?: boolean }>
+  pageHistory?: PageHistory | null
+}
+
+function formatLastEdited(iso: string | null): string {
+  if (!iso) return ''
+  try {
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })
+  } catch {
+    return ''
+  }
 }
 
 export function AnswerKeyLeftPanel({
@@ -27,6 +45,7 @@ export function AnswerKeyLeftPanel({
   imageSize,
   setImageSize,
   pageOcrTextQueries,
+  pageHistory,
 }: AnswerKeyLeftPanelProps) {
   return (
     <div className="answer-key-left">
@@ -55,6 +74,18 @@ export function AnswerKeyLeftPanel({
           次 →
         </button>
       </div>
+      {pageHistory && (pageHistory.last_edited_at || pageHistory.is_rag_candidate) && (
+        <div className="answer-key-page-history" role="status">
+          {pageHistory.last_edited_at && (
+            <span className="answer-key-history-edited">
+              最終保存: {formatLastEdited(pageHistory.last_edited_at)}
+            </span>
+          )}
+          {pageHistory.is_rag_candidate && (
+            <span className="answer-key-history-rag">学習反映済</span>
+          )}
+        </div>
+      )}
       <div ref={imageScrollRef} className="answer-key-left-scroll">
         <div
           ref={imageZoomContainerRef}

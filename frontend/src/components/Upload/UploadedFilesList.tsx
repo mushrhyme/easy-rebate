@@ -62,23 +62,7 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
     },
   })
 
-  const updateFormTypeMutation = useMutation({
-    mutationFn: ({ pdfFilename, formType }: { pdfFilename: string; formType: string }) =>
-      documentsApi.updateFormType(pdfFilename, formType),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents', 'upload_channel', selectedChannel] })
-      queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
-      queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
-      queryClient.invalidateQueries({ queryKey: ['form-types'] })
-    },
-    onError: (err: unknown) => {
-      const msg = err && typeof err === 'object' && 'response' in err
-        ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-        : null
-      window.alert(msg ? `様式の更新に失敗しました: ${msg}` : '様式の更新に失敗しました。')
-    },
-  })
-
+  // Phase 3: form_type 수동 변경 UI 제거. 様式는 업로드 시 1페이지 분석으로 확정되며 수동 변경 불가.
   const allDocuments = data?.documents ?? []
   const byYearMonth =
     filterYear != null && filterMonth != null
@@ -171,23 +155,8 @@ export function UploadedFilesList({ selectedChannel, filterYear, filterMonth, on
                     onKeyDown={(e) => onSelectDocument && (e.key === 'Enter' || e.key === ' ') && onSelectDocument(doc.pdf_filename, doc.total_pages)}
                   >
                     <td className="uploaded-files-list-cell-filename">{doc.pdf_filename}</td>
-                    <td className="uploaded-files-list-cell-form-type" onClick={(e) => e.stopPropagation()}>
-                      <select
-                        className="uploaded-files-list-form-type-edit"
-                        value={doc.form_type ?? ''}
-                        onChange={(e) => {
-                          const v = e.target.value
-                          if (v) updateFormTypeMutation.mutate({ pdfFilename: doc.pdf_filename, formType: v })
-                        }}
-                        disabled={updateFormTypeMutation.isPending}
-                        aria-label="様式を変更"
-                        title="様式を変更"
-                      >
-                        <option value="">—</option>
-                        {formTypeOptions.map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
+                    <td className="uploaded-files-list-cell-form-type">
+                      {doc.form_type ? formTypeLabel(doc.form_type) : '—'}
                     </td>
                     <td className="uploaded-files-list-cell-date">
                       {formatDocumentDateLabel(doc)}

@@ -643,7 +643,7 @@ async def get_page_items(
     try:
         items = await db.run_sync(db.get_items, pdf_filename, page_number)
         
-        # 검토 탭 컬럼 순서: 이 문서가 파싱 시 참조한 key_order 우선 (document_metadata.item_data_keys), 없으면 form_type으로 RAG 조회
+        # 검토 탭 컬럼 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys
         item_data_keys: Optional[List[str]] = None
         form_type: Optional[str] = None
         upload_channel: Optional[str] = None
@@ -652,21 +652,16 @@ async def get_page_items(
             if doc:
                 form_type = doc.get("form_type")
                 upload_channel = doc.get("upload_channel")
-                doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else None
-                if doc_meta and doc_meta.get("item_data_keys"):
-                    item_data_keys = doc_meta["item_data_keys"]
-                elif form_type:
+                if form_type:
                     from modules.core.rag_manager import get_rag_manager
                     rag = get_rag_manager()
                     key_order = rag.get_key_order_by_form_type(form_type)
                     if key_order and key_order.get("item_keys"):
                         item_data_keys = key_order["item_keys"]
-                    else:
-                        print(f"[items API] key_order 없음 또는 item_keys 비어있음 key_order={key_order}")
-                else:
-                    print(f"[items API] form_type 없음")
-            else:
-                print(f"[items API] doc 없음")
+                if item_data_keys is None:
+                    doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else None
+                    if doc_meta and doc_meta.get("item_data_keys"):
+                        item_data_keys = doc_meta["item_data_keys"]
         except Exception as e:
             print(f"[items API] key_order 조회 예외: {e}")
             pass

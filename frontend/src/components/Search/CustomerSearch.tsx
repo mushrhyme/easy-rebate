@@ -4,7 +4,9 @@
  */
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { documentsApi, searchApi, itemsApi, formTypesApi } from '@/api/client'
+import { documentsApi, searchApi, itemsApi, formTypesApi, ragAdminApi } from '@/api/client'
+import { useAuth } from '@/contexts/AuthContext'
+import { useToast } from '@/contexts/ToastContext'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import { ItemsGridRdg, type ItemsGridRdgHandle } from '../Grid/ItemsGridRdg'
 import { getApiBaseUrl, getPageImageAbsoluteUrl } from '@/utils/apiConfig'
@@ -18,6 +20,8 @@ interface Page {
   pageNumber: number
   formType: string | null
   totalPages: number
+  /** 분석 완료 여부. false면 검토 탭에서 "分析中…" 표시 */
+  isAnalyzed?: boolean
 }
 
 // 검토 필터 타입: 1次/2次 각각 완료/미완료
@@ -36,12 +40,12 @@ interface CustomerSearchProps {
 
 export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsumeDocumentToOpen }: CustomerSearchProps) => {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const { showToast } = useToast()
+  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const { options: formTypeOptions, formTypeLabel } = useFormTypes()
   const [showAnswerKeyModal, setShowAnswerKeyModal] = useState(false)
-  const [answerKeyFormChoice, setAnswerKeyFormChoice] = useState<'keep' | 'change' | 'new'>('keep')
-  const [answerKeyFormChangeTo, setAnswerKeyFormChangeTo] = useState<string>('')
-  const [answerKeyNewFormDisplayName, setAnswerKeyNewFormDisplayName] = useState<string>('')
-  const [formPreviewHover, setFormPreviewHover] = useState<{ value: string; label: string; x: number; y: number } | null>(null)
+  // Phase 3: form_type 수동 변경·재검출 제거. 様式は維持のため選択 UI のみ削除
   const [currentPageIndex, setCurrentPageIndex] = useState(0) // 현재 페이지 인덱스
   const [inputValue, setInputValue] = useState('') // 입력창에 표시되는 값
   const [searchQuery, setSearchQuery] = useState('') // 실제 검색에 사용되는 값 (엔터 또는 버튼 클릭 시 업데이트)
@@ -321,12 +325,14 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
         }
       }
       if (docYear === targetYearMonth.year && docMonth === targetYearMonth.month) {
+        const analyzedSet = new Set(doc.analyzed_page_numbers ?? [])
         for (let i = 1; i <= doc.total_pages; i++) {
           pages.push({
             pdfFilename: doc.pdf_filename,
             pageNumber: i,
             formType: doc.form_type,
             totalPages: doc.total_pages,
+            isAnalyzed: analyzedSet.has(i),
           })
         }
       }
@@ -343,6 +349,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
       pageNumber: page.page_number,
       formType: page.form_type,
       totalPages: 1, // 검색 결과에서는 totalPages 정보가 없으므로 1로 설정
+      isAnalyzed: true, // 검색 결과는 이미 분석된 페이지만 옴
     }))
   }, [searchResult])
 
@@ -359,6 +366,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
       pageNumber: page.page_number,
       formType: page.form_type,
       totalPages: 1,
+      isAnalyzed: true,
     }))
   }, [filterPagesData])
 
@@ -553,6 +561,46 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
 
   const currentPageRole = pageImageData?.page_role
 
+  // 검토 탭: 현재 문서의 answer-json 조회 (해당 페이지 분석 여부 판단용)
+  const { data: answerJsonForDoc } = useQuery({
+    queryKey: ['document-answer-json', currentPage?.pdfFilename ?? ''],
+    queryFn: () => documentsApi.getDocumentAnswerJson(currentPage!.pdfFilename),
+    enabled: !!currentPage?.pdfFilename,
+  })
+
+  const [analyzingPageKey, setAnalyzingPageKey] = useState<string | null>(null)
+  const analyzeSinglePageMutation = useMutation({
+    mutationFn: ({ pdfFilename, pageNumber }: { pdfFilename: string; pageNumber: number }) =>
+      documentsApi.analyzeSinglePage(pdfFilename, pageNumber),
+    onSuccess: (_, { pdfFilename }) => {
+      queryClient.invalidateQueries({ queryKey: ['document-answer-json', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['items', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['page-meta', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
+      setAnalyzingPageKey(null)
+    },
+    onError: () => setAnalyzingPageKey(null),
+  })
+
+  // 검토 탭: 페이지 이동은 분석을 자동 실행하지 않음. 분석은 버튼(이 페이지 재분석 / 이 페이지 이후 전체 재분석)으로만 실행 (to_do 5).
+
+  const [analyzingFromPage, setAnalyzingFromPage] = useState(false)
+  const analyzeFromPageMutation = useMutation({
+    mutationFn: ({ pdfFilename, fromPageNumber }: { pdfFilename: string; fromPageNumber: number }) =>
+      documentsApi.analyzeFromPage(pdfFilename, fromPageNumber),
+    onSuccess: (data, { pdfFilename }) => {
+      queryClient.invalidateQueries({ queryKey: ['document-answer-json', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['items', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['page-meta', pdfFilename] })
+      queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
+      setAnalyzingFromPage(false)
+      if (data.cancelled) {
+        alert('学習リクエストのため再分析を中断しました。必要に応じて再度「このページ以降の全ページを再分析」を実行してください。')
+      }
+    },
+    onError: () => setAnalyzingFromPage(false),
+  })
+
   const setAnswerKeyDocumentMutation = useMutation({
     mutationKey: ['documents', 'answer-key-designate'],
     mutationFn: ({ pdfFilename }: { pdfFilename: string; pageNumber: number }) =>
@@ -568,32 +616,11 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
     },
   })
 
-  useEffect(() => {
-    if (showAnswerKeyModal && currentPage) {
-      setAnswerKeyFormChoice('keep')
-      const firstOpt = formTypeOptions.find((o) => o.value === currentPage.formType) ?? formTypeOptions[0]
-      setAnswerKeyFormChangeTo(firstOpt?.value ?? currentPage.formType ?? '01')
-      setAnswerKeyNewFormDisplayName('')
-    } else {
-      setFormPreviewHover(null)
-    }
-  }, [showAnswerKeyModal, currentPage?.pdfFilename, currentPage?.formType, formTypeOptions])
-
   const handleAnswerKeyConfirm = async () => {
     if (!currentPage) return
     const pdfFilename = currentPage.pdfFilename
     const pageNumber = currentPage.pageNumber
-
     try {
-      if (answerKeyFormChoice === 'new' && answerKeyNewFormDisplayName.trim()) {
-        const displayName = answerKeyNewFormDisplayName.trim()
-        const res = await formTypesApi.create({ display_name: displayName })
-        const code = res.form_code
-        await formTypesApi.savePreviewImage(code, pdfFilename)
-        await documentsApi.updateFormType(pdfFilename, code)
-      } else if (answerKeyFormChoice === 'change' && answerKeyFormChangeTo) {
-        await documentsApi.updateFormType(pdfFilename, answerKeyFormChangeTo)
-      }
       await setAnswerKeyDocumentMutation.mutateAsync({ pdfFilename, pageNumber })
     } catch (err: unknown) {
       const msg = err && typeof err === 'object' && 'response' in err
@@ -896,7 +923,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               onClick={(e) => e.stopPropagation()}
             />
           </div>
-          {/* 保存 + 解答作成（管理者のみ）：同じトーンで並べる */}
+          {/* 保存 + 再分析 + 学習リクエスト(管理者) + 解答作成：検討タブでページ単位の保存・再分析・学習 */}
           <div className="nav-action-buttons">
             <button
               type="button"
@@ -907,14 +934,88 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               保存
             </button>
             {currentPage && (
-              <button
-                type="button"
-                className="nav-action-btn answer-key-designate-btn"
-                onClick={() => setShowAnswerKeyModal(true)}
-                title="この文書を解答作成対象に指定（解答作成タブで編集・ベクターDB反映が可能）"
-              >
-                解答作成
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="nav-action-btn nav-reanalyze-btn"
+                  onClick={() => {
+                    const key = `${currentPage.pdfFilename}:${currentPage.pageNumber}`
+                    setAnalyzingPageKey(key)
+                    analyzeSinglePageMutation.mutate(
+                      { pdfFilename: currentPage.pdfFilename, pageNumber: currentPage.pageNumber },
+                      { onSettled: () => setAnalyzingPageKey(null) }
+                    )
+                  }}
+                  disabled={!!analyzingPageKey || analyzeSinglePageMutation.isPending || analyzingFromPage || analyzeFromPageMutation.isPending}
+                  title="このページのみ再分析（OCR＋RAG＋LLM）"
+                >
+                  {analyzingPageKey || analyzeSinglePageMutation.isPending ? '分析中…' : 'このページ再分析'}
+                </button>
+                <button
+                  type="button"
+                  className="nav-action-btn nav-reanalyze-from-btn"
+                  onClick={() => {
+                    setAnalyzingFromPage(true)
+                    analyzeFromPageMutation.mutate(
+                      {
+                        pdfFilename: currentPage.pdfFilename,
+                        fromPageNumber: currentPage.pageNumber,
+                      },
+                      { onSettled: () => setAnalyzingFromPage(false) }
+                    )
+                  }}
+                  disabled={
+                    analyzingFromPage ||
+                    analyzeFromPageMutation.isPending ||
+                    !!analyzingPageKey ||
+                    analyzeSinglePageMutation.isPending ||
+                    (totalFilteredPages !== null && currentPage.pageNumber >= totalFilteredPages)
+                  }
+                  title="このページから最終ページまで並列で再分析。学習リクエスト実行時は進行中の再分析を中断します。"
+                >
+                  {analyzingFromPage || analyzeFromPageMutation.isPending
+                    ? '再分析中…'
+                    : 'このページ以降の全ページを再分析'}
+                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="nav-action-btn nav-learning-request-btn"
+                    onClick={async () => {
+                      if (gridRef.current?.hasUnsavedEdits?.()) {
+                        alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
+                        return
+                      }
+                      try {
+                        await ragAdminApi.learningRequestPage(currentPage.pdfFilename, currentPage.pageNumber)
+                        queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
+                        queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
+                        queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
+                        showToast(
+                          '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
+                          'success'
+                        )
+                      } catch (e: unknown) {
+                        const msg = e && typeof e === 'object' && 'response' in e
+                          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                          : (e as Error)?.message
+                        showToast(msg ? `학습 요청 실패: ${msg}` : '학습 요청에 실패했습니다.', 'error')
+                      }
+                    }}
+                    title="該当ページをベクターDBに反映（管理者のみ）"
+                  >
+                    学習リクエスト
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="nav-action-btn answer-key-designate-btn"
+                  onClick={() => setShowAnswerKeyModal(true)}
+                  title="この文書を解答作成対象に指定（解答作成タブで編集・ベクターDB反映が可能）"
+                >
+                  解答作成
+                </button>
+              </>
             )}
           </div>
 
@@ -985,17 +1086,29 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
         </div>
       </div>
 
+      {analyzingPageKey && (
+        <div className="search-tab-analyzing-banner" role="status">
+          ページ分析中…
+        </div>
+      )}
+
       {/* 그리드 섹션: 아이템 조회 시 商品名 기준 시키리/본부장 자동 매칭되어 仕切・本部長 컬럼에 표시 */}
       {currentPage ? (
         <div className="selected-page-content grid-section">
-          <ItemsGridRdg
-            ref={gridRef}
-            pdfFilename={currentPage.pdfFilename}
-            pageNumber={currentPage.pageNumber}
-            formType={currentPage.formType}
-            onBulkCheckStateChange={setBulkCheckState}
-            readOnly={pdfInVectorSet.has((currentPage.pdfFilename ?? '').trim().toLowerCase())}
-          />
+          {currentPage.isAnalyzed === false ? (
+            <div className="search-tab-page-analyzing" role="status">
+              このページは分析中です
+            </div>
+          ) : (
+            <ItemsGridRdg
+              ref={gridRef}
+              pdfFilename={currentPage.pdfFilename}
+              pageNumber={currentPage.pageNumber}
+              formType={currentPage.formType}
+              onBulkCheckStateChange={setBulkCheckState}
+              readOnly={pdfInVectorSet.has((currentPage.pdfFilename ?? '').trim().toLowerCase())}
+            />
+          )}
         </div>
       ) : hasNoData ? (
         <div className="selected-page-content grid-section no-data-placeholder">
@@ -1012,7 +1125,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               この文書を解答作成対象に指定しますか？
               <br />
               <span className="answer-key-modal-hint">
-                指定後は解答作成タブで編集できます。保存すると内容が検討タブに反映されます。ベクターDBへの反映は別画面で行います。
+                指定後は解答作成タブで編集できます。保存後、学習リクエストで該当ページをベクターDBに反映できます。
               </span>
               {!canDesignateAnswerKey && (
                 <span className="answer-key-modal-warn" role="status">
@@ -1024,117 +1137,6 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               現在の様式: <strong>{formTypeLabel(currentPage.formType)}</strong>
               {currentPage.formType && `（${currentPage.formType}）`}
             </p>
-            <p className="answer-key-modal-form-question">
-              様式をそのまま維持しますか、変更しますか、または新規様式を作成しますか？
-            </p>
-            <div className="answer-key-modal-form-choices">
-              <label className="answer-key-modal-form-choice">
-                <input
-                  type="radio"
-                  name="formChoice"
-                  checked={answerKeyFormChoice === 'keep'}
-                  onChange={() => setAnswerKeyFormChoice('keep')}
-                />
-                <span>そのまま維持</span>
-              </label>
-              <label className="answer-key-modal-form-choice">
-                <input
-                  type="radio"
-                  name="formChoice"
-                  checked={answerKeyFormChoice === 'change'}
-                  onChange={() => setAnswerKeyFormChoice('change')}
-                />
-                <span>別の様式に変更</span>
-              </label>
-              <label className="answer-key-modal-form-choice">
-                <input
-                  type="radio"
-                  name="formChoice"
-                  checked={answerKeyFormChoice === 'new'}
-                  onChange={() => setAnswerKeyFormChoice('new')}
-                />
-                <span>新規様式を作成</span>
-              </label>
-            </div>
-
-            {answerKeyFormChoice === 'change' && (
-              <div className="answer-key-modal-form-grid">
-                <p className="answer-key-modal-form-grid-label">様式を選択（ホバーで拡大）</p>
-                <div className="answer-key-form-images">
-                  {formTypeOptions.map((opt) => (
-                      <label
-                        key={opt.value}
-                        className={`answer-key-form-image-item ${answerKeyFormChangeTo === opt.value ? 'selected' : ''}`}
-                        onMouseEnter={(e) => {
-                          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                          setFormPreviewHover({ value: opt.value, label: opt.label, x: rect.left, y: rect.top })
-                        }}
-                        onMouseLeave={() => setFormPreviewHover(null)}
-                      >
-                        <input
-                          type="radio"
-                          name="formChangeTo"
-                          value={opt.value}
-                          checked={answerKeyFormChangeTo === opt.value}
-                          onChange={() => setAnswerKeyFormChangeTo(opt.value)}
-                        />
-                        <div className="answer-key-form-image-wrap">
-                          <img
-                            src={`/images/form_${opt.value}.png`}
-                            alt={opt.label}
-                            onError={(e) => {
-                              (e.target as HTMLImageElement).style.display = 'none'
-                              const sibling = (e.target as HTMLImageElement).nextElementSibling
-                              if (sibling) (sibling as HTMLElement).style.display = 'block'
-                            }}
-                          />
-                          <span className="answer-key-form-image-placeholder" style={{ display: 'none' }}>
-                            型{opt.value}
-                          </span>
-                        </div>
-                        <span className="answer-key-form-image-label">{opt.label}</span>
-                      </label>
-                    ))}
-                </div>
-              </div>
-            )}
-
-            {answerKeyFormChoice === 'new' && (
-              <div className="answer-key-modal-new-form">
-                <label className="answer-key-modal-new-form-label">
-                  新規様式の表示名（コードは自動で付与されます）:
-                  <input
-                    type="text"
-                    className="answer-key-modal-new-form-input"
-                    value={answerKeyNewFormDisplayName}
-                    onChange={(e) => setAnswerKeyNewFormDisplayName(e.target.value)}
-                    placeholder="例: 郵便様式、청구서A"
-                    maxLength={200}
-                  />
-                </label>
-              </div>
-            )}
-
-            {formPreviewHover && (() => {
-              const previewW = 720
-              const previewH = Math.min(900, window.innerHeight - 60)
-              const pad = 12
-              const left = Math.max(pad, Math.min(formPreviewHover.x, window.innerWidth - previewW - pad))
-              const preferTop = formPreviewHover.y - previewH - 40
-              let top = preferTop >= pad ? preferTop : formPreviewHover.y + 180
-              if (top + previewH > window.innerHeight - 24) top = window.innerHeight - previewH - 24
-              top = Math.max(pad, top)
-              return (
-              <div
-                className="answer-key-form-preview-overlay"
-                style={{ left, top }}
-              >
-                <img src={`/images/form_${formPreviewHover.value}.png`} alt={formPreviewHover.label} />
-                <span className="answer-key-form-preview-label">{formPreviewHover.label}</span>
-              </div>
-              )
-            })()}
-
             <p className="answer-key-modal-filename">{currentPage.pdfFilename}</p>
             <div className="answer-key-modal-actions">
               <button
@@ -1148,10 +1150,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                 type="button"
                 className="answer-key-modal-btn confirm"
                 onClick={handleAnswerKeyConfirm}
-                disabled={
-                  setAnswerKeyDocumentMutation.isPending ||
-                  (answerKeyFormChoice === 'new' && !answerKeyNewFormDisplayName.trim())
-                }
+                disabled={setAnswerKeyDocumentMutation.isPending}
               >
                 {setAnswerKeyDocumentMutation.isPending ? '処理中…' : 'はい（解答作成タブへ移動）'}
               </button>

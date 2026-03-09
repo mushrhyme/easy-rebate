@@ -546,6 +546,46 @@
   box-shadow: 0 4px 12px rgba(198, 40, 40, 0.45);
 }
 
+.page-navigation-section .nav-action-btn.nav-reanalyze-btn {
+  background: linear-gradient(135deg, #1976d2 0%, #0d47a1 100%);
+  color: white;
+}
+.page-navigation-section .nav-action-btn.nav-reanalyze-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1e88e5 0%, #1565c0 100%);
+}
+
+.page-navigation-section .nav-action-btn.nav-learning-request-btn {
+  background: linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%);
+  color: white;
+}
+.page-navigation-section .nav-action-btn.nav-learning-request-btn:hover {
+  background: linear-gradient(135deg, #388e3c 0%, #2e7d32 100%);
+}
+
+.search-tab-analyzing-banner {
+  flex-shrink: 0;
+  padding: 0.5rem 1rem;
+  background: linear-gradient(90deg, #1976d2 0%, #0d47a1 100%);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* 그리드 영역: 해당 페이지가 아직 분석 중일 때 표시 */
+.search-tab-page-analyzing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  padding: 1.5rem;
+  background: #e3f2fd;
+  border: 1px dashed #1976d2;
+  border-radius: 8px;
+  color: #1565c0;
+  font-weight: 500;
+}
+
 /* 파일명 컨테이너 */
 .page-filename-container {
   display: flex;
