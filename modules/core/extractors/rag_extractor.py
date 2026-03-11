@@ -367,16 +367,15 @@ def extract_json_with_rag(
         else:
             progress_callback("유사한 예제 없음 (예제 없이 진행)")
     
-    # OCR 텍스트 저장 (정답지/브릿지에서 재사용 시 debug2에서 읽음)
-    if debug_dir and page_num:
+    # OCR 텍스트 저장: debug_dir가 이미 존재할 때만 기록 (mkdir 하지 않음)
+    if debug_dir and page_num and os.path.exists(debug_dir):
         try:
-            os.makedirs(debug_dir, exist_ok=True)
             ocr_file = os.path.join(debug_dir, f"page_{page_num}_ocr_text.txt")
             with open(ocr_file, 'w', encoding='utf-8') as f:
                 f.write(ocr_text)
         except Exception:
             pass
-        # debug2: RAG 검색 결과 (rag_example.json)
+        # RAG 검색 결과 (rag_example.json) — 동일 조건
         if similar_examples and top_example_metadata:
             try:
                 rag_example_file = os.path.join(debug_dir, f"page_{page_num}_rag_example.json")
@@ -440,8 +439,8 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
     if word_index_instruction:
         prompt = prompt.replace("ANSWER:\n", word_index_instruction.strip() + "\n\nANSWER:\n", 1)
 
-    # debug2: 프롬프트 저장 (prompt.txt)
-    if debug_dir and page_num:
+    # 프롬프트 저장 (prompt.txt): debug_dir 존재 시에만
+    if debug_dir and page_num and os.path.exists(debug_dir):
         try:
             prompt_file = os.path.join(debug_dir, f"page_{page_num}_prompt.txt")
             with open(prompt_file, 'w', encoding='utf-8') as f:
@@ -623,8 +622,8 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             if top_example_metadata:
                 result_json["_rag_reference"] = top_example_metadata
 
-            # debug2: 파싱된 JSON 저장 (llm_response_parsed.json)
-            if debug_dir and page_num:
+            # 파싱된 JSON 저장: debug_dir 존재 시에만 (mkdir 하지 않음)
+            if debug_dir and page_num and os.path.exists(debug_dir):
                 try:
                     parsed_json_file = os.path.join(debug_dir, f"page_{page_num}_llm_response_parsed.json")
                     with open(parsed_json_file, 'w', encoding='utf-8') as f:

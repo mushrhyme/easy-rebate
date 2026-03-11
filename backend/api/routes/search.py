@@ -838,8 +838,7 @@ async def get_page_ocr_text(
 ):
     """
     페이지 OCR 텍스트 조회 (정답지 생성 탭 전용).
-    해답 생성 브릿지로 넘어온 문서는 이미 RAG 파싱으로 debug2가 있으므로,
-    외부 API(Azure) 호출 없이 DB 저장분 → debug2만 사용.
+    DB(page_meta._ocr_text, ocr_text) 우선 사용, debug2 없어도 동작.
     """
     try:
         pdf_name = pdf_filename
@@ -850,32 +849,23 @@ async def get_page_ocr_text(
             with db.get_connection() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    "SELECT page_meta FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
+                    "SELECT page_meta, ocr_text FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
                     (pdf_filename, page_number),
                 )
                 row = cur.fetchone()
-            if not row or not row[0]:
+            if not row:
                 return ""
-            meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if isinstance(row[0], str) else None)
-            if isinstance(meta, dict) and meta.get("_ocr_text"):
+            meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if row[0] and isinstance(row[0], str) else None)
+            if isinstance(meta, dict) and (meta.get("_ocr_text") or "").strip():
                 return (meta["_ocr_text"] or "").strip()
+            if row[1] and (row[1] or "").strip():
+                return (row[1] or "").strip()
             return ""
 
         try:
             ocr_text = await db.run_sync(_fetch_ocr_from_db)
         except Exception:
             ocr_text = ""
-
-        # 1) debug2 (RAG 파싱 시 저장된 파일) — 외부 API 호출 없음
-        if not ocr_text.strip():
-            try:
-                from modules.utils.config import get_project_root
-                root = get_project_root()
-                debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
-                if debug2_file.exists():
-                    ocr_text = debug2_file.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
 
         return {"ocr_text": ocr_text or ""}
     except Exception as e:
@@ -896,8 +886,8 @@ async def rerun_page_ocr(
     db=Depends(get_db),
 ):
     """
-    현재 페이지에 대해 Azure OCR을 다시 수행하고 결과를 debug2에 저장한 뒤 반환.
-    정답지 생성 탭 전용 — 저장되는 OCR 텍스트는 항상 Azure.
+    현재 페이지에 대해 Azure OCR을 다시 수행하고 결과를 DB에 저장한 뒤 반환.
+    정답지 생성 탭 전용. debug2 폴더는 선택(있으면 저장, 없어도 동작).
     """
     provider = (body.provider or "azure").strip().lower()
     if provider != "azure":
@@ -953,10 +943,27 @@ async def rerun_page_ocr(
             detail="OCR 결과가 비어 있습니다. 이미지 품질 또는 페이지를 확인하세요.",
         )
 
-    # debug2에 저장하여 이후 get_page_ocr_text에서 이 결과를 사용하도록 함
-    debug2_dir = root / "debug2" / pdf_name
-    debug2_dir.mkdir(parents=True, exist_ok=True)
-    ocr_file = debug2_dir / f"page_{page_number}_ocr_text.txt"
-    ocr_file.write_text(ocr_text, encoding="utf-8")
+    # DB에 저장: 이후 get_page_ocr_text는 DB에서 읽음 (debug2 없어도 동작)
+    try:
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE page_data_current SET ocr_text = %s
+                WHERE pdf_filename = %s AND page_number = %s
+                """,
+                (ocr_text, pdf_filename, page_number),
+            )
+            conn.commit()
+    except Exception:
+        pass  # 저장 실패해도 응답은 반환
+
+    # debug2는 선택: 폴더가 이미 있을 때만 기록 (mkdir 하지 않음)
+    try:
+        debug2_dir = root / "debug2" / pdf_name
+        if debug2_dir.exists():
+            (debug2_dir / f"page_{page_number}_ocr_text.txt").write_text(ocr_text, encoding="utf-8")
+    except Exception:
+        pass
 
     return {"ocr_text": ocr_text}

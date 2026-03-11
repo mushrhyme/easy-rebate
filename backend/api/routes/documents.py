@@ -157,19 +157,29 @@ def _answer_key_debug_dir(pdf_filename: str) -> Path:
 def _get_ocr_text_azure_sync(db, pdf_filename: str, page_number: int) -> str:
     """
     해당 페이지의 OCR 텍스트를 Azure(표 복원) 경로로만 추출. 정답 생성 RAG용.
-    우선순위: debug2 → 저장된 이미지 Azure(표 복원) → PDF Azure(표 복원).
+    우선순위: DB(page_meta._ocr_text, ocr_text) → 저장된 이미지 Azure(표 복원) → PDF Azure(표 복원).
     """
     root = get_project_root()
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
     ocr_text = ""
-    # 1) debug2 (RAG 파싱 시 저장된 OCR = 이미 Azure 표 복원)
+    # 0) DB: page_data_current.ocr_text / page_meta._ocr_text
     try:
-        debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
-        if debug2_file.exists():
-            ocr_text = debug2_file.read_text(encoding="utf-8").strip()
+        with db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT page_meta, ocr_text FROM page_data_current WHERE pdf_filename = %s AND page_number = %s",
+                (pdf_filename, page_number),
+            )
+            row = cur.fetchone()
+            if row:
+                meta = row[0] if isinstance(row[0], dict) else (json.loads(row[0]) if row[0] and isinstance(row[0], str) else None)
+                if isinstance(meta, dict) and (meta.get("_ocr_text") or "").strip():
+                    return (meta["_ocr_text"] or "").strip()
+                if row[1] and (row[1] or "").strip():
+                    return (row[1] or "").strip()
     except Exception:
         pass
-    # 2) 저장된 페이지 이미지 → Azure(표 복원)
+    # 1) 저장된 페이지 이미지 → Azure(표 복원)
     if not ocr_text.strip():
         try:
             image_path = db.get_page_image_path(pdf_filename, page_number)
@@ -184,7 +194,7 @@ def _get_ocr_text_azure_sync(db, pdf_filename: str, page_number: int) -> str:
                         ocr_text = raw_to_table_restored_text(raw) or ""
         except Exception:
             pass
-    # 3) PDF → Azure(표 복원)
+    # 2) PDF → Azure(표 복원)
     if not ocr_text.strip():
         try:
             from modules.utils.pdf_utils import find_pdf_path, PdfTextExtractor
@@ -1297,11 +1307,12 @@ def _reanalyze_page_rag_only_sync(
     재분석 전용: OCR은 실행하지 않고 DB에서 받은 ocr_text로 RAG+LLM만 실행.
     Returns: page_json (page_number 포함).
     """
-    from modules.utils.config import rag_config, get_project_root
+    import tempfile
+    from modules.utils.config import rag_config
     from modules.core.extractors.rag_extractor import extract_json_with_rag
 
-    debug_base = get_project_root() / "debug2" / Path(pdf_filename).stem
-    debug_base.mkdir(parents=True, exist_ok=True)
+    # debug2 의존 제거: 임시 디렉터리 사용 (RAG 내부 디버그 저장용, 실행 후 정리 가능)
+    debug_base = tempfile.mkdtemp(prefix="rag_reanalyze_")
 
     page_json = extract_json_with_rag(
         ocr_text=ocr_text,
@@ -1839,6 +1850,16 @@ async def save_document_answer_json(
                         pdf_filename, page_number, item_order,
                         json.dumps(item_data, ensure_ascii=False),
                     ))
+            # 이미 문서에 item_data_keys가 있으면 클라이언트 순서로 덮어쓰지 않음 (서버 LLM 저장 순서 유지)
+            if first_item_keys:
+                cursor.execute(
+                    "SELECT document_metadata->'item_data_keys' FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                    (pdf_filename,),
+                )
+                row = cursor.fetchone()
+                existing_keys = row[0] if row and row[0] is not None else None
+                if existing_keys and isinstance(existing_keys, (list, tuple)) and len(existing_keys) > 0:
+                    first_item_keys = None
             if first_item_keys:
                 cursor.execute("""
                     UPDATE documents_current
