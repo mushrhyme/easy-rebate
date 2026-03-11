@@ -109,15 +109,12 @@ def extract_pages_with_rag(
             print(f"⚠️ DB 확인 실패: {db_error}. 새로 파싱합니다.")
     
     # 2. DB에 데이터가 없으면 RAG 기반 파싱
-    # 디버깅 폴더 설정 (실제 분석을 수행할 때만 생성)
+    # debug_dir: 폴더가 이미 있을 때만 사용 (생성하지 않음, debug2 없어도 동작)
     from modules.utils.config import get_project_root
     project_root = get_project_root()
-    debug_base_dir = project_root / debug_dir_name  # debug_dir_name 파라미터 사용
-    debug_dir = debug_base_dir / pdf_name
-    if debug_dir.exists():
-        import shutil
-        shutil.rmtree(debug_dir)
-    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_base_dir = project_root / debug_dir_name
+    _debug_dir = debug_base_dir / pdf_name
+    debug_dir = str(_debug_dir) if _debug_dir.exists() else None
     # PDF를 이미지로 변환
     if progress_callback:
         progress_callback(0, 0, "🔄 PDF를 이미지로 변환 중...")
@@ -208,12 +205,12 @@ def extract_pages_with_rag(
         page_num = actual_page_numbers[pos] if pos < len(actual_page_numbers) else idx + 1
         image = images[idx]
         try:
-            os.makedirs(debug_dir, exist_ok=True)
-            try:
-                debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
-                image.save(debug_image_path, "PNG")
-            except Exception:
-                pass
+            if debug_dir and os.path.exists(debug_dir):
+                try:
+                    debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
+                    image.save(debug_image_path, "PNG")
+                except Exception:
+                    pass
             raw = azure_extractor.extract_from_pdf_page_raw(pdf_path_obj, page_num)
             if not raw:
                 return (idx, None, None)
@@ -259,12 +256,12 @@ def extract_pages_with_rag(
                         w_count = len(words_data.get("words", [])) if words_data else 0
                         print(f" 완료 (길이: {len(ocr_text or '')} 문자, 단어 {w_count}개)")
                     else:
-                        os.makedirs(debug_dir, exist_ok=True)
-                        try:
-                            debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
-                            image.save(debug_image_path, "PNG")
-                        except Exception as debug_error:
-                            print(f"  ⚠️ 원본 이미지 저장 실패: {debug_error}")
+                        if debug_dir and os.path.exists(debug_dir):
+                            try:
+                                debug_image_path = os.path.join(debug_dir, f"page_{page_num}_original_image.png")
+                                image.save(debug_image_path, "PNG")
+                            except Exception as debug_error:
+                                print(f"  ⚠️ 원본 이미지 저장 실패: {debug_error}")
                         ocr_text = text_extractor.extract_text(pdf_path_obj, page_num)
                         if not ocr_text or len(ocr_text.strip()) == 0:
                             print(f"  ⚠️ 텍스트가 비어있습니다")
@@ -310,7 +307,7 @@ def extract_pages_with_rag(
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
                 progress_callback=rag_progress_wrapper if progress_callback else None,
-                debug_dir=str(debug_dir),
+                debug_dir=debug_dir,
                 page_num=page_num,
                 form_type=form_type,
                 ocr_words=ocr_words_data["words"] if ocr_words_data else None,
@@ -591,8 +588,9 @@ def extract_single_page_from_image_path(
     top_k = top_k if top_k is not None else rag_config.top_k
     similarity_threshold = similarity_threshold if similarity_threshold is not None else rag_config.similarity_threshold
 
+    # debug_dir: 폴더가 이미 있을 때만 사용 (생성하지 않음)
     debug_base = get_project_root() / debug_dir_name / Path(pdf_filename).stem
-    debug_base.mkdir(parents=True, exist_ok=True)
+    debug_dir = str(debug_base) if debug_base.exists() else None
 
     azure_extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
     raw = azure_extractor.extract_from_image_raw(image_path=path)
@@ -612,7 +610,7 @@ def extract_single_page_from_image_path(
         temperature=0,
         top_k=top_k,
         similarity_threshold=similarity_threshold,
-        debug_dir=str(debug_base),
+        debug_dir=debug_dir,
         page_num=page_number,
         form_type=form_type,
         ocr_words=ocr_words_data["words"] if ocr_words_data else None,

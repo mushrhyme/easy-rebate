@@ -80,7 +80,7 @@ def _ensure_admin(user: Dict[str, Any]) -> None:
 def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
     """
     학습 리퀘스트 시 임베딩용 OCR 추출.
-    우선순위: page_meta._ocr_text → page_data_current.ocr_text → debug2 파일. (debug2 없어도 DB ocr_text로 동작)
+    우선순위: page_meta._ocr_text → page_data_current.ocr_text (DB만 사용, debug2 미사용).
     """
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
 
@@ -99,15 +99,6 @@ def _extract_ocr_for_page(db, pdf_filename: str, page_number: int) -> str:
                     return (meta["_ocr_text"] or "").strip()
                 if row[1] and (row[1] or "").strip():
                     return (row[1] or "").strip()
-    except Exception:
-        pass
-
-    # 1) debug2 (선택) — 없어도 위에서 DB ocr_text로 처리됨
-    try:
-        root = get_project_root()
-        debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
-        if debug2_file.exists():
-            return debug2_file.read_text(encoding="utf-8").strip()
     except Exception:
         pass
 
@@ -413,7 +404,7 @@ def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> O
 
 
 def _extract_ocr_for_page_sync(database, pdf_filename: str, page_number: int) -> str:
-    """동기 버전: OCR 추출 (page_meta._ocr_text → page_data_current.ocr_text → debug2)."""
+    """동기 버전: OCR 추출 (page_meta._ocr_text → page_data_current.ocr_text, DB만 사용)."""
     try:
         with database.get_connection() as conn:
             cur = conn.cursor()
@@ -428,14 +419,6 @@ def _extract_ocr_for_page_sync(database, pdf_filename: str, page_number: int) ->
                     return (meta["_ocr_text"] or "").strip()
                 if row[1] and (row[1] or "").strip():
                     return (row[1] or "").strip()
-    except Exception:
-        pass
-    try:
-        root = get_project_root()
-        pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
-        debug2_file = root / "debug2" / pdf_name / f"page_{page_number}_ocr_text.txt"
-        if debug2_file.exists():
-            return debug2_file.read_text(encoding="utf-8").strip()
     except Exception:
         pass
     return ""
@@ -476,7 +459,7 @@ async def build_vector_from_learning_pages(
         with database.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT p.pdf_filename, p.page_number, p.page_role, p.page_meta, i.item_id, i.item_order, i.item_data, d.form_type, d.data_year, d.data_month
+                SELECT p.pdf_filename, p.page_number, p.page_role, p.page_meta, i.item_id, i.item_order, i.item_data, d.form_type, d.data_year, d.data_month, d.document_metadata
                 FROM page_data_current p
                 LEFT JOIN items_current i ON i.pdf_filename = p.pdf_filename AND i.page_number = p.page_number
                 LEFT JOIN documents_current d ON p.pdf_filename = d.pdf_filename
@@ -530,6 +513,18 @@ async def build_vector_from_learning_pages(
                 item_data = row.get("item_data") or {}
                 merged_item = dict(item_data) if isinstance(item_data, dict) else {}
                 merged_items.append(merged_item)
+
+        # 저장된 키 순서로 재정렬 (JSONB 읽기 순서가 아닌 document_metadata.item_data_keys 사용)
+        doc_meta = first_row.get("document_metadata") or {}
+        if isinstance(doc_meta, dict):
+            item_data_keys = doc_meta.get("item_data_keys")
+            if item_data_keys and isinstance(item_data_keys, list) and merged_items:
+                ordered_items = []
+                for merged_item in merged_items:
+                    ordered = {k: merged_item[k] for k in item_data_keys if k in merged_item}
+                    ordered.update({k: merged_item[k] for k in merged_item if k not in item_data_keys})
+                    ordered_items.append(ordered)
+                merged_items = ordered_items
 
         # 실제 OCR 텍스트 추출 (페이지 이미지에서, 임베딩용)
         ocr_text = await asyncio.to_thread(_extract_ocr_for_page, db, pdf_filename, page_number)

@@ -451,6 +451,20 @@ class ItemsMixin:
                         INSERT INTO items_current (pdf_filename, page_number, item_order, first_review_checked, second_review_checked, item_data)
                         VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
                     """, (pdf_filename, page_number, item_order, json.dumps(separated.get("item_data") or {}, ensure_ascii=False)))
+                # 문서에 item_data_keys가 없을 때만 LLM 결과 순서를 한 번 기록 (최초 저장 시)
+                if items and isinstance(items[0], dict):
+                    cursor.execute("SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
+                    row = cursor.fetchone()
+                    doc_meta = (row[0] or {}) if row and row[0] else {}
+                    existing_keys = doc_meta.get("item_data_keys") if isinstance(doc_meta, dict) else None
+                    if not existing_keys or (isinstance(existing_keys, list) and len(existing_keys) == 0):
+                        keys = list(items[0].keys())
+                        if keys:
+                            cursor.execute("""
+                                UPDATE documents_current
+                                SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
+                                WHERE pdf_filename = %s
+                            """, (json.dumps({"item_data_keys": keys}, ensure_ascii=False), pdf_filename))
                 if image_data:
                     try:
                         image_path = self.save_image_to_file(pdf_filename, page_number, image_data)
