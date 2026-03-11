@@ -37,7 +37,7 @@ async def get_retail_candidates_by_sap_retail(
     top_k: int = Query(10, ge=1, le=30, description="반환 건수"),
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
 ):
-    """sap_retail.csv에서 소매처명·판매처명 유사도 검색. 매핑 폴백용."""
+    """sap_retail.csv에서 소매처명·판매처명·코드(숫자) 유사도 검색. 매핑 폴백용."""
     query = (query or "").strip()
     csv_path = _SAP_RETAIL_CSV
     print(f"[sap_retail] query={query!r} (len={len(query)}), path={csv_path}, exists={csv_path.exists()}")
@@ -67,7 +67,15 @@ async def get_retail_candidates_by_sap_retail(
                 part = 0.9
             elif q_upper in (dist_name.upper() if dist_name else ""):
                 part = 0.9
-            score = max(s1, s2, part)
+            # 코드(숫자) 검색: 소매처코드・판매처코드 일치/접두사/포함
+            code_score = 0.0
+            if query == retail_code or query == dist_code:
+                code_score = 1.0
+            elif retail_code.startswith(query) or (dist_code and dist_code.startswith(query)):
+                code_score = 0.95
+            elif query in retail_code or (dist_code and query in dist_code):
+                code_score = 0.9
+            score = max(s1, s2, part, code_score)
             if score >= min_similarity:
                 scored.append((score, retail_code, retail_name, dist_code, dist_name))
         scored.sort(key=lambda x: -x[0])
