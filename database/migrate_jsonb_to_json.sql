@@ -19,9 +19,13 @@ ALTER TABLE items_current
 ALTER TABLE items_archive
   ALTER COLUMN item_data TYPE json USING item_data::text::json;
 
--- RAG (테이블이 이미 있을 경우만 실행. 없으면 해당 ALTER 두 줄 주석 처리)
-ALTER TABLE rag_vector_index
-  ALTER COLUMN metadata_json TYPE json USING metadata_json::text::json;
-
-ALTER TABLE rag_page_embeddings
-  ALTER COLUMN answer_json TYPE json USING answer_json::text::json;
+-- RAG (테이블이 있을 때만 ALTER 실행, 없으면 스킵)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'rag_vector_index') THEN
+    ALTER TABLE rag_vector_index ALTER COLUMN metadata_json TYPE json USING metadata_json::text::json;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'rag_page_embeddings') THEN
+    ALTER TABLE rag_page_embeddings ALTER COLUMN answer_json TYPE json USING answer_json::text::json;
+  END IF;
+END $$;

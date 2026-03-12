@@ -45,7 +45,7 @@ class ItemsMixin:
                 "second_review_checked": False,
                 "first_reviewed_at": None,
                 "second_reviewed_at": None,
-                "item_data": {...}  # 양식지별 필드 (JSONB)
+                "item_data": {...}  # 양식지별 필드 (JSON, 키 순서 유지)
             }
         """
         # 공통 필드 (DB 컬럼용)는 더 이상 사용하지 않는다.
@@ -676,8 +676,7 @@ class ItemsMixin:
                 for row in rows:
                     row_dict = dict(row)
                     
-                    # item_data 파싱 (성능 최적화: JSONB는 이미 파싱된 상태)
-                    # PostgreSQL의 JSONB 타입은 Python에서 dict로 자동 변환되므로
+                    # item_data 파싱 (JSON 컬럼은 드라이버에 따라 dict 또는 str로 반환)
                     # 불필요한 json.loads() 호출 최소화
                     item_data = row_dict.get('item_data', {})
                     if isinstance(item_data, str):

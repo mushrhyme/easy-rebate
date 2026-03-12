@@ -385,7 +385,7 @@ CREATE INDEX IF NOT EXISTS idx_items_current_pdf_page_order ON items_current(pdf
 CREATE INDEX IF NOT EXISTS idx_items_current_customer ON items_current(customer);
 CREATE INDEX IF NOT EXISTS idx_items_current_first_review ON items_current(first_review_checked);
 CREATE INDEX IF NOT EXISTS idx_items_current_second_review ON items_current(second_review_checked);
-CREATE INDEX IF NOT EXISTS idx_items_current_data_gin ON items_current USING GIN (item_data);
+-- GIN on raw item_data: JSON 타입은 GIN 연산자 클래스 없음 (JSONB만 지원). 트리그램 인덱스(item_data::text)로 대체.
 CREATE INDEX IF NOT EXISTS idx_items_current_created_by_user ON items_current(created_by_user_id);
 CREATE INDEX IF NOT EXISTS idx_items_current_updated_by_user ON items_current(updated_by_user_id);
 CREATE INDEX IF NOT EXISTS idx_items_current_first_reviewed_by_user ON items_current(first_reviewed_by_user_id);
@@ -397,7 +397,7 @@ CREATE INDEX IF NOT EXISTS idx_items_archive_pdf_page_order ON items_archive(pdf
 CREATE INDEX IF NOT EXISTS idx_items_archive_customer ON items_archive(customer);
 CREATE INDEX IF NOT EXISTS idx_items_archive_first_review ON items_archive(first_review_checked);
 CREATE INDEX IF NOT EXISTS idx_items_archive_second_review ON items_archive(second_review_checked);
-CREATE INDEX IF NOT EXISTS idx_items_archive_data_gin ON items_archive USING GIN (item_data);
+-- GIN on raw item_data: JSON 타입은 GIN 연산자 클래스 없음 (JSONB만 지원). 트리그램 인덱스(item_data::text)로 대체.
 CREATE INDEX IF NOT EXISTS idx_items_archive_created_by_user ON items_archive(created_by_user_id);
 CREATE INDEX IF NOT EXISTS idx_items_archive_updated_by_user ON items_archive(updated_by_user_id);
 CREATE INDEX IF NOT EXISTS idx_items_archive_first_reviewed_by_user ON items_archive(first_reviewed_by_user_id);
