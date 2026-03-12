@@ -137,3 +137,4 @@ API는 백엔드 주소를 가리키도록 `frontend` 쪽 설정(`.env` 또는 `
 
 
 python -m modules.core.build_pgvector_db
+psql -U postgres -d rebate_db -f database/init_database.sql

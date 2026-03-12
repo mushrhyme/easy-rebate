@@ -127,7 +127,7 @@ class ItemsMixin:
                     created_at = datetime(data_year, data_month, 1)
                     cursor.execute("""
                         INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, notes, created_by_user_id, updated_by_user_id, created_at, data_year, data_month, document_metadata)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::json)
                         ON CONFLICT (pdf_filename) DO UPDATE SET
                             total_pages = EXCLUDED.total_pages,
                             form_type = COALESCE(EXCLUDED.form_type, documents_current.form_type),
@@ -143,7 +143,7 @@ class ItemsMixin:
                 else:
                     cursor.execute("""
                         INSERT INTO documents_current (pdf_filename, total_pages, form_type, upload_channel, notes, created_by_user_id, updated_by_user_id, document_metadata)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::json)
                         ON CONFLICT (pdf_filename) DO UPDATE SET
                             total_pages = EXCLUDED.total_pages,
                             form_type = COALESCE(EXCLUDED.form_type, documents_current.form_type),
@@ -199,7 +199,7 @@ class ItemsMixin:
                     try:
                         cursor.execute("""
                             INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, ocr_text)
-                            VALUES (%s, %s, %s, %s::jsonb, %s)
+                            VALUES (%s, %s, %s, %s::json, %s)
                             ON CONFLICT (pdf_filename, page_number)
                             DO UPDATE SET
                                 page_role = EXCLUDED.page_role,
@@ -210,7 +210,7 @@ class ItemsMixin:
                     except Exception:
                         cursor.execute("""
                             INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
-                            VALUES (%s, %s, %s, %s::jsonb)
+                            VALUES (%s, %s, %s, %s::json)
                             ON CONFLICT (pdf_filename, page_number)
                             DO UPDATE SET
                                 page_role = EXCLUDED.page_role,
@@ -259,7 +259,7 @@ class ItemsMixin:
                                 first_reviewed_at, second_reviewed_at,
                                 item_data
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::json)
                         """, (
                             pdf_filename,
                             page_number,
@@ -410,7 +410,7 @@ class ItemsMixin:
                 try:
                     cursor.execute("""
                         INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, ocr_text, analyzed_vector_version, last_analyzed_at)
-                        VALUES (%s, %s, %s, %s::jsonb, %s, %s, CURRENT_TIMESTAMP)
+                        VALUES (%s, %s, %s, %s::json, %s, %s, CURRENT_TIMESTAMP)
                         ON CONFLICT (pdf_filename, page_number)
                         DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta,
                             ocr_text = COALESCE(EXCLUDED.ocr_text, page_data_current.ocr_text),
@@ -421,7 +421,7 @@ class ItemsMixin:
                 except Exception:
                     cursor.execute("""
                         INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
-                        VALUES (%s, %s, %s, %s::jsonb)
+                        VALUES (%s, %s, %s, %s::json)
                         ON CONFLICT (pdf_filename, page_number)
                         DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta, updated_at = CURRENT_TIMESTAMP
                     """, (pdf_filename, page_number, page_role, page_meta_json))
@@ -449,7 +449,7 @@ class ItemsMixin:
                     separated = self._separate_item_fields(item_dict, form_type=form_type)
                     cursor.execute("""
                         INSERT INTO items_current (pdf_filename, page_number, item_order, first_review_checked, second_review_checked, item_data)
-                        VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+                        VALUES (%s, %s, %s, FALSE, FALSE, %s::json)
                     """, (pdf_filename, page_number, item_order, json.dumps(separated.get("item_data") or {}, ensure_ascii=False)))
                 # 문서에 item_data_keys가 없을 때만 LLM 결과 순서를 한 번 기록 (최초 저장 시)
                 if items and isinstance(items[0], dict):
@@ -460,11 +460,13 @@ class ItemsMixin:
                     if not existing_keys or (isinstance(existing_keys, list) and len(existing_keys) == 0):
                         keys = list(items[0].keys())
                         if keys:
-                            cursor.execute("""
-                                UPDATE documents_current
-                                SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
-                                WHERE pdf_filename = %s
-                            """, (json.dumps({"item_data_keys": keys}, ensure_ascii=False), pdf_filename))
+                            if not isinstance(doc_meta, dict):
+                                doc_meta = {}
+                            doc_meta["item_data_keys"] = keys
+                            cursor.execute(
+                                "UPDATE documents_current SET document_metadata = %s::json WHERE pdf_filename = %s",
+                                (json.dumps(doc_meta, ensure_ascii=False), pdf_filename),
+                            )
                 if image_data:
                     try:
                         image_path = self.save_image_to_file(pdf_filename, page_number, image_data)
@@ -1182,7 +1184,7 @@ class ItemsMixin:
     ) -> bool:
         """
         item_data에 受注先コード·小売先コード를 병합 저장. (검토 탭 최초 조회 시 매핑 결과 반영용)
-        item_id는 items_current 또는 items_archive 중 하나에만 존재.
+        JSON 키 순서 유지: 현재 행 조회 → 앱에서 머지 → 전체 UPDATE.
         """
         if not dist_code and not retail_code:
             return False
@@ -1196,16 +1198,54 @@ class ItemsMixin:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                patch_json = json.dumps(patch, ensure_ascii=False)
+                # 1) item_id로 pdf_filename 및 item_data 조회 (current 우선)
                 cursor.execute(
-                    "UPDATE items_current SET item_data = item_data || %s::jsonb WHERE item_id = %s",
-                    (patch_json, item_id),
+                    "SELECT pdf_filename, item_data FROM items_current WHERE item_id = %s",
+                    (item_id,),
                 )
-                if cursor.rowcount == 0:
+                row = cursor.fetchone()
+                table_suffix = "current"
+                if not row:
                     cursor.execute(
-                        "UPDATE items_archive SET item_data = item_data || %s::jsonb WHERE item_id = %s",
-                        (patch_json, item_id),
+                        "SELECT pdf_filename, item_data FROM items_archive WHERE item_id = %s",
+                        (item_id,),
                     )
+                    row = cursor.fetchone()
+                    table_suffix = "archive"
+                if not row:
+                    return False
+                pdf_filename, item_data_raw = row[0], row[1]
+                if isinstance(item_data_raw, dict):
+                    item_data = dict(item_data_raw)
+                elif isinstance(item_data_raw, str):
+                    try:
+                        item_data = json.loads(item_data_raw)
+                    except (TypeError, ValueError):
+                        item_data = {}
+                else:
+                    item_data = {}
+                # 2) 문서의 item_data_keys 조회 (순서 유지용, current/archive 동일 키)
+                doc_table = "documents_current" if table_suffix == "current" else "documents_archive"
+                cursor.execute(
+                    f"SELECT document_metadata FROM {doc_table} WHERE pdf_filename = %s LIMIT 1",
+                    (pdf_filename,),
+                )
+                doc_row = cursor.fetchone()
+                doc_meta = (doc_row[0] or {}) if doc_row and doc_row[0] else {}
+                item_data_keys = doc_meta.get("item_data_keys") if isinstance(doc_meta, dict) else None
+                if not item_data_keys or not isinstance(item_data_keys, list):
+                    item_data_keys = list(item_data.keys())
+                # 3) patch 반영 후 item_data_keys 순으로 정렬
+                item_data.update(patch)
+                ordered = {k: item_data[k] for k in item_data_keys if k in item_data}
+                ordered.update({k: item_data[k] for k in item_data if k not in item_data_keys})
+                full_json = json.dumps(ordered, ensure_ascii=False)
+                # 4) 전체 교체 UPDATE
+                items_table = f"items_{table_suffix}"
+                cursor.execute(
+                    f"UPDATE {items_table} SET item_data = %s::json WHERE item_id = %s",
+                    (full_json, item_id),
+                )
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:

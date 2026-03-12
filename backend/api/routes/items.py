@@ -1063,7 +1063,7 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
                 set_clauses.append("second_reviewed_by_user_id = %s")
                 params.append(current_user_id if cv else None)
         if "item_data" in separated:
-            set_clauses.append("item_data = %s::jsonb")
+            set_clauses.append("item_data = %s::json")
             params.append(_json_mod.dumps(separated["item_data"], ensure_ascii=False))
         set_clauses.append("version = version + 1")
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
@@ -1092,7 +1092,7 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
             if merged:
                 meta_json = _json_mod.dumps({**doc_meta, "item_data_keys": merged}, ensure_ascii=False)
                 cursor.execute(
-                    "UPDATE documents_current SET document_metadata = %s::jsonb WHERE pdf_filename = %s",
+                    "UPDATE documents_current SET document_metadata = %s::json WHERE pdf_filename = %s",
                     (meta_json, pdf_filename),
                 )
         except Exception:

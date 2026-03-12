@@ -168,7 +168,7 @@ class RAGManager:
                             index_name VARCHAR(100) NOT NULL DEFAULT 'base',
                             form_type VARCHAR(10),
                             index_data BYTEA NOT NULL,
-                            metadata_json JSONB NOT NULL,
+                            metadata_json JSON NOT NULL,
                             index_size BIGINT,
                             vector_count INTEGER DEFAULT 0,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -247,7 +247,7 @@ class RAGManager:
                             page_number INTEGER NOT NULL,
                             ocr_text TEXT NOT NULL,
                             embedding vector(384) NOT NULL,
-                            answer_json JSONB NOT NULL,
+                            answer_json JSON NOT NULL,
                             form_type VARCHAR(10),
                             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                             UNIQUE(pdf_filename, page_number)
@@ -345,7 +345,7 @@ class RAGManager:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO rag_page_embeddings (pdf_filename, page_number, ocr_text, embedding, answer_json, form_type, updated_at)
-                    VALUES (%s, %s, %s, %s::vector, %s::jsonb, %s, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, %s::vector, %s::json, %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (pdf_filename, page_number)
                     DO UPDATE SET ocr_text = EXCLUDED.ocr_text, embedding = EXCLUDED.embedding,
                         answer_json = EXCLUDED.answer_json, form_type = EXCLUDED.form_type, updated_at = CURRENT_TIMESTAMP
@@ -518,7 +518,7 @@ class RAGManager:
                 cursor.execute("""
                     INSERT INTO rag_vector_index (
                         index_name, form_type, index_data, metadata_json, index_size, vector_count
-                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    ) VALUES (%s, %s, %s, %s::json, %s, %s)
                     ON CONFLICT (index_name, form_type)
                     DO UPDATE SET
                         index_data = EXCLUDED.index_data,
@@ -570,7 +570,7 @@ class RAGManager:
                 cursor.execute("""
                     INSERT INTO rag_vector_index (
                         index_name, form_type, index_data, metadata_json, index_size, vector_count
-                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    ) VALUES (%s, %s, %s, %s::json, %s, %s)
                     ON CONFLICT (index_name, form_type)
                     DO UPDATE SET
                         index_data = EXCLUDED.index_data,
@@ -754,7 +754,7 @@ class RAGManager:
                     cursor.execute("""
                         INSERT INTO rag_vector_index (
                             index_name, form_type, index_data, metadata_json, index_size, vector_count
-                        ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                        ) VALUES (%s, %s, %s, %s::json, %s, %s)
                     """, (
                         shard_name,
                         '',
@@ -898,7 +898,7 @@ class RAGManager:
                 cursor.execute("""
                     INSERT INTO rag_vector_index (
                         index_name, form_type, index_data, metadata_json, index_size, vector_count
-                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    ) VALUES (%s, %s, %s, %s::json, %s, %s)
                     ON CONFLICT (index_name, form_type)
                     DO UPDATE SET
                         index_data = EXCLUDED.index_data,
@@ -1513,7 +1513,7 @@ class RAGManager:
                 cursor.execute("""
                     INSERT INTO rag_vector_index (
                         index_name, form_type, index_data, metadata_json, index_size, vector_count
-                    ) VALUES (%s, %s, %s, %s::jsonb, %s, %s)
+                    ) VALUES (%s, %s, %s, %s::json, %s, %s)
                     ON CONFLICT (index_name, form_type)
                     DO UPDATE SET
                         index_data = EXCLUDED.index_data,

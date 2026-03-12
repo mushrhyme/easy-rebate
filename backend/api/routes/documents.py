@@ -1802,7 +1802,7 @@ async def save_document_answer_json(
                 # last_edited_at, last_edited_by_user_id: 그리드 保存 시 갱신 (Phase 1)
                 cursor.execute("""
                     INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, last_edited_at, last_edited_by_user_id)
-                    VALUES (%s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP, %s)
+                    VALUES (%s, %s, %s, %s::json, CURRENT_TIMESTAMP, %s)
                     ON CONFLICT (pdf_filename, page_number)
                     DO UPDATE SET page_role = EXCLUDED.page_role, page_meta = EXCLUDED.page_meta,
                         last_edited_at = CURRENT_TIMESTAMP, last_edited_by_user_id = EXCLUDED.last_edited_by_user_id
@@ -1845,7 +1845,7 @@ async def save_document_answer_json(
                             first_review_checked, second_review_checked,
                             item_data
                         )
-                        VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+                        VALUES (%s, %s, %s, FALSE, FALSE, %s::json)
                     """, (
                         pdf_filename, page_number, item_order,
                         json.dumps(item_data, ensure_ascii=False),
@@ -1853,19 +1853,30 @@ async def save_document_answer_json(
             # 이미 문서에 item_data_keys가 있으면 클라이언트 순서로 덮어쓰지 않음 (서버 LLM 저장 순서 유지)
             if first_item_keys:
                 cursor.execute(
-                    "SELECT document_metadata->'item_data_keys' FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                    "SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1",
                     (pdf_filename,),
                 )
                 row = cursor.fetchone()
-                existing_keys = row[0] if row and row[0] is not None else None
+                existing_keys = None
+                if row and row[0]:
+                    doc_meta = row[0] if isinstance(row[0], dict) else {}
+                    existing_keys = doc_meta.get("item_data_keys")
                 if existing_keys and isinstance(existing_keys, (list, tuple)) and len(existing_keys) > 0:
                     first_item_keys = None
             if first_item_keys:
-                cursor.execute("""
-                    UPDATE documents_current
-                    SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
-                    WHERE pdf_filename = %s
-                """, (json.dumps({"item_data_keys": first_item_keys}, ensure_ascii=False), pdf_filename))
+                cursor.execute(
+                    "SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                    (pdf_filename,),
+                )
+                row = cursor.fetchone()
+                doc_meta = (row[0] or {}) if row and row[0] is not None else {}
+                if not isinstance(doc_meta, dict):
+                    doc_meta = {}
+                doc_meta["item_data_keys"] = first_item_keys
+                cursor.execute(
+                    "UPDATE documents_current SET document_metadata = %s::json WHERE pdf_filename = %s",
+                    (json.dumps(doc_meta, ensure_ascii=False), pdf_filename),
+                )
             conn.commit()
         return {"success": True, "message": "Answer JSON saved (DB only)", "pages_count": len(pages)}
     except HTTPException:
@@ -2307,7 +2318,7 @@ def _create_items_from_answer_sync(
         if page_meta_json:
             cursor.execute("""
                 INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta)
-                VALUES (%s, %s, %s, %s::jsonb)
+                VALUES (%s, %s, %s, %s::json)
                 ON CONFLICT (pdf_filename, page_number)
                 DO UPDATE SET
                     page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role),
@@ -2359,7 +2370,7 @@ def _create_items_from_answer_sync(
                     first_review_checked, second_review_checked,
                     item_data
                 )
-                VALUES (%s, %s, %s, %s, FALSE, FALSE, %s::jsonb)
+                VALUES (%s, %s, %s, %s, FALSE, FALSE, %s::json)
             """, (
                 pdf_filename, page_number, item_order,
                 customer,
@@ -2368,11 +2379,19 @@ def _create_items_from_answer_sync(
         if items and isinstance(items[0], dict):
             item_data_keys = list(items[0].keys())
             if item_data_keys:
-                cursor.execute("""
-                    UPDATE documents_current
-                    SET document_metadata = COALESCE(document_metadata, '{}'::jsonb) || %s::jsonb
-                    WHERE pdf_filename = %s
-                """, (json.dumps({"item_data_keys": item_data_keys}, ensure_ascii=False), pdf_filename))
+                cursor.execute(
+                    "SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1",
+                    (pdf_filename,),
+                )
+                row = cursor.fetchone()
+                doc_meta = (row[0] or {}) if row and row[0] is not None else {}
+                if not isinstance(doc_meta, dict):
+                    doc_meta = {}
+                doc_meta["item_data_keys"] = item_data_keys
+                cursor.execute(
+                    "UPDATE documents_current SET document_metadata = %s::json WHERE pdf_filename = %s",
+                    (json.dumps(doc_meta, ensure_ascii=False), pdf_filename),
+                )
         conn.commit()
     return {"success": True, "created_count": len(items), "page_number": page_number}
 
@@ -2440,7 +2459,7 @@ def _create_items_from_template_sync(database, pdf_filename: str, page_number: i
                     first_review_checked, second_review_checked,
                     item_data
                 )
-                VALUES (%s, %s, %s, FALSE, FALSE, %s::jsonb)
+                VALUES (%s, %s, %s, FALSE, FALSE, %s::json)
             """, (
                 pdf_filename, page_number, item_order,
                 json.dumps(item_data, ensure_ascii=False)
@@ -2842,13 +2861,13 @@ async def update_page_meta(
             if page_role is not None:
                 cursor.execute("""
                     UPDATE page_data_current
-                    SET page_meta = %s::jsonb, page_role = %s, updated_at = CURRENT_TIMESTAMP
+                    SET page_meta = %s::json, page_role = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s AND page_number = %s
                 """, (page_meta_json, page_role, pdf_filename, page_number))
             else:
                 cursor.execute("""
                     UPDATE page_data_current
-                    SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                    SET page_meta = %s::json, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s AND page_number = %s
                 """, (page_meta_json, pdf_filename, page_number))
             if cursor.rowcount > 0:
@@ -2856,13 +2875,13 @@ async def update_page_meta(
             if page_role is not None:
                 cursor.execute("""
                     UPDATE page_data_archive
-                    SET page_meta = %s::jsonb, page_role = %s, updated_at = CURRENT_TIMESTAMP
+                    SET page_meta = %s::json, page_role = %s, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s AND page_number = %s
                 """, (page_meta_json, page_role, pdf_filename, page_number))
             else:
                 cursor.execute("""
                     UPDATE page_data_archive
-                    SET page_meta = %s::jsonb, updated_at = CURRENT_TIMESTAMP
+                    SET page_meta = %s::json, updated_at = CURRENT_TIMESTAMP
                     WHERE pdf_filename = %s AND page_number = %s
                 """, (page_meta_json, pdf_filename, page_number))
             if cursor.rowcount == 0:
