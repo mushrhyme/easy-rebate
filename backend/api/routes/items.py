@@ -1034,13 +1034,17 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
         doc = db.get_document(pdf_filename)
         form_type = doc.get("form_type") if doc else None
         payload_item_data = dict(update_data.item_data or {})
-        retail_code, dist_code = resolve_retail_dist(
-            payload_item_data.get("得意先"), payload_item_data.get("得意先コード"),
-        )
-        if retail_code:
-            payload_item_data["小売先コード"] = retail_code
-        if dist_code:
-            payload_item_data["受注先コード"] = dist_code
+        # 사용자가 代表スーパー 등에서 지정한 값이 있으면 그대로 사용, 없을 때만 resolve로 보정
+        stored_rc = (payload_item_data.get("小売先コード") or payload_item_data.get("小売先CD") or "").strip()
+        stored_dc = (payload_item_data.get("受注先コード") or payload_item_data.get("受注先CD") or "").strip()
+        if not stored_rc or not stored_dc:
+            retail_code, dist_code = resolve_retail_dist(
+                payload_item_data.get("得意先"), payload_item_data.get("得意先コード"),
+            )
+            if not stored_rc and retail_code:
+                payload_item_data["小売先コード"] = retail_code
+            if not stored_dc and dist_code:
+                payload_item_data["受注先コード"] = dist_code
         separated = db._separate_item_fields(payload_item_data, form_type=form_type)
         set_clauses, params = [], []
         if update_data.review_status:
