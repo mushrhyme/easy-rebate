@@ -958,6 +958,25 @@ export const searchApi = {
     return response.data
   },
 
+  /** sap_retail에서 受注先コード(판매처코드)로 1건 조회 → SAP受注先(판매처명) 표시용 */
+  getSapRetailRowByVendorCode: async (
+    vendorCode: string
+  ): Promise<{
+    vendor_code: string
+    row: {
+      소매처코드: string
+      소매처명: string
+      판매처코드: string
+      판매처명: string
+    } | null
+    skipped_reason?: string | null
+  }> => {
+    const response = await client.get('/api/search/retail/sap-row-by-vendor-code', {
+      params: { vendor_code: vendorCode },
+    })
+    return response.data
+  },
+
   /** sap_retail.csv 검색. searchType: 'retail'=小売先만, 'vendor'=受注先만, 없으면 둘 다 */
   getRetailCandidatesBySapRetail: async (
     query: string,
@@ -1301,13 +1320,14 @@ export const ragAdminApi = {
 
   /**
    * 단일 페이지 학습 요청 (Phase 1). 해당 페이지만 벡터 DB에 반영.
+   * /api/search/learning-request-page 사용 — 로그인 사용자 전원 호출 가능 (관리자 403 방지).
    */
   learningRequestPage: async (
     pdfFilename: string,
     pageNumber: number
   ): Promise<{ success: boolean; message: string }> => {
     const response = await client.post<{ success: boolean; message: string }>(
-      '/api/rag-admin/learning-request-page',
+      '/api/search/learning-request-page',
       { pdf_filename: pdfFilename, page_number: pageNumber }
     )
     return response.data
