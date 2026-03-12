@@ -305,6 +305,10 @@ class RAGManager:
                 page_key = get_page_key(pdf_name, page_number)
                 metadata = {"pdf_name": pdf_name, "page_num": page_number, "form_type": ft or ""}
                 data = {"ocr_text": ocr_text or "", "answer_json": answer_json or {}, "metadata": metadata}
+                # pgvector 테이블에는 key_order가 없으므로 form_type으로 FAISS/DB에서 조회해 붙임 (REFERENCE_JSON 정렬용)
+                key_order = self.get_key_order_by_form_type(ft or None) if (ft and str(ft).strip()) else None
+                if key_order:
+                    data["key_order"] = key_order
                 results.append(self._create_search_result(page_key, data, similarity, dist, "pgvector"))
             seen = set()
             unique = []

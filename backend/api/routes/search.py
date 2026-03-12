@@ -966,10 +966,15 @@ async def rerun_page_ocr(
     except Exception:
         pass  # 저장 실패해도 응답은 반환
 
-    # debug2는 선택: 폴더가 이미 있을 때만 기록 (mkdir 하지 않음)
+    # debug2: 프로젝트 루트/debug2/pdf_name 하위에 OCR 텍스트 저장
     try:
         debug2_dir = root / "debug2" / pdf_name
-        if debug2_dir.exists():
+        try:
+            debug2_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # 디렉터리 생성 실패 시 디버그 기록만 건너뛰고 나머지 흐름은 유지
+            debug2_dir = None
+        if debug2_dir is not None:
             (debug2_dir / f"page_{page_number}_ocr_text.txt").write_text(ocr_text, encoding="utf-8")
     except Exception:
         pass
