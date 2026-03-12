@@ -514,7 +514,7 @@ async def build_vector_from_learning_pages(
                 merged_item = dict(item_data) if isinstance(item_data, dict) else {}
                 merged_items.append(merged_item)
 
-        # 저장된 키 순서로 재정렬 (JSONB 읽기 순서가 아닌 document_metadata.item_data_keys 사용)
+        # 저장된 키 순서로 재정렬 (document_metadata.item_data_keys 사용)
         doc_meta = first_row.get("document_metadata") or {}
         if isinstance(doc_meta, dict):
             item_data_keys = doc_meta.get("item_data_keys")

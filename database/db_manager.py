@@ -2,7 +2,7 @@
 PostgreSQL 데이터베이스 관리 모듈
 
 JSON 파싱 결과를 PostgreSQL에 저장하고 조회하는 기능을 제공합니다.
-스키마: documents + items (JSONB)
+스키마: documents + items (item_data 등 JSON 컬럼)
 """
 
 import asyncio
@@ -82,7 +82,7 @@ from database.db_locks import LocksMixin
 from database.db_users import UsersMixin
 
 class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
-    """PostgreSQL 데이터베이스 관리 클래스 (새 스키마: documents + items JSONB)"""
+    """PostgreSQL 데이터베이스 관리 클래스 (새 스키마: documents + items, item_data 등 JSON)"""
     
     # getconn 타임아웃 시 별도 스레드에서 대기 후 putconn 하기 위한 실행자 (모듈 공유)
     _getconn_executor = ThreadPoolExecutor(max_workers=16)
@@ -306,7 +306,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
             }
     
     # ============================================
-    # JSONB 검색 메서드
+    # JSON 컬럼 검색 메서드
     # ============================================
     
     def search_items_by_customer(

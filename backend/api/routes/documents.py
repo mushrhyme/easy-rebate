@@ -451,7 +451,7 @@ def get_document_year_month(db, pdf_filename: str, year: Optional[int] = None, m
             if not row or not row[0]:
                 return None
             
-            # page_meta가 JSONB이므로 파싱
+            # page_meta가 JSON이므로 필요 시 파싱
             page_meta = row[0]
             if isinstance(page_meta, str):
                 page_meta = json.loads(page_meta)
