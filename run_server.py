@@ -22,4 +22,5 @@ if __name__ == "__main__":
         port=settings.PORT,
         reload=settings.DEBUG,
         reload_excludes=[".venv", "**/.venv/**", "**/node_modules/**"] if settings.DEBUG else None,
+        access_log=False,
     )
