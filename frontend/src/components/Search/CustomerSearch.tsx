@@ -5,7 +5,6 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, searchApi, itemsApi, formTypesApi, ragAdminApi } from '@/api/client'
-import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { useFormTypes } from '@/hooks/useFormTypes'
 import { ItemsGridRdg, type ItemsGridRdgHandle } from '../Grid/ItemsGridRdg'
@@ -40,9 +39,7 @@ interface CustomerSearchProps {
 
 export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsumeDocumentToOpen }: CustomerSearchProps) => {
   const queryClient = useQueryClient()
-  const { user } = useAuth()
   const { showToast } = useToast()
-  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const { options: formTypeOptions, formTypeLabel } = useFormTypes()
   const [showAnswerKeyModal, setShowAnswerKeyModal] = useState(false)
   // Phase 3: form_type 수동 변경·재검출 제거. 様式は維持のため選択 UI のみ削除
@@ -923,7 +920,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               onClick={(e) => e.stopPropagation()}
             />
           </div>
-          {/* 保存 + 再分析 + 学習リクエスト(管理者) + 解答作成：検討タブでページ単位の保存・再分析・学習 */}
+          {/* 保存 + 再分析 + 学習リクエスト + 解答作成：検討タブでページ単位の保存・再分析・学習 */}
           <div className="nav-action-buttons">
             <button
               type="button"
@@ -977,36 +974,34 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                     ? '再分析中…'
                     : 'このページ以降の全ページを再分析'}
                 </button>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    className="nav-action-btn nav-learning-request-btn"
-                    onClick={async () => {
-                      if (gridRef.current?.hasUnsavedEdits?.()) {
-                        alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
-                        return
-                      }
-                      try {
-                        await ragAdminApi.learningRequestPage(currentPage.pdfFilename, currentPage.pageNumber)
-                        queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
-                        queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
-                        queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
-                        showToast(
-                          '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
-                          'success'
-                        )
-                      } catch (e: unknown) {
-                        const msg = e && typeof e === 'object' && 'response' in e
-                          ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                          : (e as Error)?.message
-                        showToast(msg ? `학습 요청 실패: ${msg}` : '학습 요청에 실패했습니다.', 'error')
-                      }
-                    }}
-                    title="該当ページをベクターDBに反映（管理者のみ）"
-                  >
-                    学習リクエスト
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="nav-action-btn nav-learning-request-btn"
+                  onClick={async () => {
+                    if (gridRef.current?.hasUnsavedEdits?.()) {
+                      alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
+                      return
+                    }
+                    try {
+                      await ragAdminApi.learningRequestPage(currentPage.pdfFilename, currentPage.pageNumber)
+                      queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
+                      queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
+                      queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
+                      showToast(
+                        '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
+                        'success'
+                      )
+                    } catch (e: unknown) {
+                      const msg = e && typeof e === 'object' && 'response' in e
+                        ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                        : (e as Error)?.message
+                      showToast(msg ? `학습 요청 실패: ${msg}` : '학습 요청에 실패했습니다.', 'error')
+                    }
+                  }}
+                  title="該当ページをベクターDBに反映"
+                >
+                  学習リクエスト
+                </button>
                 <button
                   type="button"
                   className="nav-action-btn answer-key-designate-btn"

@@ -8,7 +8,6 @@ import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, itemsApi, searchApi, ragAdminApi } from '@/api/client'
 import { useFormTypes } from '@/hooks/useFormTypes'
-import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/contexts/ToastContext'
 import { getPageImageAbsoluteUrl } from '@/utils/apiConfig'
 import type { Document } from '@/types'
@@ -36,8 +35,6 @@ import './AnswerKeyTab.css'
 export type { InitialDocumentForAnswerKey }
 
 export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevokeSuccess }: AnswerKeyTabProps) {
-  const { user } = useAuth()
-  const isAdmin = user?.is_admin === true || user?.username === 'admin'
   const queryClient = useQueryClient()
   const { showToast } = useToast()
   const [selectedDoc, setSelectedDoc] = useState<{ pdf_filename: string; total_pages: number } | null>(null)
@@ -595,7 +592,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       <div className="answer-key-header">
         <h2 className="answer-key-title">解答作成</h2>
         <p className="answer-key-desc">
-          検索タブで「解答作成」を押して指定した文書のみここに表示されます。左のPDFを見ながら右のキー・値で正解を編集し、「保存」でDBに反映します。「再分析」で該当ページのみOCR＋RAG＋LLMを再実行してDBを更新できます。検討タブへは「検討タブに復帰」で戻ります。管理者は「学習リクエスト」で該当ページをベクターDBに反映できます。
+          検索タブで「解答作成」を押して指定した文書のみここに表示されます。左のPDFを見ながら右のキー・値で正解を編集し、「保存」でDBに反映します。「再分析」で該当ページのみOCR＋RAG＋LLMを再実行してDBを更新できます。検討タブへは「検討タブに復帰」で戻ります。「学習リクエスト」で該当ページをベクターDBに反映できます。
         </p>
       </div>
 
@@ -646,39 +643,37 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             >
               {analyzingPage != null || analyzeSinglePageMutation.isPending ? '分析中…' : '再分析'}
             </button>
-            {isAdmin && (
-              <button
-                type="button"
-                className="answer-key-btn answer-key-btn-learning"
-                onClick={async () => {
-                  if (!selectedDoc) return
-                  const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
-                  if (hasDirty) {
-                    alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
-                    return
-                  }
-                  try {
-                    await ragAdminApi.learningRequestPage(selectedDoc.pdf_filename, effectivePageNumber)
-                    queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
-                    queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
-                    setSaveMessage('해당 페이지를 벡터 DB에 반영했습니다.')
-                    setSaveStatus('done')
-                    showToast(
-                      '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
-                      'success'
-                    )
-                  } catch (e: any) {
-                    const msg = e?.response?.data?.detail || e?.message || '학습 요청에 실패했습니다.'
-                    setSaveMessage(msg)
-                    setSaveStatus('error')
-                    showToast(msg, 'error')
-                  }
-                }}
-                title="현재 페이지만 벡터 DB에 반영 (관리자 전용)"
-              >
-                学習リクエスト
-              </button>
-            )}
+            <button
+              type="button"
+              className="answer-key-btn answer-key-btn-learning"
+              onClick={async () => {
+                if (!selectedDoc) return
+                const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
+                if (hasDirty) {
+                  alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
+                  return
+                }
+                try {
+                  await ragAdminApi.learningRequestPage(selectedDoc.pdf_filename, effectivePageNumber)
+                  queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
+                  queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
+                  setSaveMessage('해당 페이지를 벡터 DB에 반영했습니다.')
+                  setSaveStatus('done')
+                  showToast(
+                    '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
+                    'success'
+                  )
+                } catch (e: any) {
+                  const msg = e?.response?.data?.detail || e?.message || '학습 요청에 실패했습니다.'
+                  setSaveMessage(msg)
+                  setSaveStatus('error')
+                  showToast(msg, 'error')
+                }
+              }}
+              title="현재 페이지만 벡터 DB에 반영"
+            >
+              学習リクエスト
+            </button>
           </>
         )}
       </div>

@@ -64,6 +64,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const [hoveredRowId, setHoveredRowId] = useState<number | null>(null) // 호버된 행 ID
   const [reviewTooltip, setReviewTooltip] = useState<{ text: string; x: number; y: number } | null>(null) // 1次/2次 증빙 툴팁
   const [unitPriceModalRow, setUnitPriceModalRow] = useState<GridRow | null>(null) // 단가 후보 모달
+  const [retailSaving, setRetailSaving] = useState(false) // 代表スーパー 확정 저장 중
   const [attachmentModalOpen, setAttachmentModalOpen] = useState(false) // 첨부 파일 모달
   
   // 컨테이너 너비 측정
@@ -1151,6 +1152,14 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     [unitPriceModalRow, sessionId, pdfFilename, pageNumber, items, updateItem, data?.form_type, data?.upload_channel]
   )
 
+  /** 행에서 item_data 추출 시 제외할 키 (API item_data에 포함하지 않음) */
+  const ROW_KEYS_EXCLUDE_ITEM_DATA = [
+    'item_id', 'page_number', 'item_order', 'version',
+    'first_review_checked', 'second_review_checked',
+    'first_review_reviewed_at', 'first_review_reviewed_by',
+    'second_review_reviewed_at', 'second_review_reviewed_by', 'customer',
+  ]
+
   /** 동일 得意先コード or 得意先인 행을 그룹 키로 식별 (페이지 내 일괄 적용용) */
   const getRetailGroupKey = useCallback((r: GridRow): string => {
     const code = r['得意先コード'] != null ? String(r['得意先コード']).trim() : ''
@@ -1159,20 +1168,58 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     return `name:${name}`
   }, [])
 
+  /** 代表スーパー 확정: 그룹 행마다 受注先コード/小売先コード를 서버에 저장 후 모달 닫기 */
   const handleRetailSelect = useCallback(
-    (match: { 판매처코드: string; 소매처코드: string }) => {
-      if (!unitPriceModalRow) return
+    async (match: { 판매처코드: string; 소매처코드: string }) => {
+      if (!unitPriceModalRow || !sessionId) {
+        if (!sessionId) alert('セッションIDがありません。ページを再読み込みしてください。')
+        return
+      }
       const groupKey = getRetailGroupKey(unitPriceModalRow)
-      setRows((prev) =>
-        prev.map((r) =>
-          getRetailGroupKey(r) === groupKey
-            ? { ...r, 受注先コード: match.판매처코드, 小売先コード: match.소매처코드 }
-            : r
+      const groupRows = rowsRef.current.filter((r) => getRetailGroupKey(r) === groupKey)
+      if (groupRows.length === 0) return
+
+      setRetailSaving(true)
+      try {
+        await Promise.all(
+          groupRows.map(async (row) => {
+            const item = items.find((i: { item_id: number }) => i.item_id === row.item_id)
+            if (!item || item.version == null) return
+            const itemData: Record<string, unknown> = {}
+            Object.keys(row).forEach((key) => {
+              if (!ROW_KEYS_EXCLUDE_ITEM_DATA.includes(key)) {
+                itemData[key] = row[key]
+              }
+            })
+            itemData['受注先コード'] = match.판매처코드
+            itemData['小売先コード'] = match.소매처코드
+
+            await updateItem.mutateAsync({
+              itemId: row.item_id,
+              request: {
+                item_data: itemData,
+                review_status: {
+                  first_review: { checked: Boolean(row.first_review_checked) },
+                  second_review: { checked: Boolean(row.second_review_checked) },
+                },
+                expected_version: item.version,
+                session_id: sessionId,
+              },
+            })
+          })
         )
-      )
-      setUnitPriceModalRow(null)
+        // 저장 후 그리드 갱신을 위해 items 쿼리 refetch 완료까지 대기 후 모달 닫기
+        await queryClient.refetchQueries({ queryKey: ['items', pdfFilename, pageNumber] })
+        setUnitPriceModalRow(null)
+      } catch (err: unknown) {
+        const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? (err as Error)?.message
+        console.error('❌ [代表スーパー 確定 保存失敗]', err)
+        alert(`代表スーパーの保存に失敗しました: ${msg}`)
+      } finally {
+        setRetailSaving(false)
+      }
     },
-    [unitPriceModalRow, getRetailGroupKey]
+    [unitPriceModalRow, getRetailGroupKey, sessionId, items, updateItem, queryClient, pdfFilename, pageNumber]
   )
 
   if (isLoading || pageMetaLoading) {
@@ -1197,6 +1244,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         row={unitPriceModalRow}
         onSelectUnitPrice={handleUnitPriceSelect}
         onSelectRetail={handleRetailSelect}
+        retailSaving={retailSaving}
       />
       <AttachmentModal
         open={attachmentModalOpen}

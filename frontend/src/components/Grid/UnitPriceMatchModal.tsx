@@ -63,7 +63,9 @@ interface UnitPriceMatchModalProps {
   onClose: () => void
   row: GridRow | null
   onSelectUnitPrice: (match: { 제품코드?: string | number; 시키리?: number; 본부장?: number }) => void
-  onSelectRetail: (match: { 판매처코드: string; 소매처코드: string }) => void
+  onSelectRetail: (match: { 판매처코드: string; 소매처코드: string }) => void | Promise<void>
+  /** 代表スーパー 確定 저장 중 (확정 시 API 저장으로 모달은 부모가 닫음) */
+  retailSaving?: boolean
 }
 
 function getCustomerName(row: GridRow | null): string {
@@ -191,6 +193,7 @@ export function UnitPriceMatchModal({
   row,
   onSelectUnitPrice,
   onSelectRetail,
+  retailSaving = false,
 }: UnitPriceMatchModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('unit_price')
 
@@ -238,14 +241,31 @@ export function UnitPriceMatchModal({
   /** 最終候補 입력 폼（適用で 채워지고 수정 가능, 確定 시 이 값으로 그리드 반영） */
   const [finalForm, setFinalForm] = useState<RetailFinalForm>(EMPTY_FINAL_FORM)
   const lastSapFetchedRef = useRef<string | null>(null)
+  const lastSapVendorFetchedRef = useRef<string | null>(null)
   useEffect(() => {
     if (!open) {
       setFinalForm(EMPTY_FINAL_FORM)
       setUnitFinalForm(EMPTY_UNIT_FINAL_FORM)
       setUnitPriceAutoFill({ 仕切: null, 本部長: null })
       lastSapFetchedRef.current = null
+      lastSapVendorFetchedRef.current = null
+    } else if (row) {
+      // 代表スーパー 탭: 모달 열 때 현재 행의 受注先/小売先 코드로 폼 초기화
+      const dc = row['受注先コード'] != null ? String(row['受注先コード']).trim() : ''
+      const rc = row['小売先コード'] != null ? String(row['小売先コード']).trim() : ''
+      if (dc || rc) {
+        setFinalForm((prev) => ({
+          ...prev,
+          受注先コード: dc || prev.受注先コード,
+          受注先: (row['受注先'] != null ? String(row['受注先']) : prev.受注先) || prev.受注先,
+          SAP受注先: prev.SAP受注先,
+          小売先コード: rc || prev.小売先コード,
+          小売先: (row['小売先'] != null ? String(row['小売先']) : prev.小売先) || prev.小売先,
+          SAP小売先: prev.SAP小売先,
+        }))
+      }
     }
-  }, [open, customerName])
+  }, [open, customerName, row])
 
   /** 商品コード가 바뀌면 unit_price에서 仕切・本部長 조회해 자동완성 */
   useEffect(() => {
@@ -310,6 +330,26 @@ export function UnitPriceMatchModal({
       })
       .catch(() => {})
   }, [open, activeTab, finalForm.小売先コード, finalForm.SAP小売先])
+
+  /** 受注先コード 입력 시 sap_retail에서 조회해 SAP受注先(판매처명) 자동 표시 */
+  useEffect(() => {
+    if (!open || activeTab !== 'retail') return
+    const vc = finalForm.受注先コード.trim()
+    if (!vc) {
+      lastSapVendorFetchedRef.current = null
+      return
+    }
+    if (lastSapVendorFetchedRef.current === vc) return
+    lastSapVendorFetchedRef.current = vc
+    searchApi
+      .getSapRetailRowByVendorCode(vc)
+      .then((res) => {
+        if (res.row && res.vendor_code === vc) {
+          setFinalForm((prev) => ({ ...prev, SAP受注先: res.row!.판매처명 }))
+        }
+      })
+      .catch(() => {})
+  }, [open, activeTab, finalForm.受注先コード])
 
   useEffect(() => {
     if (!open || !productName) {
@@ -504,7 +544,7 @@ export function UnitPriceMatchModal({
     const rc = finalForm.小売先コード.trim()
     if (!dc || !rc) return
     onSelectRetail({ 판매처코드: dc, 소매처코드: rc })
-    onClose()
+    // モーダルは親が API 成功後に setUnitPriceModalRow(null) で閉じる
   }
 
   /** 小売先 검색: 소매처명/소매처코드로 검색, 선택 시 小売先 필드만 채움 */
@@ -866,10 +906,10 @@ export function UnitPriceMatchModal({
                   <button
                     type="button"
                     className="retail-confirm-btn"
-                    disabled={!finalForm.受注先コード.trim() || !finalForm.小売先コード.trim()}
+                    disabled={!finalForm.受注先コード.trim() || !finalForm.小売先コード.trim() || retailSaving}
                     onClick={handleConfirmRetail}
                   >
-                    確定
+                    {retailSaving ? '保存中…' : '確定'}
                   </button>
                 </div>
               </section>

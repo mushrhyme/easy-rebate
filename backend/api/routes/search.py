@@ -153,6 +153,36 @@ async def get_sap_row_by_retail_code(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/retail/sap-row-by-vendor-code")
+async def get_sap_row_by_vendor_code(
+    vendor_code: str = Query(..., description="受注先コード(판매처코드)"),
+):
+    """sap_retail에서 受注先コード(판매처코드)로 첫 행 조회. SAP受注先(판매처명) 표시용."""
+    code = (vendor_code or "").strip()
+    if not code:
+        return {"vendor_code": "", "row": None}
+    if not _SAP_RETAIL_CSV.exists():
+        return {"vendor_code": code, "row": None, "skipped_reason": "sap_retail.csv not found"}
+    try:
+        df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
+        rows = df[df["판매처코드"].astype(str).str.strip() == code]
+        if rows.empty:
+            return {"vendor_code": code, "row": None}
+        r = rows.iloc[0]
+        return {
+            "vendor_code": code,
+            "row": {
+                "소매처코드": (r.get("소매처코드") or "").strip(),
+                "소매처명": (r.get("소매처명") or "").strip(),
+                "판매처코드": (r.get("판매처코드") or "").strip(),
+                "판매처명": (r.get("판매처명") or "").strip(),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _get_in_vector_pdf_filenames(db) -> List[str]:
     """rag_vector_index에서 벡터 인덱스에 포함된 pdf_filename 목록 반환."""
     try:
@@ -282,6 +312,25 @@ async def search_by_customer(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class LearningRequestPageBody(BaseModel):
+    """단일 페이지 학습 요청 (검토·정답지 탭 学習リクエスト). 관리자 체크 없음."""
+    pdf_filename: str
+    page_number: int
+
+
+@router.post("/learning-request-page")
+async def learning_request_page_search(
+    body: LearningRequestPageBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    해당 페이지만 벡터 DB에 반영. 로그인한 모든 사용자 호출 가능 (관리자 아님).
+    검토 탭·정답지 탭의 「学習リクエスト」 버튼용.
+    """
+    from backend.api.routes import rag_admin
+    return await rag_admin.execute_learning_request_page(body.pdf_filename, body.page_number)
 
 
 @router.get("/my-supers")

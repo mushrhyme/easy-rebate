@@ -291,33 +291,27 @@ class LearningRequestPageRequest(BaseModel):
     page_number: int
 
 
-@router.post("/learning-request-page")
-async def learning_request_page(
-    body: LearningRequestPageRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-):
+async def execute_learning_request_page(pdf_filename: str, page_number: int) -> dict:
     """
-    해당 페이지만 벡터 DB에 반영. is_rag_candidate=TRUE 설정 후 pgvector에 INSERT/UPDATE.
-    Phase 2: pgvector 사용. 이미 (pdf, page) 있으면 UPDATE, 없으면 INSERT. 인덱스 재로딩 불필요.
+    단일 페이지 학습 요청 실행. 로그인 사용자 전원 호출 가능 (관리자 체크 없음).
+    검토·정답지 탭의 「学習リクエスト」에서 사용. /api/search/learning-request-page 에서도 호출.
     """
-    _ensure_admin(current_user)
     db = get_db()
     _ensure_rag_candidate_column(db)
     _ensure_last_edited_columns(db)
     _ensure_phase1_rag_columns(db)
-    # 해당 문서에 이 페이지 이후 전체 재분석이 진행 중이면 중단 (to_do 6.3)
-    request_cancel_reanalysis_for_document(body.pdf_filename)
+    request_cancel_reanalysis_for_document(pdf_filename)
 
     def _set_and_fetch_sync(database):
         with database.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE page_data_current SET is_rag_candidate = TRUE, updated_at = CURRENT_TIMESTAMP WHERE pdf_filename = %s AND page_number = %s",
-                (body.pdf_filename, body.page_number),
+                (pdf_filename, page_number),
             )
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Page not found")
-        return _fetch_one_learning_page(database, body.pdf_filename, body.page_number)
+        return _fetch_one_learning_page(database, pdf_filename, page_number)
 
     shard_page = await db.run_sync(_set_and_fetch_sync, db)
     if not shard_page:
@@ -327,27 +321,38 @@ async def learning_request_page(
     rag_manager = get_rag_manager()
     ok = await asyncio.to_thread(
         rag_manager.upsert_page_embedding,
-        body.pdf_filename,
-        body.page_number,
+        pdf_filename,
+        page_number,
         shard_page.get("ocr_text", ""),
         shard_page.get("answer_json", {}),
         form_type,
     )
     if not ok:
         raise HTTPException(status_code=500, detail="pgvector 반영에 실패했습니다.")
-    logger.info("학습 리퀘스트 반영: %s p.%s → pgvector(재분석 시 최신 벡터로 사용됨)", body.pdf_filename, body.page_number)
-    # 학습 반영 후 문서의 current_vector_version 증가 (to_do 7)
+    logger.info("학습 리퀘스트 반영: %s p.%s → pgvector(재분석 시 최신 벡터로 사용됨)", pdf_filename, page_number)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "UPDATE documents_current SET current_vector_version = COALESCE(current_vector_version, 1) + 1 WHERE pdf_filename = %s",
-                (body.pdf_filename,),
+                (pdf_filename,),
             )
             conn.commit()
     except Exception:
         pass
     return {"success": True, "message": "해당 페이지를 벡터 DB에 반영했습니다."}
+
+
+@router.post("/learning-request-page")
+async def learning_request_page(
+    body: LearningRequestPageRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    해당 페이지만 벡터 DB에 반영. ※ 관리자 전용 아님. 로그인한 모든 사용자 호출 가능.
+    (비관리자 403 방지를 위해 프론트는 /api/search/learning-request-page 사용 권장.)
+    """
+    return await execute_learning_request_page(body.pdf_filename, body.page_number)
 
 
 def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> Optional[Dict[str, Any]]:
