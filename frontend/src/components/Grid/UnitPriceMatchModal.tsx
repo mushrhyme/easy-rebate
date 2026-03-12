@@ -290,13 +290,13 @@ export function UnitPriceMatchModal({
     }
   }, [sapProductQuery])
 
-  /** 小売先コード가 있는데 SAP 필드가 비어 있으면 sap_retail 조회로 채움 (適用 후 누락 방지) */
+  /** 小売先コード가 있는데 SAP小売先만 비어 있으면 sap_retail 조회로 채움. SAP受注先는 채우지 않음(소매처만 선택한 경우 보존) */
   useEffect(() => {
     if (!open || activeTab !== 'retail') return
     const rc = finalForm.小売先コード.trim()
     if (!rc) return
-    const needSap = !finalForm.SAP受注先.trim() || !finalForm.SAP小売先.trim()
-    if (!needSap || lastSapFetchedRef.current === rc) return
+    const needSapRetail = !finalForm.SAP小売先.trim()
+    if (!needSapRetail || lastSapFetchedRef.current === rc) return
     lastSapFetchedRef.current = rc
     searchApi
       .getSapRetailRowByRetailCode(rc)
@@ -304,13 +304,12 @@ export function UnitPriceMatchModal({
         if (res.row) {
           setFinalForm((prev) => ({
             ...prev,
-            SAP受注先: prev.SAP受注先.trim() || res.row!.판매처명,
             SAP小売先: prev.SAP小売先.trim() || res.row!.소매처명,
           }))
         }
       })
       .catch(() => {})
-  }, [open, activeTab, finalForm.小売先コード, finalForm.SAP受注先, finalForm.SAP小売先])
+  }, [open, activeTab, finalForm.小売先コード, finalForm.SAP小売先])
 
   useEffect(() => {
     if (!open || !productName) {
@@ -508,45 +507,84 @@ export function UnitPriceMatchModal({
     onClose()
   }
 
-  /** SAP検索 자동완성: 입력 시 후보 조회, 선택 시 폼 전체 채움 */
-  const [sapFinalQuery, setSapFinalQuery] = useState('')
-  const [sapFinalMatches, setSapFinalMatches] = useState<RetailMatch[]>([])
-  const [sapFinalLoading, setSapFinalLoading] = useState(false)
-  const sapFinalDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 小売先 검색: 소매처명/소매처코드로 검색, 선택 시 小売先 필드만 채움 */
+  const [sapRetailQuery, setSapRetailQuery] = useState('')
+  const [sapRetailMatches, setSapRetailMatches] = useState<RetailMatch[]>([])
+  const [sapRetailLoading, setSapRetailLoading] = useState(false)
+  const sapRetailDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    const q = sapFinalQuery.trim()
+    const q = sapRetailQuery.trim()
     if (!q) {
-      setSapFinalMatches([])
+      setSapRetailMatches([])
       return
     }
-    if (sapFinalDebounceRef.current) clearTimeout(sapFinalDebounceRef.current)
-    sapFinalDebounceRef.current = setTimeout(() => {
-      setSapFinalLoading(true)
+    if (sapRetailDebounceRef.current) clearTimeout(sapRetailDebounceRef.current)
+    sapRetailDebounceRef.current = setTimeout(() => {
+      setSapRetailLoading(true)
       searchApi
-        .getRetailCandidatesBySapRetail(q, { topK: 10, minSimilarity: 0 })
-        .then((res) => setSapFinalMatches((res.matches ?? []) as RetailMatch[]))
-        .catch(() => setSapFinalMatches([]))
+        .getRetailCandidatesBySapRetail(q, { topK: 10, minSimilarity: 0, searchType: 'retail' })
+        .then((res) => setSapRetailMatches((res.matches ?? []) as RetailMatch[]))
+        .catch(() => setSapRetailMatches([]))
         .finally(() => {
-          setSapFinalLoading(false)
-          sapFinalDebounceRef.current = null
+          setSapRetailLoading(false)
+          sapRetailDebounceRef.current = null
         })
     }, 300)
     return () => {
-      if (sapFinalDebounceRef.current) clearTimeout(sapFinalDebounceRef.current)
+      if (sapRetailDebounceRef.current) clearTimeout(sapRetailDebounceRef.current)
     }
-  }, [sapFinalQuery])
+  }, [sapRetailQuery])
 
-  const applySapMatchToForm = useCallback((m: RetailMatch) => {
-    setFinalForm({
-      受注先コード: m.판매처코드 ?? '',
-      受注先: m.판매처명 ?? '',
-      SAP受注先: m.판매처명 ?? '',
+  /** 受注先(판매처) 검색: 판매처명/판매처코드로 검색, 선택 시 受注先 필드만 채움 */
+  const [sapVendorQuery, setSapVendorQuery] = useState('')
+  const [sapVendorMatches, setSapVendorMatches] = useState<RetailMatch[]>([])
+  const [sapVendorLoading, setSapVendorLoading] = useState(false)
+  const sapVendorDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const q = sapVendorQuery.trim()
+    if (!q) {
+      setSapVendorMatches([])
+      return
+    }
+    if (sapVendorDebounceRef.current) clearTimeout(sapVendorDebounceRef.current)
+    sapVendorDebounceRef.current = setTimeout(() => {
+      setSapVendorLoading(true)
+      searchApi
+        .getRetailCandidatesBySapRetail(q, { topK: 10, minSimilarity: 0, searchType: 'vendor' })
+        .then((res) => setSapVendorMatches((res.matches ?? []) as RetailMatch[]))
+        .catch(() => setSapVendorMatches([]))
+        .finally(() => {
+          setSapVendorLoading(false)
+          sapVendorDebounceRef.current = null
+        })
+    }, 300)
+    return () => {
+      if (sapVendorDebounceRef.current) clearTimeout(sapVendorDebounceRef.current)
+    }
+  }, [sapVendorQuery])
+
+  /** 小売先 검색 결과 선택 → 小売先コード/小売先/SAP小売先만 반영 */
+  const applySapRetailToForm = useCallback((m: RetailMatch) => {
+    setFinalForm((prev) => ({
+      ...prev,
       小売先コード: m.소매처코드 ?? '',
       小売先: m.소매처명 ?? '',
       SAP小売先: m.소매처명 ?? '',
-    })
-    setSapFinalQuery('')
-    setSapFinalMatches([])
+    }))
+    setSapRetailQuery('')
+    setSapRetailMatches([])
+  }, [])
+
+  /** 受注先 검색 결과 선택 → 受注先코드/受注先/SAP受注先만 반영 */
+  const applySapVendorToForm = useCallback((m: RetailMatch) => {
+    setFinalForm((prev) => ({
+      ...prev,
+      受注先コード: m.판매처코드 ?? '',
+      受注先: m.판매처명 ?? '',
+      SAP受注先: m.판매처명 ?? '',
+    }))
+    setSapVendorQuery('')
+    setSapVendorMatches([])
   }, [])
 
   if (!open) return null
@@ -773,26 +811,52 @@ export function UnitPriceMatchModal({
                   </div>
                   <div className="retail-final-sap-search">
                     <label className="retail-final-label">
-                      <span>検索</span>
+                      <span>小売先検索</span>
                       <input
                         type="text"
                         className="retail-final-input"
-                        value={sapFinalQuery}
-                        onChange={(e) => setSapFinalQuery(e.target.value)}
-                        placeholder="販売店名または小売店名を検索してください"
+                        value={sapRetailQuery}
+                        onChange={(e) => setSapRetailQuery(e.target.value)}
+                        placeholder="小売先名または小売先コードで検索"
                       />
                     </label>
-                    {sapFinalLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
-                    {!sapFinalLoading && sapFinalMatches.length > 0 && (
+                    {sapRetailLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
+                    {!sapRetailLoading && sapRetailMatches.length > 0 && (
                       <ul className="retail-final-sap-list">
-                        {sapFinalMatches.map((m, i) => (
+                        {sapRetailMatches.map((m, i) => (
                           <li key={i}>
                             <button
                               type="button"
                               className="retail-final-sap-item"
-                              onClick={() => applySapMatchToForm(m)}
+                              onClick={() => applySapRetailToForm(m)}
                             >
-                              {m.소매처코드} / {m.소매처명} — {m.판매처코드} / {m.판매처명}
+                              {m.소매처코드} / {m.소매처명}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <label className="retail-final-label">
+                      <span>受注先検索</span>
+                      <input
+                        type="text"
+                        className="retail-final-input"
+                        value={sapVendorQuery}
+                        onChange={(e) => setSapVendorQuery(e.target.value)}
+                        placeholder="受注先名または受注先コードで検索"
+                      />
+                    </label>
+                    {sapVendorLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
+                    {!sapVendorLoading && sapVendorMatches.length > 0 && (
+                      <ul className="retail-final-sap-list">
+                        {sapVendorMatches.map((m, i) => (
+                          <li key={i}>
+                            <button
+                              type="button"
+                              className="retail-final-sap-item"
+                              onClick={() => applySapVendorToForm(m)}
+                            >
+                              {m.판매처코드} / {m.판매처명}
                             </button>
                           </li>
                         ))}

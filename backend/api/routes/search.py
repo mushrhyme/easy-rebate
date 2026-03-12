@@ -3,6 +3,7 @@
 """
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import List, Optional
 
@@ -16,6 +17,9 @@ from database.db_manager import _similarity_difflib, normalize_company_name_for_
 from backend.core.auth import get_current_user_optional, get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
 from modules.core.rag_manager import get_rag_manager
+from modules.utils.config import get_project_root
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -36,11 +40,11 @@ async def get_retail_candidates_by_sap_retail(
     query: str = Query("", description="検索語（소매처명・판매처명 등)"),
     top_k: int = Query(10, ge=1, le=30, description="반환 건수"),
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+    search_type: str = Query("all", description="all=둘 다 검색, retail=小売先만, vendor=受注先(판매처)만"),
 ):
-    """sap_retail.csv에서 소매처명·판매처명·코드(숫자) 유사도 검색. 매핑 폴백용."""
+    """sap_retail.csv에서 소매처명·판매처명·코드 유사도 검색. search_type=retail/vendor 시 해당 항목만 검색·코드 기준 중복 제거."""
     query = (query or "").strip()
     csv_path = _SAP_RETAIL_CSV
-    print(f"[sap_retail] query={query!r} (len={len(query)}), path={csv_path}, exists={csv_path.exists()}")
     if not query:
         return {"query": "", "matches": []}
     if not csv_path.exists():
@@ -59,26 +63,51 @@ async def get_retail_candidates_by_sap_retail(
                 continue
             s1 = _similarity_difflib(query, retail_name)
             s2 = _similarity_difflib(query, dist_name) if dist_name else 0.0
-            # 부분 일치: 검색어가 이름에 포함되면 높은 점수 (짧은 검색어도 나오도록)
             part = 0.0
-            if query in retail_name or query in dist_name:
-                part = 0.95
-            elif q_upper in (retail_name.upper() if retail_name else ""):
-                part = 0.9
-            elif q_upper in (dist_name.upper() if dist_name else ""):
-                part = 0.9
-            # 코드(숫자) 검색: 소매처코드・판매처코드 일치/접두사/포함
+            if search_type != "vendor" and (query in retail_name or (q_upper and q_upper in (retail_name.upper() or ""))):
+                part = 0.95 if query in retail_name else 0.9
+            elif search_type != "retail" and dist_name and (query in dist_name or (q_upper and q_upper in dist_name.upper())):
+                part = 0.95 if query in dist_name else 0.9
             code_score = 0.0
-            if query == retail_code or query == dist_code:
-                code_score = 1.0
-            elif retail_code.startswith(query) or (dist_code and dist_code.startswith(query)):
-                code_score = 0.95
-            elif query in retail_code or (dist_code and query in dist_code):
-                code_score = 0.9
-            score = max(s1, s2, part, code_score)
+            if search_type != "vendor":
+                if query == retail_code:
+                    code_score = max(code_score, 1.0)
+                elif retail_code.startswith(query):
+                    code_score = max(code_score, 0.95)
+                elif query in retail_code:
+                    code_score = max(code_score, 0.9)
+            if search_type != "retail" and dist_code:
+                if query == dist_code:
+                    code_score = max(code_score, 1.0)
+                elif dist_code.startswith(query):
+                    code_score = max(code_score, 0.95)
+                elif query in dist_code:
+                    code_score = max(code_score, 0.9)
+            if search_type == "retail":
+                score = max(s1, part, code_score)
+            elif search_type == "vendor":
+                score = max(s2, part, code_score)
+            else:
+                score = max(s1, s2, part, code_score)
             if score >= min_similarity:
                 scored.append((score, retail_code, retail_name, dist_code, dist_name))
         scored.sort(key=lambda x: -x[0])
+        # retail: 小売先코드 기준 첫 행만, vendor: 受注先코드(또는 명) 기준 첫 행만
+        seen_retail, seen_vendor = set(), set()
+        deduped = []
+        for sc, rc, rn, dc, dn in scored:
+            if search_type == "retail":
+                if rc in seen_retail:
+                    continue
+                seen_retail.add(rc)
+            elif search_type == "vendor":
+                key = (dc or dn) or ""
+                if key in seen_vendor:
+                    continue
+                seen_vendor.add(key)
+            deduped.append((sc, rc, rn, dc, dn))
+            if len(deduped) >= top_k:
+                break
         matches = [
             {
                 "소매처코드": rc,
@@ -87,7 +116,7 @@ async def get_retail_candidates_by_sap_retail(
                 "판매처명": dn,
                 "similarity": round(sc, 4),
             }
-            for sc, rc, rn, dc, dn in scored[:top_k]
+            for sc, rc, rn, dc, dn in deduped
         ]
         return {"query": query, "matches": matches}
     except Exception as e:
@@ -902,7 +931,7 @@ async def rerun_page_ocr(
         raise HTTPException(status_code=400, detail="정답지 영역에서는 Azure OCR만 사용 가능합니다.")
 
     pdf_name = pdf_filename if not pdf_filename.lower().endswith(".pdf") else pdf_filename[:-4]
-    root = Path(__file__).resolve().parent.parent.parent.parent  # project root
+    root = get_project_root()  # debug2 등 경로 일치 (config 기준)
 
     # 1) 페이지 이미지 경로 (DB) 또는 PDF 경로 확보
     image_path = db.get_page_image_path(pdf_filename, page_number)
@@ -971,12 +1000,14 @@ async def rerun_page_ocr(
         debug2_dir = root / "debug2" / pdf_name
         try:
             debug2_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            # 디렉터리 생성 실패 시 디버그 기록만 건너뛰고 나머지 흐름은 유지
+        except Exception as e:
+            logger.warning("debug2 디렉터리 생성 실패: path=%s, error=%s", debug2_dir, e)
             debug2_dir = None
         if debug2_dir is not None:
-            (debug2_dir / f"page_{page_number}_ocr_text.txt").write_text(ocr_text, encoding="utf-8")
-    except Exception:
-        pass
+            out_file = debug2_dir / f"page_{page_number}_ocr_text.txt"
+            out_file.write_text(ocr_text, encoding="utf-8")
+            logger.info("debug2 저장 완료: %s", out_file)
+    except Exception as e:
+        logger.warning("debug2 OCR 텍스트 저장 실패: pdf=%s page=%s, error=%s", pdf_filename, page_number, e)
 
     return {"ocr_text": ocr_text}

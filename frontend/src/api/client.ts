@@ -958,10 +958,10 @@ export const searchApi = {
     return response.data
   },
 
-  /** sap_retail.csv 소매처명·판매처명 유사도 검색（매핑 후보 없을 때 폴백） */
+  /** sap_retail.csv 검색. searchType: 'retail'=小売先만, 'vendor'=受注先만, 없으면 둘 다 */
   getRetailCandidatesBySapRetail: async (
     query: string,
-    options?: { topK?: number; minSimilarity?: number }
+    options?: { topK?: number; minSimilarity?: number; searchType?: 'retail' | 'vendor' | 'all' }
   ): Promise<{
     query: string
     matches: Array<{
@@ -975,7 +975,8 @@ export const searchApi = {
   }> => {
     const topK = options?.topK ?? 10
     const minSim = options?.minSimilarity ?? 0
-    const url = `/api/search/retail/candidates-by-sap-retail?query=${encodeURIComponent(query)}&top_k=${topK}&min_similarity=${minSim}`
+    const type = options?.searchType ?? 'all'
+    const url = `/api/search/retail/candidates-by-sap-retail?query=${encodeURIComponent(query)}&top_k=${topK}&min_similarity=${minSim}&search_type=${type}`
     const response = await client.get(url)
     return response.data
   },
