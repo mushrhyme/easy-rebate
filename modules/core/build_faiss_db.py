@@ -288,7 +288,7 @@ def sync_img_pages_to_documents_db(
                 cursor.execute(
                     """
                     INSERT INTO page_data_current (pdf_filename, page_number, page_role, page_meta, is_rag_candidate, updated_at)
-                    VALUES (%s, %s, %s, %s::jsonb, TRUE, CURRENT_TIMESTAMP)
+                    VALUES (%s, %s, %s, %s::json, TRUE, CURRENT_TIMESTAMP)
                     ON CONFLICT (pdf_filename, page_number) DO UPDATE SET
                         page_role = COALESCE(EXCLUDED.page_role, page_data_current.page_role),
                         page_meta = COALESCE(EXCLUDED.page_meta, page_data_current.page_meta),
@@ -313,7 +313,7 @@ def sync_img_pages_to_documents_db(
                                 first_reviewed_at, second_reviewed_at,
                                 item_data
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::json)
                             """,
                             (
                                 pdf_filename,
