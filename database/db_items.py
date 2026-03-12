@@ -395,6 +395,28 @@ class ItemsMixin:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                # 재분석 시 기존 검토 상태 보존: DELETE 전에 item_order별 1차/2차 검토 상태 조회
+                review_by_order: Dict[int, Dict[str, Any]] = {}
+                try:
+                    cursor.execute("""
+                        SELECT item_order, first_review_checked, second_review_checked,
+                               first_reviewed_at, second_reviewed_at,
+                               first_reviewed_by_user_id, second_reviewed_by_user_id
+                        FROM items_current
+                        WHERE pdf_filename = %s AND page_number = %s
+                        ORDER BY item_order
+                    """, (pdf_filename, page_number))
+                    for row in cursor.fetchall():
+                        review_by_order[int(row[0])] = {
+                            "first_review_checked": bool(row[1]) if row[1] is not None else False,
+                            "second_review_checked": bool(row[2]) if row[2] is not None else False,
+                            "first_reviewed_at": row[3],
+                            "second_reviewed_at": row[4],
+                            "first_reviewed_by_user_id": row[5],
+                            "second_reviewed_by_user_id": row[6],
+                        }
+                except Exception:
+                    pass
                 current_vector_version = 1
                 try:
                     cursor.execute("SELECT current_vector_version FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
@@ -447,10 +469,26 @@ class ItemsMixin:
                     apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                     apply_form04_mishu_decimal(item_dict, form_type)
                     separated = self._separate_item_fields(item_dict, form_type=form_type)
+                    prev = review_by_order.get(item_order, {})
                     cursor.execute("""
-                        INSERT INTO items_current (pdf_filename, page_number, item_order, first_review_checked, second_review_checked, item_data)
-                        VALUES (%s, %s, %s, FALSE, FALSE, %s::json)
-                    """, (pdf_filename, page_number, item_order, json.dumps(separated.get("item_data") or {}, ensure_ascii=False)))
+                        INSERT INTO items_current (
+                            pdf_filename, page_number, item_order,
+                            first_review_checked, second_review_checked,
+                            first_reviewed_at, second_reviewed_at,
+                            first_reviewed_by_user_id, second_reviewed_by_user_id,
+                            item_data
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::json)
+                    """, (
+                        pdf_filename, page_number, item_order,
+                        prev.get("first_review_checked", False),
+                        prev.get("second_review_checked", False),
+                        prev.get("first_reviewed_at"),
+                        prev.get("second_reviewed_at"),
+                        prev.get("first_reviewed_by_user_id"),
+                        prev.get("second_reviewed_by_user_id"),
+                        json.dumps(separated.get("item_data") or {}, ensure_ascii=False),
+                    ))
                 # 문서에 item_data_keys가 없을 때만 LLM 결과 순서를 한 번 기록 (최초 저장 시)
                 if items and isinstance(items[0], dict):
                     cursor.execute("SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1", (pdf_filename,))
