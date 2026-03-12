@@ -109,12 +109,16 @@ def extract_pages_with_rag(
             print(f"⚠️ DB 확인 실패: {db_error}. 새로 파싱합니다.")
     
     # 2. DB에 데이터가 없으면 RAG 기반 파싱
-    # debug_dir: 폴더가 이미 있을 때만 사용 (생성하지 않음, debug2 없어도 동작)
+    # debug_dir: 프로젝트 루트/debug_dir_name/pdf_name 하위에 디버그 파일 저장
     from modules.utils.config import get_project_root
     project_root = get_project_root()
     debug_base_dir = project_root / debug_dir_name
     _debug_dir = debug_base_dir / pdf_name
-    debug_dir = str(_debug_dir) if _debug_dir.exists() else None
+    try:
+        _debug_dir.mkdir(parents=True, exist_ok=True)
+        debug_dir = str(_debug_dir)
+    except Exception:
+        debug_dir = None
     # PDF를 이미지로 변환
     if progress_callback:
         progress_callback(0, 0, "🔄 PDF를 이미지로 변환 중...")
@@ -588,9 +592,13 @@ def extract_single_page_from_image_path(
     top_k = top_k if top_k is not None else rag_config.top_k
     similarity_threshold = similarity_threshold if similarity_threshold is not None else rag_config.similarity_threshold
 
-    # debug_dir: 폴더가 이미 있을 때만 사용 (생성하지 않음)
+    # debug_dir: 프로젝트 루트/debug_dir_name/pdf_filename_stem 하위에 디버그 파일 저장
     debug_base = get_project_root() / debug_dir_name / Path(pdf_filename).stem
-    debug_dir = str(debug_base) if debug_base.exists() else None
+    try:
+        debug_base.mkdir(parents=True, exist_ok=True)
+        debug_dir = str(debug_base)
+    except Exception:
+        debug_dir = None
 
     azure_extractor = get_azure_extractor(model_id="prebuilt-layout", enable_cache=False)
     raw = azure_extractor.extract_from_image_raw(image_path=path)
