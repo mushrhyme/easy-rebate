@@ -1450,6 +1450,22 @@ export const ragAdminApi = {
     const response = await client.post('/api/rag-admin/retail-rag-answer-index/rebuild')
     return response.data
   },
+
+  /**
+   * 제품 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 商品名 / 商品コード / 仕切 / 本部長
+   */
+  getProductRagAnswerItems: async (): Promise<{
+    items: Array<{ 商品名: string; 商品コード: string; 仕切: string; 本部長: string }>
+  }> => {
+    const response = await client.get('/api/rag-admin/product-rag-answer-items')
+    return response.data
+  },
+
+  /** 제품 RAG 정답지 벡터 인덱스 재구축 (商品名→商品コード 매핑 시 RAG 우선 검색용) */
+  rebuildProductRagAnswerIndex: async (): Promise<{ message: string; vector_count: number }> => {
+    const response = await client.post('/api/rag-admin/product-rag-answer-index/rebuild')
+    return response.data
+  },
 }
 /** 分析(기본 RAG) LLM: gemini | gpt5.2 */
 export type RagProvider = 'gemini' | 'gpt5.2'

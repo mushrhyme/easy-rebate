@@ -87,6 +87,28 @@ export const RagAdminPanel = () => {
     },
   })
 
+  const { data: productRagAnswerData, isLoading: productRagAnswerLoading } = useQuery({
+    queryKey: ['rag-admin', 'product-rag-answer-items'],
+    queryFn: () => ragAdminApi.getProductRagAnswerItems(),
+    enabled: isAdmin,
+  })
+  const productRagAnswerItems = (productRagAnswerData?.items ?? []) as Array<{
+    商品名: string
+    商品コード: string
+    仕切: string
+    本部長: string
+  }>
+
+  const rebuildProductRagIndexMutation = useMutation({
+    mutationFn: () => ragAdminApi.rebuildProductRagAnswerIndex(),
+    onSuccess: (data) => {
+      alert(`벡터 인덱스 구축 완료: ${data.vector_count}건`)
+    },
+    onError: (err: any) => {
+      alert(err?.response?.data?.detail ?? err?.message ?? '인덱스 구축 실패')
+    },
+  })
+
   const deleteUserMutation = useMutation({
     mutationFn: (userId: number) => authApi.deleteUser(userId),
     onSuccess: () => {
@@ -280,6 +302,55 @@ export const RagAdminPanel = () => {
                         <td>{row.得意先 || '—'}</td>
                         <td>{row.受注先コード || '—'}</td>
                         <td>{row.小売先コード || '—'}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="rag-admin-card rag-admin-card-wide">
+          <h3 className="rag-admin-section-title">제품 RAG 정답지</h3>
+          <p className="rag-admin-helper">
+            created_by_user_id가 null이 아닌 문서에 속한 item의 商品名 / 商品コード / 仕切 / 本部長 목록입니다. 아래 목록으로 벡터 인덱스를 구축하면 商品名→商品コード 매핑 시 RAG 검색이 우선 적용됩니다.
+          </p>
+          <p className="rag-admin-helper">
+            <button
+              type="button"
+              className="rag-admin-button primary"
+              disabled={rebuildProductRagIndexMutation.isPending || productRagAnswerItems.length === 0}
+              onClick={() => rebuildProductRagIndexMutation.mutate()}
+            >
+              {rebuildProductRagIndexMutation.isPending ? '구축 중…' : '벡터 인덱스 재구축'}
+            </button>
+          </p>
+          {productRagAnswerLoading ? (
+            <p>読み込み中...</p>
+          ) : (
+            <div className="rag-admin-master-grid-wrap">
+              <table className="rag-admin-master-table">
+                <thead>
+                  <tr>
+                    <th>商品名</th>
+                    <th>商品コード</th>
+                    <th>仕切</th>
+                    <th>本部長</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productRagAnswerItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={4}>該当データがありません。</td>
+                    </tr>
+                  ) : (
+                    productRagAnswerItems.map((row, idx) => (
+                      <tr key={idx}>
+                        <td>{row.商品名 || '—'}</td>
+                        <td>{row.商品コード || '—'}</td>
+                        <td>{row.仕切 || '—'}</td>
+                        <td>{row.本部長 || '—'}</td>
                       </tr>
                     ))
                   )}
