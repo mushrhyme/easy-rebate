@@ -1320,15 +1320,19 @@ export const ragAdminApi = {
 
   /**
    * 단일 페이지 학습 요청 (Phase 1). 해당 페이지만 벡터 DB에 반영.
-   * /api/search/learning-request-page 사용 — 로그인 사용자 전원 호출 가능 (관리자 403 방지).
+   * sessionId를 넘기면 해당 값을 헤더에 고정해 레이스 컨디션(다른 401로 세션 제거) 방지.
    */
   learningRequestPage: async (
     pdfFilename: string,
-    pageNumber: number
+    pageNumber: number,
+    sessionId?: string | null
   ): Promise<{ success: boolean; message: string }> => {
+    const headers: Record<string, string> = {}
+    if (sessionId) headers['X-Session-ID'] = sessionId
     const response = await client.post<{ success: boolean; message: string }>(
       '/api/search/learning-request-page',
-      { pdf_filename: pdfFilename, page_number: pageNumber }
+      { pdf_filename: pdfFilename, page_number: pageNumber },
+      { headers }
     )
     return response.data
   },
@@ -1441,7 +1445,7 @@ export const ragAdminApi = {
     return response.data
   },
 
-  /** 판매처-소매처 RAG 정답지 벡터 인덱스 재구축 (매핑 모달 4번 검색용) */
+  /** 판매처-소매처 RAG 정답지 벡터 인덱스 재구축 (매핑 모달 1번 검색용) */
   rebuildRetailRagAnswerIndex: async (): Promise<{ message: string; vector_count: number }> => {
     const response = await client.post('/api/rag-admin/retail-rag-answer-index/rebuild')
     return response.data

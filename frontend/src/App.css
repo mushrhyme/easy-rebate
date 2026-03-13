@@ -382,13 +382,12 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0; /* flexスクロールを有効化 */
-  height: auto;
+  min-height: 100%; /* 検討タブが常にメイン領域を占有（白画面防止） */
+  height: 100%;
   padding: 0;
   margin: 0;
-  /* 검색 탭 전체도 세로 스크롤 허용 */
-  overflow-y: visible;
-  overflow-x: hidden;
+  overflow: hidden;
+  background: #fff;
 }
 
 .query-tab {

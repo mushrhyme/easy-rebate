@@ -926,6 +926,66 @@ async def rebuild_retail_rag_answer_index(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ---- 제품 RAG 정답지: created_by_user_id IS NOT NULL 문서의 item 中 商品名 / 商品コード / 仕切 / 本部長 ----
+@router.get("/product-rag-answer-items")
+async def get_product_rag_answer_items(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """
+    documents_current.created_by_user_id IS NOT NULL 인 문서에 속한 item만 조회.
+    item_data에서 商品名, 商品コード, 仕切, 本部長 를 꺼내 중복 제거 후 반환 (제품 RAG 정답지 후보).
+    """
+    _ensure_admin(current_user)
+    def _fetch_product_rag_items_sync(database):
+        with database.get_connection() as conn:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("""
+                SELECT DISTINCT
+                    i.item_data->>'商品名' AS "商品名",
+                    i.item_data->>'商品コード' AS "商品コード",
+                    i.item_data->>'仕切' AS "仕切",
+                    i.item_data->>'本部長' AS "本部長"
+                FROM items_current i
+                INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                WHERE d.created_by_user_id IS NOT NULL
+                AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
+                AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
+                ORDER BY "商品名", "商品コード"
+            """)
+            rows = cursor.fetchall()
+        return [
+            {
+                "商品名": (r.get("商品名") or "").strip(),
+                "商品コード": (r.get("商品コード") or "").strip(),
+                "仕切": (r.get("仕切") or "").strip(),
+                "本部長": (r.get("本部長") or "").strip(),
+            }
+            for r in rows
+        ]
+    try:
+        db = get_db()
+        items = await db.run_sync(_fetch_product_rag_items_sync, db)
+        return {"items": items}
+    except Exception as e:
+        logger.exception("product-rag-answer-items failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/product-rag-answer-index/rebuild")
+async def rebuild_product_rag_answer_index(
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """제품 RAG 정답지(商品名→商品コード/仕切/本部長) 벡터 인덱스를 재구축해 DB에 저장."""
+    _ensure_admin(current_user)
+    try:
+        rag = get_rag_manager()
+        n = rag.build_product_rag_answer_index()
+        return {"message": "OK", "vector_count": n}
+    except Exception as e:
+        logger.exception("product-rag-answer-index rebuild failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ---- 基準管理 (master_code.xlsx) ----
 MASTER_CODE_PATH = get_project_root() / "master_code.xlsx"
 MASTER_CODE_KEYS = ("a", "b", "c", "d", "e", "f")

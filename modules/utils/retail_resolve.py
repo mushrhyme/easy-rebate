@@ -1,6 +1,6 @@
 """
-판매처·소매처 매핑 해소: 1) 得意先コード→domae_retail_1, 2) retail_user 유사도, 3) domae_retail_2 유사도.
-得意先コード 있으면 1 시도 후 실패 시 2·3 중 유사도 높은 쪽 사용. 없으면 2·3만.
+판매처·소매처 매핑 해소: 1) RAG(벡터 DB) 정답지 유사도, 2) 得意先コード→domae_retail_1, 3) retail_user 유사도, 4) domae_retail_2 유사도.
+거래처명 있으면 1(RAG) 시도 → 실패 시 2→3→4. 得意先コード 있으면 2 시도 후 실패 시 3·4 중 유사도 높은 쪽.
 """
 from pathlib import Path
 from typing import Optional, Tuple
@@ -44,7 +44,7 @@ def _dist_for_retail(retail_code: str) -> Tuple[str, str]:
 
 
 def _match_by_customer_code(customer_code: str) -> Optional[Tuple[str, str]]:
-    """1) 得意先コード → domae_retail_1. 성공 시 (소매처코드, 판매처코드) 반환."""
+    """2) 得意先コード → domae_retail_1. 성공 시 (소매처코드, 판매처코드) 반환."""
     code = (customer_code or "").strip()
     if not code or not _DOMAE_RETAIL_1_CSV.exists():
         return None
@@ -64,7 +64,7 @@ def _match_by_customer_code(customer_code: str) -> Optional[Tuple[str, str]]:
 
 
 def _best_by_retail_user(customer_name: str) -> Tuple[Optional[str], Optional[str], float]:
-    """2) retail_user 소매처명 유사도 1위. (소매처코드, 판매처코드, score)."""
+    """3) retail_user 소매처명 유사도 1위. (소매처코드, 판매처코드, score)."""
     name = (customer_name or "").strip()
     if not name or not _RETAIL_USER_CSV.exists():
         return (None, None, 0.0)
@@ -90,7 +90,7 @@ def _best_by_retail_user(customer_name: str) -> Tuple[Optional[str], Optional[st
 
 
 def _best_by_domae_retail_2(customer_name: str) -> Tuple[Optional[str], Optional[str], float]:
-    """3) domae_retail_2 도매소매처명/소매처명 유사도 1위. (소매처코드, 판매처코드, score)."""
+    """4) domae_retail_2 도매소매처명/소매처명 유사도 1위. (소매처코드, 판매처코드, score)."""
     name = (customer_name or "").strip()
     if not name or not _DOMAE_RETAIL_2_CSV.exists():
         return (None, None, 0.0)
@@ -122,24 +122,53 @@ def _best_by_domae_retail_2(customer_name: str) -> Tuple[Optional[str], Optional
         return (None, None, 0.0)
 
 
+def _match_by_rag(customer_name: str) -> Optional[Tuple[str, str]]:
+    """1순위: RAG(벡터 DB) 정답지 유사도. 성공 시 (소매처코드, 판매처코드) 반환."""
+    name = (customer_name or "").strip()
+    if not name:
+        return None
+    try:
+        from modules.core.rag_manager import get_rag_manager
+        rag = get_rag_manager(use_db=True)
+        results = rag.search_retail_rag_answer(name, top_k=1, min_similarity=0.5)
+        if results and len(results) > 0:
+            r = results[0]
+            retail = (r.get("小売先コード") or "").strip()
+            dist = (r.get("受注先コード") or "").strip()
+            if retail and dist:
+                return (retail, dist)
+    except Exception:
+        pass
+    return None
+
+
 def resolve_retail_dist(
     customer_name: Optional[str] = None,
     customer_code: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     得意先(명)과 得意先コード(있으면)로 소매처코드·판매처코드 확정.
-    - 得意先コード 있음: 1 시도 → 성공 시 그대로 반환. 실패 시 2·3 중 유사도 높은 쪽.
-    - 得意先コード 없음: 2·3 중 유사도 높은 쪽.
+    - 1순위: 거래처명 있으면 RAG(벡터 DB) 정답지 유사도 → 성공 시 반환.
+    - 2순위: 得意先コード 있으면 domae_retail_1 → 성공 시 반환.
+    - 3·4순위: retail_user / domae_retail_2 유사도 높은 쪽.
     반환: (小売先コード=소매처코드, 受注先コード=판매처코드). 없으면 (None, None).
     """
     name = (customer_name or "").strip()
     code = (customer_code or "").strip() if customer_code else ""
 
+    # 1순위: RAG(벡터 DB) 정답지
+    if name:
+        rag_result = _match_by_rag(name)
+        if rag_result is not None:
+            return rag_result
+
+    # 2순위: 得意先コード → domae_retail_1
     if code:
         one = _match_by_customer_code(code)
         if one is not None:
             return one
 
+    # 3·4순위: retail_user / domae_retail_2 유사도
     r2, d2, s2 = _best_by_retail_user(name)
     r3, d3, s3 = _best_by_domae_retail_2(name)
     if s2 >= s3 and r2 is not None:

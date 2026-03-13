@@ -5,7 +5,7 @@ export interface PageHistory {
 }
 
 /**
- * 정답지 탭 — 좌측: 페이지 네비, 이미지, OCR 영역
+ * 정답지 탭 — 좌측: 페이지 네비(단일 페이지 시 숨김), 이미지, OCR 영역
  */
 interface AnswerKeyLeftPanelProps {
   selectedDoc: { pdf_filename: string; total_pages: number } | null
@@ -20,6 +20,8 @@ interface AnswerKeyLeftPanelProps {
   setImageSize: React.Dispatch<React.SetStateAction<{ w: number; h: number } | null>>
   pageOcrTextQueries: Array<{ data?: { ocr_text?: string }; isLoading?: boolean }>
   pageHistory?: PageHistory | null
+  /** true 시 페이지 내비(前/次) 비표시 — 解答作成은 단일 페이지만 표시 */
+  hidePageNav?: boolean
 }
 
 function formatLastEdited(iso: string | null): string {
@@ -46,34 +48,37 @@ export function AnswerKeyLeftPanel({
   setImageSize,
   pageOcrTextQueries,
   pageHistory,
+  hidePageNav = false,
 }: AnswerKeyLeftPanelProps) {
   return (
     <div className="answer-key-left">
-      <div className="answer-key-page-nav">
-        <button
-          type="button"
-          className="answer-key-nav-btn"
-          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-          disabled={currentPage <= 1}
-          aria-label="前のページ"
-        >
-          ← 前
-        </button>
-        <span className="answer-key-page-info">
-          {currentPage} / {selectedDoc?.total_pages ?? 0}
-        </span>
-        <button
-          type="button"
-          className="answer-key-nav-btn"
-          onClick={() =>
-            setCurrentPage((p) => Math.min(selectedDoc?.total_pages ?? 1, p + 1))
-          }
-          disabled={currentPage >= (selectedDoc?.total_pages ?? 1)}
-          aria-label="次のページ"
-        >
-          次 →
-        </button>
-      </div>
+      {!hidePageNav && (
+        <div className="answer-key-page-nav">
+          <button
+            type="button"
+            className="answer-key-nav-btn"
+            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+            disabled={currentPage <= 1}
+            aria-label="前のページ"
+          >
+            ← 前
+          </button>
+          <span className="answer-key-page-info">
+            {currentPage} / {selectedDoc?.total_pages ?? 0}
+          </span>
+          <button
+            type="button"
+            className="answer-key-nav-btn"
+            onClick={() =>
+              setCurrentPage((p) => Math.min(selectedDoc?.total_pages ?? 1, p + 1))
+            }
+            disabled={currentPage >= (selectedDoc?.total_pages ?? 1)}
+            aria-label="次のページ"
+          >
+            次 →
+          </button>
+        </div>
+      )}
       {pageHistory && (pageHistory.last_edited_at || pageHistory.is_rag_candidate) && (
         <div className="answer-key-page-history" role="status">
           {pageHistory.last_edited_at && (

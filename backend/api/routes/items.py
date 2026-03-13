@@ -12,7 +12,7 @@ from database.db_manager import _similarity_difflib
 from modules.utils.retail_resolve import resolve_retail_dist
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
-from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
+from backend.unit_price_lookup import resolve_product_and_prices
 from backend.core.activity_log import log as activity_log
 
 router = APIRouter()
@@ -24,8 +24,8 @@ _UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
 
 def _resolved_frozen_codes(item_data: Dict[str, Any], customer_fallback: Optional[str] = None) -> tuple:
     """
-    1→2→3 순서로 매핑 확정. 이미 item_data에 受注先コード/小売先コード 있으면 사용.
-    없으면 resolve_retail_dist(得意先, 得意先コード)로 계산.
+    1(RAG)→2→3→4 순서로 매핑 확정. 이미 item_data에 受注先コード/小売先コード 있으면 사용.
+    없으면 resolve_retail_dist(得意先, 得意先コード)로 계산 (1순위 RAG, 2 domae_retail_1, 3 retail_user, 4 domae_retail_2).
     반환: (frozen_retail_code=小売先コード, frozen_dist_code=受注先コード).
     """
     stored_rc = (item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
@@ -728,46 +728,23 @@ async def get_page_items(
                 if key not in exclude_keys:
                     item_data[key] = value
 
-            # 商品コード: 저장된 값 우선, 없으면 商品名으로 unit_price 매칭
+            # 商品コード: 저장된 값 우선, 없으면 RAG(제품 정답지) → unit_price 유사도 순으로 매칭
             frozen_product_code: Optional[str] = None
             if (item_data.get("商品コード") or item_data.get("商品CD")) is not None and str(item_data.get("商品コード") or item_data.get("商品CD") or "").strip():
                 frozen_product_code = str((item_data.get("商品コード") or item_data.get("商品CD"))).strip() or None
-            elif _UNIT_PRICE_CSV.exists():
+            else:
                 product_name = item_data.get("商品名")
                 if product_name is not None and str(product_name).strip():
-                    try:
-                        base_name, capacity = split_name_and_capacity(str(product_name))
-                        sub_query = capacity if capacity else None
-                        df = find_similar_products(
-                            query=base_name,
-                            csv_path=_UNIT_PRICE_CSV,
-                            col="제품명",
-                            top_k=1,
-                            min_similarity=0.2,
-                            sub_col="제품용량",
-                            sub_query=sub_query,
-                            sub_min_similarity=0.0,
-                        )
-                        if not df.empty:
-                            row = df.iloc[0]
-                            pc = row.get("제품코드")  # unit_price CSV 컬럼명
-                            if pc is not None:
-                                frozen_product_code = str(pc).strip() or None
-                                item_data["商品コード"] = frozen_product_code
-                            shikiri = row.get("시키리")
-                            honbu = row.get("본부장")
-                            if shikiri is not None:
-                                try:
-                                    item_data["仕切"] = float(shikiri) if hasattr(shikiri, "__float__") else shikiri
-                                except (TypeError, ValueError):
-                                    item_data["仕切"] = shikiri
-                            if honbu is not None:
-                                try:
-                                    item_data["本部長"] = float(honbu) if hasattr(honbu, "__float__") else honbu
-                                except (TypeError, ValueError):
-                                    item_data["本部長"] = honbu
-                    except Exception:
-                        pass
+                    result = resolve_product_and_prices(product_name, _UNIT_PRICE_CSV)
+                    if result:
+                        code, shikiri, honbu = result
+                        if code:
+                            frozen_product_code = code
+                            item_data["商品コード"] = code
+                        if shikiri is not None:
+                            item_data["仕切"] = shikiri
+                        if honbu is not None:
+                            item_data["本部長"] = honbu
 
             # キー・値 탭에서 JSON 순서 유지: item_data_keys 순으로 item_data 재정렬
             if item_data_keys:
@@ -780,7 +757,7 @@ async def get_page_items(
                         ordered_item_data[k] = item_data[k]
                 item_data = ordered_item_data
 
-            # frozen 컬럼: 1→2→3 순서 매핑 (저장된 受注先コード/小売先コード 우선, 없으면 resolve)
+            # frozen 컬럼: 1(RAG)→2→3→4 순서 매핑 (저장된 受注先コード/小売先コード 우선, 없으면 resolve)
             stored_rc = (item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
             stored_dc = (item_data.get("受注先コード") or item_data.get("受注先CD") or "").strip()
             frozen_retail_code, frozen_dist_code = _resolved_frozen_codes(item_data, item.get("customer"))
@@ -853,7 +830,7 @@ async def create_item(
         except Exception:
             pass
 
-        # 1→2→3 매핑 확정값을 item_data에 넣어 DB 저장
+        # 1(RAG)→2→3→4 매핑 확정값을 item_data에 넣어 DB 저장
         payload_item_data = dict(item_data.item_data or {})
         retail_code, dist_code = resolve_retail_dist(
             payload_item_data.get("得意先"),

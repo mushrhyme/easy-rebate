@@ -59,6 +59,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   }, [])
 
+  // API 클라이언트가 401 등으로 세션 제거 시 상태 동기화 (다른 탭/요청으로 세션 무효화 시)
+  useEffect(() => {
+    const onSessionInvalid = () => {
+      setUser(null)
+      setSessionId(null)
+      setIsLoading(false)
+    }
+    window.addEventListener('app:session-invalid', onSessionInvalid)
+    return () => window.removeEventListener('app:session-invalid', onSessionInvalid)
+  }, [])
+
   const checkAuthStatus = async (sid: string): Promise<boolean> => {
     try {
       // 임시로 세션 ID를 로컬 스토리지에 설정 (API 호출용)

@@ -48,8 +48,8 @@ export interface InitialDocumentForAnswerKey {
 export interface AnswerKeyTabProps {
   initialDocument?: InitialDocumentForAnswerKey | null
   onConsumeInitialDocument?: () => void
-  /** 検討タブに復帰 시 현재 편집 중인 문서 정보 전달 → 검토 탭에서 해당 문서·양식지 유지 */
-  onRevokeSuccess?: (doc: { pdf_filename: string; form_type: string | null }) => void
+  /** 検討タブに復帰 시 현재 편집 중인 문서·페이지 정보 전달 → 검토 탭에서 해당 문서·양식지·페이지로 복귀 */
+  onRevokeSuccess?: (doc: { pdf_filename: string; form_type: string | null; initialPage?: number }) => void
 }
 
 export const CUSTOMER_KEYS = ['得意先名', '得意先様', '得意先', '取引先']

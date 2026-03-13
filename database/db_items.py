@@ -218,7 +218,7 @@ class ItemsMixin:
                                 updated_at = CURRENT_TIMESTAMP
                         """, (pdf_filename, page_number, page_role, page_meta_json))
                     
-                    # items 저장 (행 단위). 1→2→3 매핑 확정값을 넣어 DB에 受注先コード/小売先コード/商品コード 저장
+                    # items 저장 (행 단위). 1(RAG)→2→3→4 매핑 확정값을 넣어 DB에 受注先コード/小売先コード/商品コード 저장
                     _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
                     for item_order, item_dict in enumerate(items, 1):
                         if not isinstance(item_dict, dict):

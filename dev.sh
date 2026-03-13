@@ -24,8 +24,8 @@ if lsof -ti:"$BACKEND_PORT" >/dev/null 2>&1; then
   sleep 1
 fi
 
-# 백엔드: 이미 uv sync 한 환경 사용 (매번 sync/다운로드 안 함)
-( uv run --no-sync rebate-server 2>&1 | sed 's/^/[backend] /' ) &
+# 백엔드: stdin을 /dev/null로 연결해 터미널 입력 대기로 인한 블로킹 방지 (엔터 쳐야만 진행되던 현상 해소)
+( uv run --no-sync rebate-server < /dev/null 2>&1 | sed 's/^/[backend] /' ) &
 BACKEND_PID=$!
 
 # 프론트엔드: 포그라운드, 로그에 [frontend] 접두어

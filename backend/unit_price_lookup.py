@@ -131,20 +131,53 @@ def resolve_product_code(product_name: Optional[str], csv_path: Path) -> Optiona
     return result[0] if result else None
 
 
+# RAG 정답지 우선 시 사용하는 최소 유사도 (이하면 unit_price 유사도로 폴백)
+PRODUCT_RAG_MIN_SIMILARITY = 0.5
+
+
+def _parse_float(val: Any) -> Optional[float]:
+    """문자/숫자 → float. 변환 불가 시 None."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def resolve_product_and_prices(
     product_name: Optional[str], csv_path: Path
 ) -> Optional[Tuple[Optional[str], Optional[float], Optional[float]]]:
     """
-    商品名으로 unit_price.csv 유사도 1위 매칭 후 (商品コード, 仕切, 本部長) 반환.
-    최초 분석/DB 저장 전 商品コード·仕切·本部長 매핑용. NET는 仕切−条件로 계산하므로 별도 저장 안 함.
+    商品名으로 1) product_rag_answer RAG 검색 우선, 2) 없거나 유사도 낮으면 unit_price.csv 유사도 매칭.
     반환: (商品コード, 仕切, 本部長) 또는 None
     """
     if not product_name or not str(product_name).strip():
         return None
+    query_name = str(product_name).strip()
+
+    # 1) RAG 정답지 인덱스 우선 검색
+    try:
+        from modules.core.rag_manager import get_rag_manager
+        rag = get_rag_manager()
+        rag_results = rag.search_product_rag_answer(
+            query_name, top_k=1, min_similarity=PRODUCT_RAG_MIN_SIMILARITY
+        )
+        if rag_results:
+            r = rag_results[0]
+            code = (r.get("商品コード") or "").strip()
+            if code:
+                shikiri = _parse_float(r.get("仕切"))
+                honbu = _parse_float(r.get("本部長"))
+                return (code, shikiri, honbu)
+    except Exception:
+        pass
+
+    # 2) unit_price.csv 유사도 폴백
     if not csv_path.exists():
         return None
     try:
-        base_name, capacity = split_name_and_capacity(str(product_name))
+        base_name, capacity = split_name_and_capacity(query_name)
         sub_query = capacity if capacity else None
         df = find_similar_products(
             query=base_name,
@@ -161,20 +194,8 @@ def resolve_product_and_prices(
         row = df.iloc[0]
         pc = row.get("제품코드")
         code = str(pc).strip() if pc is not None else None
-        shikiri_raw = row.get("시키리")
-        honbu_raw = row.get("본부장")
-        shikiri: Optional[float] = None
-        if shikiri_raw is not None:
-            try:
-                shikiri = float(shikiri_raw)
-            except (TypeError, ValueError):
-                pass
-        honbu: Optional[float] = None
-        if honbu_raw is not None:
-            try:
-                honbu = float(honbu_raw)
-            except (TypeError, ValueError):
-                pass
+        shikiri = _parse_float(row.get("시키리"))
+        honbu = _parse_float(row.get("본부장"))
         return (code, shikiri, honbu)
     except Exception:
         return None

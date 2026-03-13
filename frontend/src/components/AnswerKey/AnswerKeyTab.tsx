@@ -504,18 +504,21 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     },
   })
 
+  /** 브릿지 모드: 편집/쿼리는 표시 인덱스(currentPage·0)로 조회 */
   const getPageRoleForSave = useCallback(
     (p: number) => {
+      const editsKey = bridgeSinglePageNumber != null ? currentPage : p
+      const queryIndex = bridgeSinglePageNumber != null ? 0 : p - 1
       const raw =
-        pageRoleEdits[p] ??
-        (pageMetaQueries[p - 1]?.data as { page_role?: string } | undefined)?.page_role ??
+        pageRoleEdits[editsKey] ??
+        (pageMetaQueries[queryIndex]?.data as { page_role?: string } | undefined)?.page_role ??
         (answerJsonFromDb?.pages
           ? (answerJsonFromDb.pages.find((pg: any) => Number(pg.page_number) === p) as { page_role?: string } | undefined)?.page_role
           : undefined) ??
         'detail'
       return normalizePageRole(raw)
     },
-    [pageRoleEdits, pageMetaQueries, answerJsonFromDb?.pages]
+    [bridgeSinglePageNumber, currentPage, pageRoleEdits, pageMetaQueries, answerJsonFromDb?.pages]
   )
 
   const handleSaveGrid = useCallback(async () => {
@@ -560,7 +563,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       setSaveMessage(e?.response?.data?.detail || e?.message || '保存に失敗しました。')
       setSaveStatus('error')
     }
-  }, [selectedDoc, dirtyIds.size, pageMetaDirtyPages, pageMetaFlatEdits, getPageRoleForSave, buildPageMetaFromEdits, rowsRef, skipNextSyncRef, setDirtyIds, setPageMetaFlatEdits, setPageMetaDirtyPages, setPageRoleEdits, queryClient, bridgeSinglePageNumber])
+  }, [selectedDoc, currentPage, dirtyIds.size, pageMetaDirtyPages, pageMetaFlatEdits, getPageRoleForSave, buildPageMetaFromEdits, rowsRef, skipNextSyncRef, setDirtyIds, setPageMetaFlatEdits, setPageMetaDirtyPages, setPageRoleEdits, queryClient, bridgeSinglePageNumber])
 
   // to_do: 保存 버튼 또는 Ctrl+S — 키보드 단축키
   useEffect(() => {
@@ -617,6 +620,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
                 onRevokeSuccess?.({
                   pdf_filename: selectedDoc.pdf_filename,
                   form_type: full?.form_type ?? null,
+                  initialPage: effectivePageNumber,
                 })
               }}
               title="検討タブに切り替えます（保存は行いません）"
@@ -654,13 +658,21 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               className="answer-key-btn answer-key-btn-learning"
               onClick={async () => {
                 if (!selectedDoc) return
+                const sid = localStorage.getItem('sessionId')
+                if (!sid) {
+                  showToast(
+                    '세션이 만료되었거나 로그인이 필요합니다. 페이지를 새로고침한 뒤 다시 로그인해 주세요.',
+                    'error'
+                  )
+                  return
+                }
                 const hasDirty = dirtyIds.size > 0 || pageMetaDirtyPages.size > 0
                 if (hasDirty) {
                   alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
                   return
                 }
                 try {
-                  await ragAdminApi.learningRequestPage(selectedDoc.pdf_filename, effectivePageNumber)
+                  await ragAdminApi.learningRequestPage(selectedDoc.pdf_filename, effectivePageNumber, sid)
                   queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
                   queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
                   setSaveMessage('해당 페이지를 벡터 DB에 반영했습니다.')
@@ -728,6 +740,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             setImageSize={setImageSize}
             pageOcrTextQueries={pageOcrTextQueries}
             pageHistory={currentPageHistory}
+            hidePageNav={effectiveTotalPages <= 1}
           />
 
           <AnswerKeyRightPanel
