@@ -302,6 +302,12 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   }, [initialDocument, onConsumeInitialDocument, documents])
 
   const effectivePageNumber = bridgeSinglePageNumber ?? currentPage
+  /** total_pages가 0이어도 최소 1페이지는 쿼리 (일부 문서에서 0으로 오는 경우 대비) */
+  const effectiveTotalPages = selectedDoc
+    ? bridgeSinglePageNumber != null
+      ? 1
+      : Math.max(1, selectedDoc.total_pages || 0)
+    : 0
 
   // 문서 변경 시 1페이지로 초기화, page_role 로컬 편집 초기화 (단일 페이지 모드 해제 시)
   useEffect(() => {
@@ -312,7 +318,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const pageImageQueries = useQueries({
     queries: selectedDoc
       ? Array.from(
-          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          { length: effectiveTotalPages },
           (_, i) => {
             const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
             return {
@@ -328,7 +334,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const pageItemsQueries = useQueries({
     queries: selectedDoc
       ? Array.from(
-          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          { length: effectiveTotalPages },
           (_, i) => {
             const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
             return {
@@ -344,7 +350,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const pageMetaQueries = useQueries({
     queries: selectedDoc
       ? Array.from(
-          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          { length: effectiveTotalPages },
           (_, i) => {
             const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
             return {
@@ -361,7 +367,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const pageOcrTextQueries = useQueries({
     queries: selectedDoc
       ? Array.from(
-          { length: bridgeSinglePageNumber != null ? 1 : selectedDoc.total_pages },
+          { length: effectiveTotalPages },
           (_, i) => {
             const pageNum = bridgeSinglePageNumber != null ? bridgeSinglePageNumber : i + 1
             return {
