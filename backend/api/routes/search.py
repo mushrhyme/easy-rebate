@@ -17,6 +17,7 @@ from database.db_manager import _similarity_difflib, normalize_company_name_for_
 from backend.core.auth import get_current_user_optional, get_current_user
 from backend.unit_price_lookup import split_name_and_capacity, find_similar_products
 from modules.core.rag_manager import get_rag_manager
+from modules.core.extractors.rag_extractor import convert_numpy_types
 from modules.utils.config import get_project_root
 
 logger = logging.getLogger(__name__)
@@ -830,6 +831,7 @@ async def get_retail_candidates_by_rag_answer(
                 dist_c = dist_c_lookup
             if not dist_n and dist_c:
                 dist_n = _dist_for_retail(retail_code)[1] or dist_n
+            sim = r.get("similarity", 0.0)
             matches.append({
                 "得意先": r.get("得意先", ""),
                 "도매소매처코드": "",
@@ -838,9 +840,9 @@ async def get_retail_candidates_by_rag_answer(
                 "소매처명": retail_n or retail_code,
                 "판매처코드": dist_c,
                 "판매처명": dist_n or dist_c,
-                "similarity": r.get("similarity", 0.0),
+                "similarity": float(sim) if sim is not None else 0.0,
             })
-        return {"customer_name_input": customer_name, "matches": matches}
+        return convert_numpy_types({"customer_name_input": customer_name, "matches": matches})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -881,14 +883,15 @@ async def get_product_candidates_by_rag_answer(
                     honbu = float(honbu)
                 except (TypeError, ValueError):
                     pass
+            sim = r.get("similarity", 0.0)
             matches.append({
                 "商品名": (r.get("商品名") or "").strip(),
                 "商品コード": (r.get("商品コード") or "").strip(),
                 "仕切": shikiri,
                 "本部長": honbu,
-                "similarity": r.get("similarity", 0.0),
+                "similarity": float(sim) if sim is not None else 0.0,
             })
-        return {"product_name_input": query, "matches": matches}
+        return convert_numpy_types({"product_name_input": query, "matches": matches})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
