@@ -672,7 +672,11 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
                   return
                 }
                 try {
-                  await ragAdminApi.learningRequestPage(selectedDoc.pdf_filename, effectivePageNumber, sid)
+                  const res = await ragAdminApi.learningRequestPage(
+                    selectedDoc.pdf_filename,
+                    effectivePageNumber,
+                    sid
+                  )
                   queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
                   queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
                   setSaveMessage('해당 페이지를 벡터 DB에 반영했습니다.')
@@ -681,6 +685,12 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
                     '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
                     'success'
                   )
+                  if (res.rag_rebuilt) {
+                    showToast(
+                      `제품/판매처·소매처 벡터 DB가 생성되었습니다. (제품 ${res.rag_rebuilt.product}건, 판매처·소매처 ${res.rag_rebuilt.retail}건)`,
+                      'success'
+                    )
+                  }
                 } catch (e: any) {
                   const msg = e?.response?.data?.detail || e?.message || '학습 요청에 실패했습니다.'
                   setSaveMessage(msg)

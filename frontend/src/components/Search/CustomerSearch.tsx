@@ -1097,7 +1097,11 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                       return
                     }
                     try {
-                      await ragAdminApi.learningRequestPage(currentPage.pdfFilename, currentPage.pageNumber, sid)
+                      const res = await ragAdminApi.learningRequestPage(
+                        currentPage.pdfFilename,
+                        currentPage.pageNumber,
+                        sid
+                      )
                       queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
                       queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
                       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
@@ -1105,6 +1109,12 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                         '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
                         'success'
                       )
+                      if (res.rag_rebuilt) {
+                        showToast(
+                          `제품/판매처·소매처 벡터 DB가 생성되었습니다. (제품 ${res.rag_rebuilt.product}건, 판매처·소매처 ${res.rag_rebuilt.retail}건)`,
+                          'success'
+                        )
+                      }
                     } catch (e: unknown) {
                       const msg = e && typeof e === 'object' && 'response' in e
                         ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
