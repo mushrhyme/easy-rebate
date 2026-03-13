@@ -42,7 +42,16 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
   const { showToast } = useToast()
   const { options: formTypeOptions, formTypeLabel } = useFormTypes()
   const [showAnswerKeyModal, setShowAnswerKeyModal] = useState(false)
-  // Phase 3: form_type 수동 변경·재검출 제거. 様式は維持のため選択 UI のみ削除
+  /** 解答作成モーダルで選択した様式（確定時に updateFormType 反映） */
+  const [answerKeyModalFormType, setAnswerKeyModalFormType] = useState<string | null>(null)
+  /** 解答作成モーダル内「新規様式」入力（コードで追加） */
+  const [newFormCodeInput, setNewFormCodeInput] = useState('')
+  /** 様式ミニチュアでロード失敗したコード（プレースホルダー表示用） */
+  const [formPreviewImageErrors, setFormPreviewImageErrors] = useState<Set<string>>(new Set())
+  /** ホバー時拡大プレビュー表示する様式コード */
+  const [hoverPreviewFormCode, setHoverPreviewFormCode] = useState<string | null>(null)
+  /** 解答作成モーダル内「様式削除」で選択した様式コード */
+  const [deleteFormCodeInput, setDeleteFormCodeInput] = useState('')
   const [currentPageIndex, setCurrentPageIndex] = useState(0) // 현재 페이지 인덱스
   const [inputValue, setInputValue] = useState('') // 입력창에 표시되는 값
   const [searchQuery, setSearchQuery] = useState('') // 실제 검색에 사용되는 값 (엔터 또는 버튼 클릭 시 업데이트)
@@ -613,11 +622,92 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
     },
   })
 
+  // 解答作成モーダルを開いたときに選択様式を現在値（または先頭）で初期化
+  useEffect(() => {
+    if (showAnswerKeyModal && currentPage) {
+      setAnswerKeyModalFormType(currentPage.formType ?? formTypeOptions[0]?.value ?? null)
+      setNewFormCodeInput('')
+      setDeleteFormCodeInput('')
+      setFormPreviewImageErrors(new Set())
+    }
+  }, [showAnswerKeyModal, currentPage?.pdf_filename, currentPage?.formType, formTypeOptions])
+
+  const createFormTypeMutation = useMutation({
+    mutationFn: (params: { form_code?: string; display_name?: string }) => formTypesApi.create(params),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['form-types'] })
+      setAnswerKeyModalFormType(data.form_code)
+      setNewFormCodeInput('')
+    },
+  })
+
+  const deleteFormTypeMutation = useMutation({
+    mutationFn: (formCode: string) => formTypesApi.delete(formCode),
+    onSuccess: (_, formCode) => {
+      queryClient.invalidateQueries({ queryKey: ['form-types'] })
+      if (answerKeyModalFormType === formCode) {
+        const rest = formTypeOptions.filter((o) => o.value !== formCode)
+        setAnswerKeyModalFormType(rest[0]?.value ?? null)
+      }
+    },
+  })
+
+  const handleDeleteFormType = async () => {
+    const code = deleteFormCodeInput.trim()
+    if (!code) return
+    if (!window.confirm(`様式「${formTypeLabel(code)}」（${code}）を削除しますか？\nこの様式で分類された文書がある場合は削除できません。`)) return
+    try {
+      await deleteFormTypeMutation.mutateAsync(code)
+      setDeleteFormCodeInput('')
+      alert('削除しました。')
+    } catch (err: unknown) {
+      const detail =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null
+      const message =
+        detail && String(detail).includes('使用している文書')
+          ? detail
+          : detail
+            ? `削除に失敗しました: ${detail}`
+            : '削除に失敗しました。'
+      alert(message)
+    }
+  }
+
+  const handleAddNewFormType = async () => {
+    const code = newFormCodeInput.trim()
+    if (!code) return
+    try {
+      await createFormTypeMutation.mutateAsync({ form_code: code })
+    } catch (err: unknown) {
+      const detail =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null
+      if (detail && String(detail).includes('already exists')) {
+        // 既存コードをそのまま選択
+        setAnswerKeyModalFormType(code)
+        queryClient.invalidateQueries({ queryKey: ['form-types'] })
+        setNewFormCodeInput('')
+      } else {
+        alert(detail ? `エラー: ${detail}` : '様式の追加に失敗しました。')
+      }
+    }
+  }
+
   const handleAnswerKeyConfirm = async () => {
     if (!currentPage) return
     const pdfFilename = currentPage.pdfFilename
     const pageNumber = currentPage.pageNumber
     try {
+      // 様式を変更してから解答作成対象に指定
+      if (answerKeyModalFormType && answerKeyModalFormType !== currentPage.formType) {
+        await documentsApi.updateFormType(pdfFilename, answerKeyModalFormType)
+        queryClient.invalidateQueries({ queryKey: ['documents', 'all'] })
+        queryClient.invalidateQueries({ queryKey: ['documents', 'review'] })
+        queryClient.invalidateQueries({ queryKey: ['documents', 'for-answer-key-tab'] })
+      }
       await setAnswerKeyDocumentMutation.mutateAsync({ pdfFilename, pageNumber })
     } catch (err: unknown) {
       const msg = err && typeof err === 'object' && 'response' in err
@@ -1132,6 +1222,139 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               現在の様式: <strong>{formTypeLabel(currentPage.formType)}</strong>
               {currentPage.formType && `（${currentPage.formType}）`}
             </p>
+            <p className="answer-key-modal-form-question">解答作成に使用する様式を選択してください。</p>
+            <div className="answer-key-modal-form-grid">
+              <p className="answer-key-modal-form-grid-label">様式プレビュー（クリックで選択）</p>
+              <div className="answer-key-form-images" role="group" aria-label="様式プレビュー">
+                {formTypeOptions.map((opt) => {
+                  const selected = (answerKeyModalFormType ?? '') === opt.value
+                  const imgFailed = formPreviewImageErrors.has(opt.value)
+                  const previewSrc = `/images/form_${opt.value}.png`
+                  return (
+                    <div
+                      key={opt.value}
+                      className={`answer-key-form-image-item${selected ? ' selected' : ''}`}
+                      onClick={() => setAnswerKeyModalFormType(opt.value)}
+                      onMouseEnter={() => setHoverPreviewFormCode(opt.value)}
+                      onMouseLeave={() => setHoverPreviewFormCode(null)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setAnswerKeyModalFormType(opt.value)
+                        }
+                      }}
+                      aria-pressed={selected}
+                      aria-label={`様式 ${opt.label}（${opt.value}）`}
+                    >
+                      <div className="answer-key-form-image-wrap">
+                        {!imgFailed ? (
+                          <img
+                            src={previewSrc}
+                            alt=""
+                            onError={() =>
+                              setFormPreviewImageErrors((prev) => new Set(prev).add(opt.value))
+                            }
+                          />
+                        ) : null}
+                        {imgFailed ? (
+                          <span className="answer-key-form-image-placeholder">画像なし</span>
+                        ) : null}
+                      </div>
+                      <span className="answer-key-form-image-label">
+                        {opt.label}（{opt.value}）
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="answer-key-modal-form-choices" role="group" aria-label="様式選択">
+              {formTypeOptions.map((opt) => (
+                <label key={opt.value} className="answer-key-modal-form-choice">
+                  <input
+                    type="radio"
+                    name="answer-key-modal-form-type"
+                    value={opt.value}
+                    checked={(answerKeyModalFormType ?? '') === opt.value}
+                    onChange={() => setAnswerKeyModalFormType(opt.value)}
+                  />
+                  {opt.label}（{opt.value}）
+                </label>
+              ))}
+            </div>
+            <div className="answer-key-modal-new-form">
+              <div className="answer-key-modal-new-form-label">
+                新規様式（コードで追加）:
+                <input
+                  type="text"
+                  className="answer-key-modal-new-form-input"
+                  placeholder="例: 07"
+                  value={newFormCodeInput}
+                  onChange={(e) => setNewFormCodeInput(e.target.value)}
+                  maxLength={10}
+                  aria-label="新規様式コード"
+                />
+                <button
+                  type="button"
+                  className="answer-key-modal-btn"
+                  onClick={handleAddNewFormType}
+                  disabled={!newFormCodeInput.trim() || createFormTypeMutation.isPending}
+                >
+                  {createFormTypeMutation.isPending ? '追加中…' : '追加して選択'}
+                </button>
+              </div>
+            </div>
+            <div className="answer-key-modal-new-form">
+              <div className="answer-key-modal-new-form-label">
+                様式を削除:
+                <select
+                  className="answer-key-modal-new-form-input"
+                  value={deleteFormCodeInput}
+                  onChange={(e) => setDeleteFormCodeInput(e.target.value)}
+                  aria-label="削除する様式を選択"
+                  style={{ minWidth: '8rem' }}
+                >
+                  <option value="">— 選択 —</option>
+                  {formTypeOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}（{opt.value}）
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="answer-key-modal-btn cancel"
+                  onClick={handleDeleteFormType}
+                  disabled={!deleteFormCodeInput || deleteFormTypeMutation.isPending}
+                >
+                  {deleteFormTypeMutation.isPending ? '削除中…' : '削除'}
+                </button>
+              </div>
+            </div>
+            {hoverPreviewFormCode && (
+              <div
+                className="answer-key-form-preview-overlay"
+                style={{
+                  left: '50%',
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                }}
+                aria-hidden
+              >
+                <img
+                  src={`/images/form_${hoverPreviewFormCode}.png`}
+                  alt=""
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                  }}
+                />
+                <span className="answer-key-form-preview-label">
+                  {formTypeLabel(hoverPreviewFormCode)}（{hoverPreviewFormCode}）
+                </span>
+              </div>
+            )}
             <p className="answer-key-modal-filename">{currentPage.pdfFilename}</p>
             <div className="answer-key-modal-actions">
               <button
@@ -1145,7 +1368,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                 type="button"
                 className="answer-key-modal-btn confirm"
                 onClick={handleAnswerKeyConfirm}
-                disabled={setAnswerKeyDocumentMutation.isPending}
+                disabled={setAnswerKeyDocumentMutation.isPending || !answerKeyModalFormType}
               >
                 {setAnswerKeyDocumentMutation.isPending ? '処理中…' : 'はい（解答作成タブへ移動）'}
               </button>

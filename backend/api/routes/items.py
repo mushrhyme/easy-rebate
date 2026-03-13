@@ -641,14 +641,25 @@ async def get_page_items(
         db: 데이터베이스 인스턴스
     """
     try:
-        items = await db.run_sync(db.get_items, pdf_filename, page_number)
-        
+        # 문서의 data_year/data_month가 있으면 연월 테이블 조회 (get_items에 전달)
+        doc = await db.run_sync(db.get_document, pdf_filename)
+        data_year = doc.get("data_year") if doc else None
+        data_month = doc.get("data_month") if doc else None
+        items = await db.run_sync(
+            db.get_items,
+            pdf_filename,
+            page_number,
+            None,  # form_type (아래에서 doc으로 조회)
+            None,  # item_key_order
+            data_year,
+            data_month,
+        )
+
         # 검토 탭 컬럼 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys
         item_data_keys: Optional[List[str]] = None
         form_type: Optional[str] = None
         upload_channel: Optional[str] = None
         try:
-            doc = await db.run_sync(db.get_document, pdf_filename)
             if doc:
                 form_type = doc.get("form_type")
                 upload_channel = doc.get("upload_channel")

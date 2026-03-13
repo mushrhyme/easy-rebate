@@ -51,9 +51,14 @@ export function useAnswerKeyGrid({
   const [newPageMetaValue, setNewPageMetaValue] = useState('')
   const [newKeyInput, setNewKeyInput] = useState('')
 
-  // answer-json 由来で rows 同期
+  // answer-json 由来で rows 同期（items가 하나도 없으면 건너뛰어 pageItemsQueries 폴백이 채우도록 함）
   useEffect(() => {
     if (!answerJsonFromDb?.pages?.length) return
+    const hasAnyItems = answerJsonFromDb.pages.some((p: Record<string, unknown>) => {
+      const items = Array.isArray((p as { items?: unknown }).items) ? (p as { items: unknown[] }).items : []
+      return items.length > 0
+    })
+    if (!hasAnyItems) return
     if (skipNextSyncRef.current) {
       skipNextSyncRef.current = false
       return
@@ -97,8 +102,17 @@ export function useAnswerKeyGrid({
   }, [answerJsonFromDb, dirtyIds.size, pageMetaDirtyPages.size])
 
   const pageItemsDataUpdatedAt = pageItemsQueries.map((q) => q.dataUpdatedAt ?? 0).join(',')
+  /** answer-json에 실제로 items가 있는 페이지가 있으면 answer-json 사용, 없으면 pageItemsQueries로 채움 (검토 탭과 동일 데이터) */
+  const hasAnswerJsonItems =
+    !!(
+      answerJsonFromDb?.pages?.length &&
+      answerJsonFromDb.pages.some((p: Record<string, unknown>) => {
+        const items = Array.isArray((p as { items?: unknown }).items) ? (p as { items: unknown[] }).items : []
+        return items.length > 0
+      })
+    )
   useEffect(() => {
-    if (!selectedDoc || !allDataLoaded || answerJsonFromDb != null) return
+    if (!selectedDoc || !allDataLoaded || hasAnswerJsonItems) return
     if (skipNextSyncRef.current) {
       skipNextSyncRef.current = false
       return
@@ -139,7 +153,7 @@ export function useAnswerKeyGrid({
     setDirtyIds(new Set())
     setPageMetaFlatEdits({})
     setPageMetaDirtyPages(new Set())
-  }, [selectedDoc, allDataLoaded, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size, effectivePageNumber])
+  }, [selectedDoc, allDataLoaded, hasAnswerJsonItems, pageItemsDataUpdatedAt, dirtyIds.size, pageMetaDirtyPages.size, effectivePageNumber])
 
   useEffect(() => {
     rowsRef.current = rows
@@ -335,29 +349,35 @@ export function useAnswerKeyGrid({
     delete (cur as Record<string, unknown>)[parts[parts.length - 1]]
   }, [])
 
+  /** cover/summary 등 page_meta만 있는 페이지: answer-json에 page_meta가 비어 있으면 페이지별 API(getPageMeta) 결과로 보완 */
   const currentPageMetaData = useMemo((): { page_role: string | null; page_meta: Record<string, unknown> } | null => {
     if (!selectedDoc) return null
+    const queryMeta = pageMetaQueries[currentPage - 1]?.data as { page_role?: string | null; page_meta?: Record<string, unknown> } | undefined
+    const fromQuery = queryMeta
+      ? { page_role: queryMeta.page_role != null && typeof queryMeta.page_role === 'string' ? queryMeta.page_role : null, page_meta: queryMeta.page_meta ?? {} }
+      : null
+
     if (answerJsonFromDb?.pages) {
       const page = answerJsonFromDb.pages.find((p: Record<string, unknown>) => Number(p.page_number) === currentPage)
-      if (!page) return null
+      if (!page) return fromQuery
       let page_meta: Record<string, unknown> =
         page.page_meta != null && typeof page.page_meta === 'object' && !Array.isArray(page.page_meta)
           ? (page.page_meta as Record<string, unknown>)
           : {}
       if (Object.keys(page_meta).length === 0 && typeof page === 'object') {
-        page_meta = {}
         Object.keys(page).forEach((k) => {
-          if (!PAGE_LEVEL_EXCLUDE_KEYS.has(k)) page_meta![k] = (page as Record<string, unknown>)[k]
+          if (!PAGE_LEVEL_EXCLUDE_KEYS.has(k)) page_meta[k] = (page as Record<string, unknown>)[k]
         })
       }
       const pr = page.page_role
-      return { page_role: pr != null && typeof pr === 'string' ? pr : null, page_meta }
+      const fromAnswer = { page_role: pr != null && typeof pr === 'string' ? pr : null, page_meta }
+      // answer-json에 page_meta가 비어 있으면 페이지별 API 결과 사용 (summary/cover의 issuer, totals 등 표시)
+      if (Object.keys(fromAnswer.page_meta).length === 0 && fromQuery?.page_meta && Object.keys(fromQuery.page_meta).length > 0) {
+        return { page_role: fromQuery.page_role ?? fromAnswer.page_role, page_meta: fromQuery.page_meta }
+      }
+      return fromAnswer
     }
-    const q = pageMetaQueries[currentPage - 1]
-    if (!q?.data) return null
-    const d = q.data as { page_role?: string | null; page_meta?: Record<string, unknown> }
-    const pr = d.page_role
-    return { page_role: pr != null && typeof pr === 'string' ? pr : null, page_meta: d.page_meta ?? {} }
+    return fromQuery
   }, [selectedDoc, currentPage, answerJsonFromDb, pageMetaQueries])
 
   const kuMapping = useMemo(() => {
