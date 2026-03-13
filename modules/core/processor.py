@@ -188,7 +188,7 @@ class PdfProcessor:
                         else:
                             image_data_list.append(None)
 
-                # 분석 직후·DB 저장 전: 1→2→3 매핑 선적용 (受注先コード/小売先コード/商品コード를 page_results에 넣어서 저장)
+                # 분석 직후·DB 저장 전: 1(RAG)→2→3→4 매핑 선적용 (受注先コード/小売先コード/商品コード를 page_results에 넣어서 저장)
                 try:
                     from modules.utils.retail_resolve import resolve_retail_dist
                     from modules.utils.config import get_project_root

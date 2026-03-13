@@ -349,16 +349,21 @@ export function useAnswerKeyGrid({
     delete (cur as Record<string, unknown>)[parts[parts.length - 1]]
   }, [])
 
+  /** 표시용 페이지 번호: 브릿지 시 actual page, 아니면 currentPage */
+  const pageNumberForLookup = effectivePageNumber ?? currentPage
+  /** pageMetaQueries 배열 인덱스: 브릿지 시 0, 아니면 currentPage - 1 */
+  const queryIndexForCurrentPage = effectivePageNumber != null ? 0 : currentPage - 1
+
   /** cover/summary 등 page_meta만 있는 페이지: answer-json에 page_meta가 비어 있으면 페이지별 API(getPageMeta) 결과로 보완 */
   const currentPageMetaData = useMemo((): { page_role: string | null; page_meta: Record<string, unknown> } | null => {
     if (!selectedDoc) return null
-    const queryMeta = pageMetaQueries[currentPage - 1]?.data as { page_role?: string | null; page_meta?: Record<string, unknown> } | undefined
+    const queryMeta = pageMetaQueries[queryIndexForCurrentPage]?.data as { page_role?: string | null; page_meta?: Record<string, unknown> } | undefined
     const fromQuery = queryMeta
       ? { page_role: queryMeta.page_role != null && typeof queryMeta.page_role === 'string' ? queryMeta.page_role : null, page_meta: queryMeta.page_meta ?? {} }
       : null
 
     if (answerJsonFromDb?.pages) {
-      const page = answerJsonFromDb.pages.find((p: Record<string, unknown>) => Number(p.page_number) === currentPage)
+      const page = answerJsonFromDb.pages.find((p: Record<string, unknown>) => Number(p.page_number) === pageNumberForLookup)
       if (!page) return fromQuery
       let page_meta: Record<string, unknown> =
         page.page_meta != null && typeof page.page_meta === 'object' && !Array.isArray(page.page_meta)
@@ -378,7 +383,7 @@ export function useAnswerKeyGrid({
       return fromAnswer
     }
     return fromQuery
-  }, [selectedDoc, currentPage, answerJsonFromDb, pageMetaQueries])
+  }, [selectedDoc, currentPage, pageNumberForLookup, queryIndexForCurrentPage, answerJsonFromDb, pageMetaQueries])
 
   const kuMapping = useMemo(() => {
     const meta = currentPageMetaData?.page_meta
@@ -501,9 +506,12 @@ export function useAnswerKeyGrid({
     setPageMetaDirtyPages((d) => new Set(d).add(currentPage))
   }, [currentPage, currentPageMetaData, currentPageMetaFields])
 
+  /** 저장 시 page_meta 조합. 브릿지 모드: 쿼리는 [0], 편집 키는 currentPage(1) */
   const buildPageMetaFromEdits = useCallback((pageNum: number): Record<string, unknown> => {
-    const base = (pageMetaQueries[pageNum - 1]?.data as { page_meta?: Record<string, unknown> } | undefined)?.page_meta ?? {}
-    const edits = pageMetaFlatEdits[pageNum] ?? {}
+    const queryIndex = effectivePageNumber != null ? 0 : pageNum - 1
+    const editsKey = effectivePageNumber != null ? currentPage : pageNum
+    const base = (pageMetaQueries[queryIndex]?.data as { page_meta?: Record<string, unknown> } | undefined)?.page_meta ?? {}
+    const edits = pageMetaFlatEdits[editsKey] ?? {}
     if (Object.keys(edits).length === 0) return base
     const merged = JSON.parse(JSON.stringify(base))
     Object.entries(edits).forEach(([path, value]) => {
@@ -514,7 +522,7 @@ export function useAnswerKeyGrid({
       }
     })
     return merged
-  }, [pageMetaQueries, pageMetaFlatEdits, setNestedByPath, deleteNestedByPath])
+  }, [effectivePageNumber, currentPage, pageMetaQueries, pageMetaFlatEdits, setNestedByPath, deleteNestedByPath])
 
   return {
     skipNextSyncRef,

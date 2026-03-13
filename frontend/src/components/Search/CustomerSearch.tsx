@@ -26,8 +26,8 @@ interface Page {
 // 검토 필터 타입: 1次/2次 각각 완료/미완료
 type ReviewFilter = 'all' | 'first_reviewed' | 'first_not_reviewed' | 'second_reviewed' | 'second_not_reviewed'
 
-/** 検討タブに復帰 시 열 문서·양식지 (문서 선택 + 양식지 드롭다운 유지) */
-export type DocumentToOpenOnReturn = { pdf_filename: string; form_type: string | null }
+/** 検討タブに復帰 시 열 문서·양식지·페이지 (문서·양식지 선택 후 해당 페이지로 이동) */
+export type DocumentToOpenOnReturn = { pdf_filename: string; form_type: string | null; initialPage?: number }
 
 interface CustomerSearchProps {
   /** 정답지 생성 탭으로 이동 시 (문서명, 현재 페이지 번호) 전달 — 브릿지에서 해당 페이지만 표시 */
@@ -53,6 +53,8 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
   /** 解答作成モーダル内「様式削除」で選択した様式コード */
   const [deleteFormCodeInput, setDeleteFormCodeInput] = useState('')
   const [currentPageIndex, setCurrentPageIndex] = useState(0) // 현재 페이지 인덱스
+  /** 検討タブ復帰 시 복원할 페이지 번호 (documentToOpen 소비 후 effectiveDisplayPages 반영 시 인덱스로 설정) */
+  const [pendingReturnPageNumber, setPendingReturnPageNumber] = useState<number | null>(null)
   const [inputValue, setInputValue] = useState('') // 입력창에 표시되는 값
   const [searchQuery, setSearchQuery] = useState('') // 실제 검색에 사용되는 값 (엔터 또는 버튼 클릭 시 업데이트)
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all') // 검토 필터
@@ -109,10 +111,12 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
     if (!documentToOpen?.pdf_filename?.trim()) return
     setSelectedDocumentPdf(documentToOpen.pdf_filename.trim())
     setFormTypeFilter(documentToOpen.form_type ?? null)
+    setPendingReturnPageNumber(documentToOpen.initialPage ?? null)
     setCurrentPageIndex(0)
     onConsumeDocumentToOpen?.()
   }, [documentToOpen, onConsumeDocumentToOpen])
 
+  // 復帰 후 표시 페이지가 준비되면 해당 페이지 번호로 인덱스 설정
   useEffect(() => {
     if (bulkFirstCheckboxRef.current) {
       bulkFirstCheckboxRef.current.indeterminate = bulkCheckState.someFirstChecked && !bulkCheckState.allFirstChecked
@@ -536,6 +540,18 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
       setPageJumpInput(String(currentPageIndex + 1))
     }
   }, [currentPageIndex, totalFilteredPages])
+
+  // 復帰後 표시 페이지가 준비되면 해당 페이지 번호로 인덱스 설정
+  useEffect(() => {
+    if (pendingReturnPageNumber == null || effectiveDisplayPages.length === 0) return
+    const isDocForReturn =
+      selectedDocumentPdf?.trim() &&
+      effectiveDisplayPages[0]?.pdfFilename?.trim()?.toLowerCase() === selectedDocumentPdf.trim().toLowerCase()
+    if (!isDocForReturn) return
+    const idx = effectiveDisplayPages.findIndex((p) => p.pageNumber === pendingReturnPageNumber)
+    if (idx >= 0) setCurrentPageIndex(idx)
+    setPendingReturnPageNumber(null)
+  }, [pendingReturnPageNumber, effectiveDisplayPages, selectedDocumentPdf])
 
   // 현재 페이지의 검토율 조회
   const currentPageStats = useMemo(() => {
@@ -1068,12 +1084,20 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                   type="button"
                   className="nav-action-btn nav-learning-request-btn"
                   onClick={async () => {
+                    const sid = localStorage.getItem('sessionId')
+                    if (!sid) {
+                      showToast(
+                        '세션이 만료되었거나 로그인이 필요합니다. 페이지를 새로고침한 뒤 다시 로그인해 주세요.',
+                        'error'
+                      )
+                      return
+                    }
                     if (gridRef.current?.hasUnsavedEdits?.()) {
                       alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
                       return
                     }
                     try {
-                      await ragAdminApi.learningRequestPage(currentPage.pdfFilename, currentPage.pageNumber)
+                      await ragAdminApi.learningRequestPage(currentPage.pdfFilename, currentPage.pageNumber, sid)
                       queryClient.invalidateQueries({ queryKey: ['search', 'customer', searchQuery, formTypeFilter] })
                       queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
                       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })

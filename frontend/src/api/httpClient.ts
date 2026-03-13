@@ -35,8 +35,13 @@ client.interceptors.request.use(
       }
     }
 
-    // セッションIDをヘッダーに追加
-    const sessionId = localStorage.getItem('sessionId')
+    // セッションIDをヘッダーに追加 (config에 이미 있으면 덮어쓰지 않음 — 학습 요청 등에서 클릭 시점 세션 고정용)
+    const existingSession =
+      config.headers &&
+      (typeof (config.headers as { get?: (k: string) => string }).get === 'function'
+        ? (config.headers as { get: (k: string) => string }).get('X-Session-ID')
+        : (config.headers as Record<string, string>)['X-Session-ID'])
+    const sessionId = existingSession ?? localStorage.getItem('sessionId')
     if (sessionId) {
       // headers를 안전하게 설정
       if (!config.headers) {
@@ -108,6 +113,7 @@ client.interceptors.response.use(
         url: error.config?.url,
       })
       localStorage.removeItem('sessionId')
+      window.dispatchEvent(new CustomEvent('app:session-invalid'))
     }
 
     // 500 에러인 경우 상세 정보 출력

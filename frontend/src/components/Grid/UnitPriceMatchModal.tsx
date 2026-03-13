@@ -1,7 +1,7 @@
 /**
  * 매핑 모달: 単価(제품) | 代表スーパー(소매처) 탭.
  * 単価: 最終候補 폼(適用 후 수정 가능) + sap_product 검색 → 確定 시 그리드 반영.
- * 代表スーパー: 1) 得意先コード→domae_retail_1, 2) retail_user 유사도, 3) domae_retail_2, 4) RAG. 最終候補는 sap_retail 검색.
+ * 代表スーパー: 1) RAG(벡터 DB) 정답지, 2) 得意先コード→domae_retail_1, 3) retail_user, 4) domae_retail_2. 最終候補는 sap_retail 검색.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { searchApi } from '@/api/client'
@@ -120,7 +120,7 @@ function normalizeByCodeMatch(m: RetailMatch, customerCode: string): RetailMatch
   }
 }
 
-/** 1번=도매소매처코드만, 3번=도매소매처명만, 2번=도매 컬럼 없음, 4번=得意先만(비교 기준) */
+/** 1번=得意先만(RAG), 2번=도매소매처코드만, 3번=도매 컬럼 없음, 4번=도매소매처명만 */
 type DomaeColumn = 'code' | 'name' | null
 type RetailKeyHeader = 'domae_code' | 'retail_name' | 'domae_name' | 'tokuisaki' | null
 
@@ -133,7 +133,7 @@ function RetailTable({
 }: {
   matches: RetailMatch[]
   onSelectToFinal: (m: RetailMatch) => void
-  /** 1번: 'code'만, 3번: 'name'만, 4번: keyHeader='tokuisaki'일 때 得意先 열 */
+  /** 1번: keyHeader='tokuisaki' 得意先, 2번: 'code'만, 4번: 'name'만 */
   domaeColumn?: DomaeColumn
   keyHeader?: RetailKeyHeader
   /** 1번은 코드 정확 매칭이라 유사도 없음 → false 시 類似度 열 숨김 */
@@ -915,7 +915,26 @@ export function UnitPriceMatchModal({
               </section>
 
               <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">1) 得意先コード基準（domae_retail_1）</h4>
+                <h4 className="retail-mapping-section-title">1) 得意先 RAG 정답지 類似度（벡터 DB）</h4>
+                {byRagAnswer.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
+                {byRagAnswer.skippedReason && (
+                  <p className="unit-price-match-modal-empty">{byRagAnswer.skippedReason}</p>
+                )}
+                {byRagAnswer.error && <p className="unit-price-match-modal-error">{byRagAnswer.error}</p>}
+                {!byRagAnswer.loading && !byRagAnswer.error && !byRagAnswer.skippedReason && byRagAnswer.matches.length === 0 && (
+                  <p className="unit-price-match-modal-empty">該当する候補がありません。</p>
+                )}
+                {!byRagAnswer.loading && !byRagAnswer.error && byRagAnswer.matches.length > 0 && (
+                  <RetailTable
+                    matches={byRagAnswer.matches}
+                    onSelectToFinal={handleSelectToFinal}
+                    keyHeader="tokuisaki"
+                  />
+                )}
+              </section>
+
+              <section className="retail-mapping-section">
+                <h4 className="retail-mapping-section-title">2) 得意先コード基準（domae_retail_1）</h4>
                 {byCode.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
                 {byCode.error && <p className="unit-price-match-modal-error">{byCode.error}</p>}
                 {!byCode.loading && !byCode.error && byCode.skippedReason && (
@@ -936,7 +955,7 @@ export function UnitPriceMatchModal({
               </section>
 
               <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">2) 代表スーパー名類似度（retail_user&dist_retail）</h4>
+                <h4 className="retail-mapping-section-title">3) 代表スーパー名類似度（retail_user&dist_retail）</h4>
                 {byRetailUser.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
                 {byRetailUser.error && <p className="unit-price-match-modal-error">{byRetailUser.error}</p>}
                 {!byRetailUser.loading && !byRetailUser.error && byRetailUser.matches.length === 0 && (
@@ -952,7 +971,7 @@ export function UnitPriceMatchModal({
               </section>
 
               <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">3) 小売先名類似度（domae_retail_2）</h4>
+                <h4 className="retail-mapping-section-title">4) 小売先名類似度（domae_retail_2）</h4>
                 {byShopName.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
                 {byShopName.skippedReason && (
                   <p className="unit-price-match-modal-empty">{byShopName.skippedReason}</p>
@@ -967,25 +986,6 @@ export function UnitPriceMatchModal({
                     onSelectToFinal={handleSelectToFinal}
                     domaeColumn="name"
                     keyHeader="domae_name"
-                  />
-                )}
-              </section>
-
-              <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">4) 得意先 RAG 정답지 類似度</h4>
-                {byRagAnswer.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
-                {byRagAnswer.skippedReason && (
-                  <p className="unit-price-match-modal-empty">{byRagAnswer.skippedReason}</p>
-                )}
-                {byRagAnswer.error && <p className="unit-price-match-modal-error">{byRagAnswer.error}</p>}
-                {!byRagAnswer.loading && !byRagAnswer.error && !byRagAnswer.skippedReason && byRagAnswer.matches.length === 0 && (
-                  <p className="unit-price-match-modal-empty">該当する候補がありません。</p>
-                )}
-                {!byRagAnswer.loading && !byRagAnswer.error && byRagAnswer.matches.length > 0 && (
-                  <RetailTable
-                    matches={byRagAnswer.matches}
-                    onSelectToFinal={handleSelectToFinal}
-                    keyHeader="tokuisaki"
                   />
                 )}
               </section>

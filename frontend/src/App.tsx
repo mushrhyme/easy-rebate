@@ -21,6 +21,7 @@ import { ToastProvider } from './contexts/ToastContext'
 import Login from './components/Auth/Login'
 import ChangePasswordModal from './components/Auth/ChangePasswordModal'
 import { getDocumentYearMonth } from './utils/documentDate'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import './App.css'
 
 type Tab = 'dashboard' | 'upload' | 'search' | 'sap_upload' | 'ocr_test' | 'rag_admin'
@@ -64,10 +65,11 @@ function AppContent() {
     total_pages: number
     initialPage?: number
   } | null>(null)
-  /** 検討タブに復帰 시 검토 탭에서 열 문서·양식지 (해당 문서 자동 선택 + 양식지 드롭다운 유지) */
+  /** 検討タブに復帰 시 검토 탭에서 열 문서·양식지·페이지 (해당 문서·페이지로 복귀) */
   const [documentToOpenOnReturnToSearch, setDocumentToOpenOnReturnToSearch] = useState<{
     pdf_filename: string
     form_type: string | null
+    initialPage?: number
   } | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false) // 사이드바는 기본적으로 닫혀있음
   const [selectedUploadChannel, setSelectedUploadChannel] = useState<UploadChannel | null>(UPLOAD_CHANNELS[0] ?? null)
@@ -309,14 +311,16 @@ function AppContent() {
 
         {activeTab === 'search' && (
           <div className="search-tab">
-            <CustomerSearch
-              documentToOpen={documentToOpenOnReturnToSearch}
-              onConsumeDocumentToOpen={() => setDocumentToOpenOnReturnToSearch(null)}
-              onNavigateToAnswerKey={(pdfFilename, pageNumber) => {
-                setInitialDocumentForAnswerKey({ pdf_filename: pdfFilename, total_pages: 0, initialPage: pageNumber })
-                setActiveTab('ocr_test')
-              }}
-            />
+            <ErrorBoundary fallbackTitle="検討タブの読み込みに失敗しました">
+              <CustomerSearch
+                documentToOpen={documentToOpenOnReturnToSearch}
+                onConsumeDocumentToOpen={() => setDocumentToOpenOnReturnToSearch(null)}
+                onNavigateToAnswerKey={(pdfFilename, pageNumber) => {
+                  setInitialDocumentForAnswerKey({ pdf_filename: pdfFilename, total_pages: 0, initialPage: pageNumber })
+                  setActiveTab('ocr_test')
+                }}
+              />
+            </ErrorBoundary>
           </div>
         )}
 
@@ -332,7 +336,11 @@ function AppContent() {
               initialDocument={initialDocumentForAnswerKey}
               onConsumeInitialDocument={() => setInitialDocumentForAnswerKey(null)}
               onRevokeSuccess={(doc) => {
-                setDocumentToOpenOnReturnToSearch({ pdf_filename: doc.pdf_filename, form_type: doc.form_type })
+                setDocumentToOpenOnReturnToSearch({
+                  pdf_filename: doc.pdf_filename,
+                  form_type: doc.form_type,
+                  initialPage: doc.initialPage,
+                })
                 setActiveTab('search')
               }}
             />

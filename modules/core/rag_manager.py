@@ -1623,6 +1623,204 @@ class RAGManager:
             })
         return results
 
+    # ---- 제품 RAG 정답지 전용 인덱스 (商品名 검색 → 商品コード/仕切/本部長) ----
+    def _load_product_rag_index_from_db(
+        self,
+    ) -> Tuple[Optional[Any], Dict[str, Any], Dict[str, int], Dict[int, str]]:
+        """DB에서 index_name='product_rag_answer' 인덱스 로드. 없으면 (None, {}, {}, {})."""
+        if not self.use_db or not getattr(self, "db", None):
+            return None, {}, {}, {}
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT index_data, metadata_json
+                    FROM rag_vector_index
+                    WHERE index_name = 'product_rag_answer' AND (form_type IS NULL OR form_type = '')
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                """)
+                row = cursor.fetchone()
+                if not row or len(row) < 2:
+                    return None, {}, {}, {}
+                index_data_bytes, metadata_json = row[0], row[1]
+                if isinstance(index_data_bytes, memoryview):
+                    index_data_bytes = np.frombuffer(index_data_bytes, dtype=np.uint8)
+                elif isinstance(index_data_bytes, bytes):
+                    index_data_bytes = np.frombuffer(index_data_bytes, dtype=np.uint8)
+                else:
+                    index_data_bytes = np.frombuffer(bytes(index_data_bytes), dtype=np.uint8)
+                index = faiss.deserialize_index(index_data_bytes)
+                metadata = metadata_json.get("metadata", {})
+                id_to_index = metadata_json.get("id_to_index", {})
+                index_to_id_raw = metadata_json.get("index_to_id", {})
+                index_to_id = {int(k): v for k, v in index_to_id_raw.items()}
+                return index, metadata, id_to_index, index_to_id
+        except Exception as e:
+            print(f"⚠️ product_rag_answer 인덱스 로드 실패: {e}")
+            return None, {}, {}, {}
+
+    def _save_product_rag_index_to_db(
+        self,
+        index: Any,
+        metadata: Dict[str, Any],
+        id_to_index: Dict[str, int],
+        index_to_id: Dict[int, str],
+    ) -> None:
+        """product_rag_answer 인덱스를 DB에 저장 (index_name='product_rag_answer', form_type='')."""
+        if not self.use_db or not getattr(self, "db", None):
+            return
+        try:
+            serialized = faiss.serialize_index(index)
+            index_data_bytes = serialized.tobytes() if hasattr(serialized, "tobytes") else bytes(serialized)
+            index_size = len(index_data_bytes)
+            vector_count = index.ntotal
+
+            def clean_for_json(obj):
+                import math
+                if isinstance(obj, dict):
+                    return {k: clean_for_json(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [clean_for_json(item) for item in obj]
+                if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+                    return None
+                return obj
+
+            metadata_json = {
+                "metadata": clean_for_json(metadata),
+                "id_to_index": id_to_index,
+                "index_to_id": {str(k): v for k, v in index_to_id.items()},
+            }
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO rag_vector_index (
+                        index_name, form_type, index_data, metadata_json, index_size, vector_count
+                    ) VALUES (%s, %s, %s, %s::json, %s, %s)
+                    ON CONFLICT (index_name, form_type)
+                    DO UPDATE SET
+                        index_data = EXCLUDED.index_data,
+                        metadata_json = EXCLUDED.metadata_json,
+                        index_size = EXCLUDED.index_size,
+                        vector_count = EXCLUDED.vector_count,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    "product_rag_answer",
+                    "",
+                    index_data_bytes,
+                    json.dumps(metadata_json, allow_nan=False),
+                    index_size,
+                    vector_count,
+                ))
+        except Exception as e:
+            print(f"⚠️ product_rag_answer 인덱스 저장 실패: {e}")
+            raise
+
+    def build_product_rag_answer_index(self) -> int:
+        """
+        정답지 문서(created_by_user_id IS NOT NULL) item에서 商品名/商品コード/仕切/本部長 중복 제거 후
+        商品名 텍스트만 임베딩해 product_rag_answer FAISS 인덱스 구축 후 DB 저장.
+        반환: 저장된 벡터 수.
+        """
+        if not self.use_db or not getattr(self, "db", None):
+            return 0
+        rows = []
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT DISTINCT
+                        i.item_data->>'商品名' AS "商品名",
+                        i.item_data->>'商品コード' AS "商品コード",
+                        i.item_data->>'仕切' AS "仕切",
+                        i.item_data->>'本部長' AS "本部長"
+                    FROM items_current i
+                    INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                    WHERE d.created_by_user_id IS NOT NULL
+                    AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
+                    AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
+                    ORDER BY "商品名", "商品コード"
+                """)
+                for row in cursor.fetchall():
+                    name = (row[0] or "").strip()
+                    code = (row[1] or "").strip()
+                    if name and code:
+                        shikiri = (row[2] or "").strip() if row[2] is not None else ""
+                        honbu = (row[3] or "").strip() if row[3] is not None else ""
+                        rows.append({
+                            "商品名": name,
+                            "商品コード": code,
+                            "仕切": shikiri,
+                            "本部長": honbu,
+                        })
+        except Exception as e:
+            print(f"⚠️ product RAG 정답지 조회 실패: {e}")
+            return 0
+        if not rows:
+            return 0
+        model = self._get_embedding_model()
+        dim = self._get_embedding_dim()
+        texts = [self.preprocess_ocr_text(r["商品名"]) for r in rows]
+        embeddings = model.encode(texts, convert_to_numpy=True).astype("float32")
+        index = faiss.IndexFlatL2(dim)
+        index.add(embeddings)
+        metadata = {}
+        id_to_index = {}
+        index_to_id = {}
+        for i, r in enumerate(rows):
+            doc_id = f"product_{i}"
+            metadata[doc_id] = {
+                "商品名": r["商品名"],
+                "商品コード": r["商品コード"],
+                "仕切": r["仕切"],
+                "本部長": r["本部長"],
+            }
+            id_to_index[doc_id] = i
+            index_to_id[i] = doc_id
+        self._save_product_rag_index_to_db(index, metadata, id_to_index, index_to_id)
+        return len(rows)
+
+    def search_product_rag_answer(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        min_similarity: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """
+        商品名 문자열로 product_rag_answer 인덱스 검색.
+        반환: [{"商品名", "商品コード", "仕切", "本部長", "similarity"}, ...]
+        """
+        query_text = (query_text or "").strip()
+        if not query_text:
+            return []
+        index, metadata, id_to_index, index_to_id = self._load_product_rag_index_from_db()
+        if index is None or index.ntotal == 0:
+            return []
+        model = self._get_embedding_model()
+        processed = self.preprocess_ocr_text(query_text)
+        query_embedding = model.encode([processed], convert_to_numpy=True).astype("float32")
+        k = min(top_k, index.ntotal)
+        distances, indices = index.search(query_embedding, k)
+        results = []
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx == -1:
+                continue
+            doc_id = index_to_id.get(idx)
+            if not doc_id:
+                continue
+            similarity = max(0.0, 1.0 - (dist / 100.0))
+            if similarity < min_similarity:
+                continue
+            data = metadata.get(doc_id, {})
+            results.append({
+                "商品名": data.get("商品名", ""),
+                "商品コード": data.get("商品コード", ""),
+                "仕切": data.get("仕切", ""),
+                "本部長": data.get("本部長", ""),
+                "similarity": round(similarity, 4),
+            })
+        return results
+
 
 # 전역 RAG Manager 인스턴스 (싱글톤 패턴)
 _rag_manager: Optional[RAGManager] = None
