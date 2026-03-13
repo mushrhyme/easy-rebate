@@ -291,10 +291,20 @@ class LearningRequestPageRequest(BaseModel):
     page_number: int
 
 
-async def execute_learning_request_page(pdf_filename: str, page_number: int) -> dict:
+def _is_admin(user: Dict[str, Any]) -> bool:
+    """관리자 여부 (username='admin' 또는 is_admin=True)."""
+    return user.get("username") == "admin" or bool(user.get("is_admin"))
+
+
+async def execute_learning_request_page(
+    pdf_filename: str,
+    page_number: int,
+    current_user: Optional[Dict[str, Any]] = None,
+) -> dict:
     """
     단일 페이지 학습 요청 실행. 로그인 사용자 전원 호출 가능 (관리자 체크 없음).
     검토·정답지 탭의 「学習リクエスト」에서 사용. /api/search/learning-request-page 에서도 호출.
+    current_user가 관리자이면 성공 후 판매처·소매처 / 제품 RAG 정답지 벡터 인덱스 2개 자동 재구축.
     """
     db = get_db()
     _ensure_rag_candidate_column(db)
@@ -340,6 +350,17 @@ async def execute_learning_request_page(pdf_filename: str, page_number: int) -> 
             conn.commit()
     except Exception:
         pass
+
+    # 관리자면 판매처·소매처 / 제품 RAG 정답지 벡터 인덱스 2개 재구축 (기준관리 탭 버튼과 동일)
+    if current_user and _is_admin(current_user):
+        try:
+            rag = get_rag_manager()
+            n_retail = rag.build_retail_rag_answer_index()
+            n_product = rag.build_product_rag_answer_index()
+            logger.info("학습 요청 후 RAG 정답지 인덱스 재구축: retail=%s, product=%s", n_retail, n_product)
+        except Exception as e:
+            logger.exception("학습 요청 후 RAG 정답지 인덱스 재구축 실패: %s", e)
+
     return {"success": True, "message": "해당 페이지를 벡터 DB에 반영했습니다."}
 
 
@@ -351,8 +372,9 @@ async def learning_request_page(
     """
     해당 페이지만 벡터 DB에 반영. ※ 관리자 전용 아님. 로그인한 모든 사용자 호출 가능.
     (비관리자 403 방지를 위해 프론트는 /api/search/learning-request-page 사용 권장.)
+    관리자일 경우 성공 후 판매처·소매처 / 제품 RAG 정답지 인덱스 자동 재구축.
     """
-    return await execute_learning_request_page(body.pdf_filename, body.page_number)
+    return await execute_learning_request_page(body.pdf_filename, body.page_number, current_user)
 
 
 def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> Optional[Dict[str, Any]]:

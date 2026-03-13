@@ -328,9 +328,12 @@ async def learning_request_page_search(
     """
     해당 페이지만 벡터 DB에 반영. 로그인한 모든 사용자 호출 가능 (관리자 아님).
     검토 탭·정답지 탭의 「学習リクエスト」 버튼용.
+    관리자일 경우 성공 후 판매처·소매처 / 제품 RAG 정답지 인덱스 자동 재구축.
     """
     from backend.api.routes import rag_admin
-    return await rag_admin.execute_learning_request_page(body.pdf_filename, body.page_number)
+    return await rag_admin.execute_learning_request_page(
+        body.pdf_filename, body.page_number, current_user
+    )
 
 
 @router.get("/my-supers")
@@ -838,6 +841,54 @@ async def get_retail_candidates_by_rag_answer(
                 "similarity": r.get("similarity", 0.0),
             })
         return {"customer_name_input": customer_name, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/product/candidates-by-rag-answer")
+async def get_product_candidates_by_rag_answer(
+    query: str = Query(..., description="商品名（제품명）"),
+    top_k: int = Query(5, ge=1, le=20, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+):
+    """
+    商品名으로 제품 RAG 정답지 벡터 인덱스 검색. 단가 탭에서 RAG 후보 표시·適用용.
+    반환: { product_name_input, matches: [{ 商品名, 商品コード, 仕切, 本部長, similarity }], skipped_reason? }
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"product_name_input": "", "matches": []}
+    try:
+        rag = get_rag_manager()
+        raw = rag.search_product_rag_answer(query, top_k=top_k, min_similarity=min_similarity)
+        if not raw:
+            return {
+                "product_name_input": query,
+                "matches": [],
+                "skipped_reason": "RAG 정답지 인덱스가 비어있거나 검색 결과 없음",
+            }
+        matches = []
+        for r in raw:
+            shikiri = r.get("仕切")
+            honbu = r.get("本部長")
+            if isinstance(shikiri, str) and shikiri.strip() != "":
+                try:
+                    shikiri = float(shikiri)
+                except (TypeError, ValueError):
+                    pass
+            if isinstance(honbu, str) and honbu.strip() != "":
+                try:
+                    honbu = float(honbu)
+                except (TypeError, ValueError):
+                    pass
+            matches.append({
+                "商品名": (r.get("商品名") or "").strip(),
+                "商品コード": (r.get("商品コード") or "").strip(),
+                "仕切": shikiri,
+                "本部長": honbu,
+                "similarity": r.get("similarity", 0.0),
+            })
+        return {"product_name_input": query, "matches": matches}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

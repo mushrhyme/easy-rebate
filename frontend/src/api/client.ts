@@ -802,6 +802,25 @@ export const searchApi = {
   },
 
   /**
+   * 商品名으로 제품 RAG 정답지 벡터 검색. 단가 탭 RAG 후보 표시·適用용.
+   */
+  getProductCandidatesByRagAnswer: async (
+    productName: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    product_name_input: string
+    matches: Array<{ 商品名: string; 商品コード: string; 仕切: number | string | null; 本部長: number | string | null; similarity: number }>
+    skipped_reason?: string | null
+  }> => {
+    const topK = options?.topK ?? 5
+    const minSim = options?.minSimilarity ?? 0
+    const response = await client.get('/api/search/product/candidates-by-rag-answer', {
+      params: { query: productName, top_k: topK, min_similarity: minSim },
+    })
+    return response.data
+  },
+
+  /**
    * 商品コード로 unit_price 1건 조회. 仕切・本部長 자동완성용.
    */
   getUnitPriceByProductCode: async (
