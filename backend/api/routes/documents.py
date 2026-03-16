@@ -2032,81 +2032,6 @@ async def revoke_document_answer_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/{pdf_filename}/pages/{page_number:int}/generate-answer")
-async def generate_answer_with_gemini(
-    pdf_filename: str,
-    page_number: int,
-    current_user: dict = Depends(get_current_user),
-    db=Depends(get_db)
-):
-    """
-    Gemini Vision zero-shot으로 해당 페이지의 정답지(items) 생성.
-    페이지 이미지를 Gemini에 전달하여 구조화된 JSON을 추출합니다.
-    """
-    try:
-        from PIL import Image
-        from modules.core.extractors.gemini_extractor import GeminiVisionParser
-
-        image_path = db.get_page_image_path(pdf_filename, page_number)
-        if not image_path:
-            raise HTTPException(status_code=404, detail="Page image not found")
-        full_path = Path(image_path) if Path(image_path).is_absolute() else get_project_root() / image_path
-        if not full_path.exists():
-            raise HTTPException(status_code=404, detail="Page image not found")
-        image = Image.open(full_path).convert("RGB")
-        debug_dir = _answer_key_debug_dir(pdf_filename)
-        # 정답지 생성용 Gemini 모델은 전역 설정(rag_config.gemini_extractor_model)에 따라 동작
-        parser = GeminiVisionParser(model_name=getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
-        result = await asyncio.to_thread(
-            parser.parse_image,
-            image,
-            max_size=1200,
-            debug_dir=str(debug_dir),
-            page_number=page_number,
-        )
-
-        items = result.get("items")
-        if items is None:
-            items = []
-        if not isinstance(items, list):
-            items = []
-
-        # 디버깅: 영문 키 생성 위치 추적 — Gemini가 반환한 첫 item의 키를 로그
-        try:
-            from modules.utils.config import get_gemini_prompt_path
-            _prompt_name = get_gemini_prompt_path().name
-            _first_keys = list(items[0].keys()) if items and isinstance(items[0], dict) else []
-            print(f"[generate_answer_with_gemini] prompt_file={_prompt_name} first_item_keys={_first_keys}")
-        except Exception:
-            pass
-
-        page_role = result.get("page_role") or "detail"
-        # items 비어있는데 detail이면 보정: 1페이지=cover, 그 외=summary
-        if not items and page_role == "detail":
-            page_role = "cover" if page_number == 1 else "summary"
-        # page_meta: items, page_role 제외한 나머지 키 (document_ref 등)
-        page_meta = {
-            k: v for k, v in result.items()
-            if k not in ("items", "page_role") and v is not None
-        }
-        activity_log(current_user.get("username"), f"분석(Gemini): {pdf_filename} p.{page_number}")
-        return {
-            "success": True,
-            "page_number": page_number,
-            "page_role": page_role,
-            "page_meta": page_meta if page_meta else None,
-            "items": items,
-        }
-    except HTTPException:
-        raise
-    except ValueError as e:
-        if "GEMINI_API_KEY" in str(e):
-            raise HTTPException(status_code=503, detail="GEMINI_API_KEY가 설정되지 않았습니다.")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.post("/{pdf_filename}/pages/{page_number:int}/generate-answer-rag")
 async def generate_answer_with_rag(
     pdf_filename: str,
@@ -2172,11 +2097,9 @@ async def generate_answer_with_gpt(
     page_number: int,
     current_user: dict = Depends(get_current_user),
     db=Depends(get_db),
-    model: str = "gpt-5.2-2025-12-11",
 ):
     """
-    동일한 프롬프트(prompt_v3.txt)로 GPT Vision에 이미지를 넘겨 정답지(items) 생성.
-    정답지 생성 탭에서는 Gemini 3 Pro Preview 또는 GPT 5.2만 사용.
+    동일한 프롬프트로 GPT Vision에 이미지를 넘겨 정답지(items) 생성. 모델은 config.openai_model 사용.
     """
     try:
         from PIL import Image
@@ -2207,6 +2130,7 @@ async def generate_answer_with_gpt(
 
         from modules.utils.llm_retry import call_with_retry
         client = OpenAI(api_key=api_key)
+        model = rag_config.openai_model
 
         def _gpt_create():
             return call_with_retry(
@@ -2279,7 +2203,6 @@ async def generate_answer_with_gpt(
             "page_role": page_role,
             "page_meta": page_meta if page_meta else None,
             "items": items,
-            "provider": "gpt",
             "model": model,
         }
     except HTTPException:
@@ -2397,9 +2320,8 @@ def _create_items_from_answer_sync(
 
 
 class GenerateItemsFromTemplateRequest(BaseModel):
-    """첫 행(템플릿)으로 나머지 행 LLM 생성 요청"""
+    """첫 행(템플릿)으로 나머지 행 LLM 생성 요청. 모델은 config.openai_model 사용."""
     template_item: dict  # 한 행의 키-값 (키 추가/삭제/편집 가능)
-    provider: Optional[str] = "gpt-5.2"  # "gemini" | "gpt-5.2" — 정답지 탭 드롭다운과 동일
 
 
 def _create_items_from_template_sync(database, pdf_filename: str, page_number: int, items: list, page_role: str):
@@ -2490,8 +2412,6 @@ async def generate_items_from_template(
         template_item = body.template_item if isinstance(body.template_item, dict) else {}
         if not template_item:
             raise HTTPException(status_code=400, detail="template_item is required")
-        provider = (body.provider or "gpt-5.2").strip().lower()
-        use_gemini = provider == "gemini"
 
         image_path = db.get_page_image_path(pdf_filename, page_number)
         if not image_path:
@@ -2506,20 +2426,12 @@ async def generate_items_from_template(
             ratio = min(max_size / w, max_size / h)
             image = image.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
 
-        if use_gemini:
-            from modules.core.extractors.gemini_extractor import GeminiVisionParser
-            model_name = getattr(rag_config, "gemini_extractor_model", "gemini-2.5-flash-lite")
-            parser = GeminiVisionParser(model_name=model_name)
-            result = await asyncio.to_thread(
-                parser.parse_image_with_template, image, template_item, max_size=max_size
-            )
-        else:
-            from openai import OpenAI
-            buf = BytesIO()
-            image.save(buf, format="JPEG", quality=85)
-            b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
-            template_json = json.dumps(template_item, ensure_ascii=False, indent=2)
-            prompt = f"""You are given a document page image and ONE example row (template) with the following keys and values.
+        from openai import OpenAI
+        buf = BytesIO()
+        image.save(buf, format="JPEG", quality=85)
+        b64 = base64.standard_b64encode(buf.getvalue()).decode("ascii")
+        template_json = json.dumps(template_item, ensure_ascii=False, indent=2)
+        prompt = f"""You are given a document page image and ONE example row (template) with the following keys and values.
 Your task: Look at the image and generate ALL rows on this page. Each row must have exactly the same keys as the template.
 Output ONLY a single JSON object with key "items" (array of objects). No other text.
 
@@ -2528,40 +2440,40 @@ Template (one row, keys and example value):
 
 Output format: {{ "items": [ {{ ... }}, {{ ... }}, ... ] }}
 Use the same key names as the template. Fill values from the document for each row."""
-            api_key = getattr(settings, "openai_api_key", None) or __import__("os").getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
-            from modules.utils.llm_retry import call_with_retry
-            client = OpenAI(api_key=api_key)
-            gpt_model = "gpt-5.2-2025-12-11"  # 정답지 탭 GPT 5.2와 동일
+        api_key = getattr(settings, "openai_api_key", None) or __import__("os").getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=503, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+        from modules.utils.llm_retry import call_with_retry
+        client = OpenAI(api_key=api_key)
+        gpt_model = rag_config.openai_model
 
-            def _gpt_create():
-                return call_with_retry(
-                    lambda: client.chat.completions.create(
-                        model=gpt_model,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": prompt},
-                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                                ],
-                            }
-                        ],
-                        max_completion_tokens=4096,
-                    )
+        def _gpt_create():
+            return call_with_retry(
+                lambda: client.chat.completions.create(
+                    model=gpt_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            ],
+                        }
+                    ],
+                    max_completion_tokens=4096,
                 )
-            response = await asyncio.to_thread(_gpt_create)
-            raw_text = (response.choices[0].message.content or "").strip()
-            if not raw_text:
-                raise HTTPException(status_code=502, detail="GPT returned empty content")
-            json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-            result = {"items": [], "page_role": "detail"}
-            if json_match:
-                try:
-                    result = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    pass
+            )
+        response = await asyncio.to_thread(_gpt_create)
+        raw_text = (response.choices[0].message.content or "").strip()
+        if not raw_text:
+            raise HTTPException(status_code=502, detail="GPT returned empty content")
+        json_match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        result = {"items": [], "page_role": "detail"}
+        if json_match:
+            try:
+                result = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
 
         items = result.get("items") or []
         if not isinstance(items, list):

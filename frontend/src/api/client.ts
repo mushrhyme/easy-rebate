@@ -305,20 +305,6 @@ export const documentsApi = {
   },
 
   /**
-   * Gemini zero-shot으로 페이지 정답지 생성 (동일 프롬프트)
-   */
-  generateAnswerWithGemini: async (
-    pdfFilename: string,
-    pageNumber: number
-  ): Promise<{ success: boolean; page_number: number; page_role: string; page_meta?: Record<string, any> | null; items: Array<Record<string, any>> }> => {
-    const encoded = encodeURIComponent(pdfFilename)
-    const response = await client.post(
-      `/api/documents/${encoded}/pages/${pageNumber}/generate-answer`
-    )
-    return response.data
-  },
-
-  /**
    * Azure OCR(표 복원) + RAG+LLM으로 페이지 정답지 생성. 표 구조 보존.
    */
   generateAnswerWithRag: async (
@@ -333,35 +319,31 @@ export const documentsApi = {
   },
 
   /**
-   * 동일 프롬프트(prompt_v3.txt)로 GPT Vision으로 페이지 정답지 생성 (테스트용)
+   * GPT Vision으로 페이지 정답지 생성. 모델은 백엔드 config.openai_model 사용.
    */
   generateAnswerWithGpt: async (
     pdfFilename: string,
-    pageNumber: number,
-    model: string = 'gpt-5.2-2025-12-11'
-  ): Promise<{ success: boolean; page_number: number; page_role: string; page_meta?: Record<string, any> | null; items: Array<Record<string, any>>; provider?: string; model?: string }> => {
+    pageNumber: number
+  ): Promise<{ success: boolean; page_number: number; page_role: string; page_meta?: Record<string, any> | null; items: Array<Record<string, any>>; model?: string }> => {
     const encoded = encodeURIComponent(pdfFilename)
     const response = await client.post(
-      `/api/documents/${encoded}/pages/${pageNumber}/generate-answer-gpt`,
-      null,
-      { params: { model } }
+      `/api/documents/${encoded}/pages/${pageNumber}/generate-answer-gpt`
     )
     return response.data
   },
 
   /**
-   * 첫 행(템플릿)으로 나머지 행 LLM 생성 후 페이지 items 전체 교체. provider는 상단 드롭다운 선택과 동일.
+   * 첫 행(템플릿)으로 나머지 행 LLM 생성. 모델은 백엔드 config.openai_model 사용.
    */
   generateItemsFromTemplate: async (
     pdfFilename: string,
     pageNumber: number,
-    templateItem: Record<string, any>,
-    provider: 'gemini' | 'gpt-5.2' = 'gpt-5.2'
+    templateItem: Record<string, any>
   ): Promise<{ success: boolean; page_number: number; items_count: number; items: Array<Record<string, any>> }> => {
     const encoded = encodeURIComponent(pdfFilename)
     const response = await client.post(
       `/api/documents/${encoded}/pages/${pageNumber}/generate-items-from-template`,
-      { template_item: templateItem, provider }
+      { template_item: templateItem }
     )
     return response.data
   },
@@ -1495,19 +1477,6 @@ export const ragAdminApi = {
   /** 제품 RAG 정답지 벡터 인덱스 재구축 (商品名→商品コード 매핑 시 RAG 우선 검색용) */
   rebuildProductRagAnswerIndex: async (): Promise<{ message: string; vector_count: number }> => {
     const response = await client.post('/api/rag-admin/product-rag-answer-index/rebuild')
-    return response.data
-  },
-}
-/** 分析(기본 RAG) LLM: gemini | gpt5.2 */
-export type RagProvider = 'gemini' | 'gpt5.2'
-
-export const settingsApi = {
-  getRagProvider: async (): Promise<{ provider: RagProvider }> => {
-    const response = await client.get<{ provider: RagProvider }>('/api/settings/rag-provider')
-    return response.data
-  },
-  setRagProvider: async (provider: RagProvider): Promise<{ provider: RagProvider }> => {
-    const response = await client.put<{ provider: RagProvider }>('/api/settings/rag-provider', { provider })
     return response.data
   },
 }

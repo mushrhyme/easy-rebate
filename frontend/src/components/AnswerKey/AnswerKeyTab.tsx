@@ -45,7 +45,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
   const [saveMessage, setSaveMessage] = useState<string>('')
   const [rightView, setRightView] = useState<'kv' | 'template'>('kv')
   const [templateEntries, setTemplateEntries] = useState<Array<{ id: string; key: string; value: string }>>([])
-  const [answerProvider, setAnswerProvider] = useState<'gemini' | 'gpt-5.2'>('gpt-5.2')
   /** 画像 Ctrl+ホイール 拡大縮小 */
   const [imageScale, setImageScale] = useState(1)
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(null)
@@ -134,22 +133,13 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       pageNumber,
       currentRows,
       currentItemDataKeys,
-      provider,
     }: {
       pdfFilename: string
       pageNumber: number
       currentRows: GridRow[]
       currentItemDataKeys: string[]
-      provider: 'gemini' | 'gpt-5.2'
     }) => {
-      const res =
-        provider === 'gemini'
-          ? await documentsApi.generateAnswerWithGemini(pdfFilename, pageNumber)
-          : await documentsApi.generateAnswerWithGpt(
-              pdfFilename,
-              pageNumber,
-              'gpt-5.2-2025-12-11'
-            )
+      const res = await documentsApi.generateAnswerWithGpt(pdfFilename, pageNumber)
       const { items: generatedItems, page_role, page_meta } = res
       const pageIndices = currentRows
         .map((r, i) => (r.page_number === pageNumber ? i : -1))
@@ -488,8 +478,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
       return documentsApi.generateItemsFromTemplate(
         selectedDoc.pdf_filename,
         effectivePageNumber,
-        templateItem,
-        answerProvider
+        templateItem
       )
     },
     onSuccess: (data) => {
@@ -810,8 +799,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
               onPageMetaKeyAdd: grid.onPageMetaKeyAdd,
             }}
             generateCtx={{
-              answerProvider,
-              setAnswerProvider,
               generateAnswerMutation: generateAnswerMutation as { mutate: (arg: unknown) => void; isPending: boolean },
               selectedDoc,
               effectivePageNumber,
