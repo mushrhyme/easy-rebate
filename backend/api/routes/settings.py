@@ -1,60 +1,6 @@
 """
-분석 LLM 등 설정 API (UI에서 변경 가능)
+설정 API (분석 LLM 등은 config에서 단일 설정으로 관리)
 """
-import json
-from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends
-
-from backend.core.auth import get_current_user
-from backend.core.activity_log import log as activity_log
+from fastapi import APIRouter
 
 router = APIRouter()
-
-# 프로젝트 루트 (backend/main.py 기준 parent.parent)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_RAG_PROVIDER_FILE = _PROJECT_ROOT / "config" / "rag_provider.json"
-
-ALLOWED_PROVIDERS = ("gemini", "gpt5.2")
-
-
-def _read_rag_provider() -> str:
-    """설정 파일에서 rag_provider 값을 읽음. 없으면 'gpt5.2' (업로드·분석은 무조건 GPT)."""
-    if not _RAG_PROVIDER_FILE.exists():
-        return "gpt5.2"
-    try:
-        data = json.loads(_RAG_PROVIDER_FILE.read_text(encoding="utf-8"))
-        p = (data.get("provider") or "gpt5.2").strip().lower()
-        return p if p in ALLOWED_PROVIDERS else "gpt5.2"
-    except Exception:
-        return "gpt5.2"
-
-
-def _write_rag_provider(provider: str) -> None:
-    """설정 파일에 rag_provider 저장."""
-    if provider not in ALLOWED_PROVIDERS:
-        raise ValueError(f"provider must be one of {ALLOWED_PROVIDERS}")
-    _RAG_PROVIDER_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _RAG_PROVIDER_FILE.write_text(
-        json.dumps({"provider": provider}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-@router.get("/rag-provider")
-async def get_rag_provider():
-    """분석(기본 RAG)에 사용할 LLM: gemini | gpt5.2"""
-    return {"provider": _read_rag_provider()}
-
-
-@router.put("/rag-provider")
-async def set_rag_provider(body: dict, current_user: dict = Depends(get_current_user)):
-    """분석 LLM 설정 변경. body: { "provider": "gemini" | "gpt5.2" }"""
-    provider = (body.get("provider") or "").strip().lower()
-    if provider not in ALLOWED_PROVIDERS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"provider must be one of {list(ALLOWED_PROVIDERS)}",
-        )
-    _write_rag_provider(provider)
-    activity_log(current_user.get("username"), f"설정 변경: RAG 프로바이더={provider}")
-    return {"provider": provider}

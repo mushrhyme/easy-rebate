@@ -71,10 +71,8 @@ export interface AnswerKeyPageMetaCtx {
   onPageMetaKeyAdd: (newKey: string, newValue: string) => void
 }
 
-/** 正解生成（GPT/Gemini）用 */
+/** 正解生成（config.openai_model） */
 export interface AnswerKeyGenerateCtx {
-  answerProvider: string
-  setAnswerProvider: (v: 'gemini' | 'gpt-5.2') => void
   generateAnswerMutation: { mutate: (arg: unknown) => void; isPending: boolean }
   selectedDoc: { pdf_filename: string; total_pages: number } | null
   /** API 호출 시 사용할 페이지 번호（ブリッジ単一ページ時は 그 페이지만） */
@@ -152,7 +150,7 @@ export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx
     setNewPageMetaValue,
     onPageMetaKeyAdd,
   } = pageMetaCtx
-  const { answerProvider, setAnswerProvider, generateAnswerMutation, selectedDoc, effectivePageNumber } = generateCtx
+  const { generateAnswerMutation, selectedDoc, effectivePageNumber } = generateCtx
   const { saveStatus, saveMessage, readOnly = false } = saveCtx
 
   const typeOptions = gridCtx.typeOptions
@@ -191,15 +189,6 @@ export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx
           <span className="answer-key-dirty-badge">未保存: {dirtyIds.size + pageMetaDirtyPages.size}件</span>
         )}
         <div className="answer-key-provider-row">
-          <select
-            className="answer-key-provider-select"
-            value={answerProvider}
-            onChange={(e) => setAnswerProvider(e.target.value as 'gemini' | 'gpt-5.2')}
-            title="画像からページ全体の正解を一度に生成（Vision）"
-          >
-            <option value="gpt-5.2">GPT</option>
-            <option value="gemini">Gemini</option>
-          </select>
           <button
             type="button"
             className="answer-key-gemini-btn"
@@ -210,11 +199,10 @@ export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx
                 pageNumber: effectivePageNumber ?? currentPage,
                 currentRows: rows,
                 currentItemDataKeys: itemDataKeys,
-                provider: answerProvider,
               })
             }
             disabled={!selectedDoc || generateAnswerMutation.isPending}
-            title="選択したモデルでこのページの正解を一括生成"
+            title="このページの正解を一括生成（config.openai_model）"
           >
             {generateAnswerMutation.isPending ? '生成中…' : '正解生成'}
           </button>
@@ -224,7 +212,7 @@ export function AnswerKeyRightPanel({ viewCtx, templateCtx, gridCtx, pageMetaCtx
       {rightView === 'template' && (
         <div className="answer-key-template-view">
           <p className="answer-key-template-desc">
-            先頭行のみ表示します。キー・値を編集し、「残り行を生成」で選択中のモデル（GPT/Gemini）が同じキー構造の全行を生成します。
+            先頭行のみ表示します。キー・値を編集し、「残り行を生成」で同じキー構造の全行を生成します。
           </p>
           {!allDataLoaded && <p className="answer-key-template-loading">データ読み込み中…</p>}
           {allDataLoaded && currentPageRows.length === 0 && templateEntries.length === 0 && (

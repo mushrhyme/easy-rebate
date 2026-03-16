@@ -263,23 +263,15 @@ def extract_json_with_rag(
     Returns:
         추출된 JSON 딕셔너리
     """
-    # RAG Manager 및 설정 가져오기 (UI 설정 파일 우선)
-    from modules.utils.config import rag_config, get_effective_rag_provider
+    # RAG Manager 및 설정 가져오기 (config.openai_model 단일 설정)
+    from modules.utils.config import rag_config
     config = rag_config
-    effective_provider, effective_model = get_effective_rag_provider()
-    rag_llm_provider = effective_provider
     rag_manager = get_rag_manager()
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY가 필요합니다. .env 파일에 설정하세요.")
+    model_name = model_name or config.openai_model
 
-    # API 키 확인 (provider에 따라)
-    if rag_llm_provider == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY가 필요합니다. .env 파일에 설정하세요.")
-    else:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY가 필요합니다. .env 파일에 설정하세요.")
-    
     # form_type이 전달된 경우 인덱스 새로고침
     # (rag_tab.py와 동일한 동작을 위해 reload_index() 호출)
     # 참고: search_similar_advanced() 내부에서도 form_type별 인덱스를 로드하지만,
@@ -287,14 +279,8 @@ def extract_json_with_rag(
     if form_type:
         rag_manager.reload_index()
     
-    # 파라미터가 None이면 config 또는 UI 설정에서 가져오기
+    # 파라미터가 None이면 config에서 가져오기
     question = question or config.question
-    if effective_model is not None:
-        model_name = effective_model
-    elif rag_llm_provider == "gemini":
-        model_name = getattr(config, "gemini_extractor_model", "gemini-2.5-flash-lite")
-    else:
-        model_name = model_name or config.openai_model
     top_k = top_k if top_k is not None else config.top_k
     similarity_threshold = similarity_threshold if similarity_threshold is not None else config.similarity_threshold
     search_method = getattr(config, 'search_method', 'hybrid')  # 기본값: hybrid
@@ -448,46 +434,25 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         except Exception:
             pass
 
-    # 3. LLM API 호출 (provider에 따라 Gemini 또는 GPT 사용)
+    # 3. LLM API 호출 (config.openai_model 사용)
     if progress_callback:
         progress_callback(f"🤖 LLM ({model_name})에 요청 중...")
     
     try:
         llm_start_time = time.time()
-        if rag_llm_provider == "gemini":
-            # Gemini (gemini_extractor 모델) 사용
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(model_name)
-            gen_config = {"max_output_tokens": 8000, "temperature": temperature}
-            response = model.generate_content(prompt, generation_config=gen_config)
-            llm_end_time = time.time()
-            llm_duration = llm_end_time - llm_start_time
-            if not response.candidates or not response.candidates[0].content:
-                raise Exception("Gemini API 응답에 content가 없습니다.")
-            result_parts = []
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    result_parts.append(part.text)
-            result_text = "".join(result_parts) if result_parts else ""
-        else:
-            # GPT (OpenAI) 사용
-            client = OpenAI(api_key=api_key)
-            api_params = {
-                "model": model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "timeout": 120,
-                "max_completion_tokens": 8000,
-                "temperature": temperature,
-                "reasoning_effort": "none",  # GPT-5.2/5.1: temperature 사용 시 필수
-            }
-            try:
-                response = call_with_retry(lambda: client.chat.completions.create(**api_params))
-                llm_end_time = time.time()
-                llm_duration = llm_end_time - llm_start_time
-                result_text = response.choices[0].message.content or ""
-            except Exception as api_error:
-                raise
+        client = OpenAI(api_key=api_key)
+        api_params = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "timeout": 120,
+            "max_completion_tokens": 8000,
+            "temperature": temperature,
+            "reasoning_effort": "none",  # GPT-5.2/5.1: temperature 사용 시 필수
+        }
+        response = call_with_retry(lambda: client.chat.completions.create(**api_params))
+        llm_end_time = time.time()
+        llm_duration = llm_end_time - llm_start_time
+        result_text = response.choices[0].message.content or ""
         if progress_callback:
             progress_callback("LLM 응답 수신 완료, JSON 파싱 중...")
         

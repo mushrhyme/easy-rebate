@@ -56,15 +56,8 @@ class RAGConfig:
     similarity_threshold: float = 0.7
     search_method: str = "hybrid"
     hybrid_alpha: float = 0.5
-    # RAG 최종 프롬프트용 LLM 선택: "gpt" | "gemini" (gemini_extractor 사용)
-    rag_llm_provider: str = "gemini"  # "gpt"로 변경 시 openai_model 사용
-    # openai_model: str="gpt-5.2-2025-12-11"
-    # openai_model: str = "gpt-5.1-2025-11-13"
-    # openai_model: str = "gpt-5-2025-08-07"
-    # openai_model: str = "gpt-5-mini-2025-08-07"
-    openai_model: str = "gpt-4o-2024-11-20"  # rag_llm_provider="gpt" 일 때 사용
-    # openai_model: str = "gpt-4o-2024-08-06"
-    gemini_extractor_model: str = "gemini-2.5-flash-lite"  # rag_llm_provider="gemini" 일 때 사용
+    # RAG·정답지·템플릿 생성 등 모든 LLM 호출에 사용할 OpenAI 모델 (단일 설정)
+    openai_model: str = "gpt-5.2-2025-12-11"
     question: str = "이 페이지의 상품명, 수량, 금액 등 항목 정보를 모두 추출해줘"
     max_parallel_workers: int = 3  # Azure OCR 1단계 병렬 수 (1=순차, 3~5 권장. 업스테이지와 달리 동시 호출 가능)
     rag_llm_parallel_workers: int = 5  # RAG+LLM 2단계 병렬 워커 수
@@ -131,34 +124,11 @@ def load_rag_prompt() -> str:
 
 def load_gemini_prompt() -> str:
     """
-    Gemini 프롬프트 파일을 읽어서 반환합니다.
+    정답지 생성용 프롬프트 파일을 읽어서 반환합니다. (파일명은 레거시로 gemini_prompt_file 사용)
     """
     prompt_path = get_gemini_prompt_path()
     if not prompt_path.exists():
-        raise FileNotFoundError(f"Gemini 프롬프트 파일을 찾을 수 없습니다: {prompt_path}")
+        raise FileNotFoundError(f"프롬프트 파일을 찾을 수 없습니다: {prompt_path}")
     with open(prompt_path, 'r', encoding='utf-8') as f:
         return f.read()
-
-
-def get_effective_rag_provider():
-    """
-    UI 설정 파일(config/rag_provider.json)을 읽어 실제 사용할 (provider, model_name) 반환.
-    provider: "gemini" | "gpt"
-    model_name: rag_config의 모델 또는 gpt5.2일 때 "gpt-5.2-2025-12-11"
-    """
-    import json
-    config = rag_config
-    path = get_project_root() / "config" / "rag_provider.json"
-    if not path.exists():
-        return (getattr(config, "rag_llm_provider", "gemini"), None)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        p = (data.get("provider") or "gemini").strip().lower()
-    except Exception:
-        return (getattr(config, "rag_llm_provider", "gemini"), None)
-    if p == "gpt5.2":
-        return ("gpt", "gpt-5.2-2025-12-11")
-    if p == "gemini":
-        return ("gemini", getattr(config, "gemini_extractor_model", "gemini-2.5-flash-lite"))
-    return (getattr(config, "rag_llm_provider", "gemini"), None)
 
