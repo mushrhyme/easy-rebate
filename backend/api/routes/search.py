@@ -513,9 +513,10 @@ async def get_product_candidates_by_sap_product(
         df_sap.columns = [c.strip().lstrip("\ufeff") for c in df_sap.columns]
         scored = []
         for _, r in df_sap.iterrows():
-            name = (r.get("제품명") or "").strip()
+            # CSV 컬럼: 제품명 또는 商品名
+            name = (r.get("제품명") or r.get("商品名") or "").strip()
             sap_name = (r.get("SAP제품명") or "").strip()
-            code = (r.get("제품코드") or "").strip()
+            code = (r.get("제품코드") or r.get("商品コード") or "").strip()
             if not code:
                 continue
             s1 = _similarity_difflib(q, name) if name else 0.0
@@ -529,6 +530,31 @@ async def get_product_candidates_by_sap_product(
         return {"query": q, "matches": matches}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/product/name-by-code")
+async def get_product_name_by_code(
+    code: str = Query(..., description="商品コード（제품코드）"),
+):
+    """
+    sap_product.csv에서 商品コード로 1건 조회해 제품명 반환. 単価 탭 検索 필드 표시용.
+    반환: { 제품명: "..." } or { 제품명: null } (없으면 null)
+    """
+    code = (code or "").strip()
+    if not code or not _SAP_PRODUCT_CSV.exists():
+        return {"제품명": None}
+    try:
+        df_sap = pd.read_csv(_SAP_PRODUCT_CSV, dtype=str, encoding="utf-8-sig")
+        df_sap.columns = [c.strip().lstrip("\ufeff") for c in df_sap.columns]
+        for _, r in df_sap.iterrows():
+            c = (r.get("제품코드") or r.get("商品コード") or "").strip()
+            if c != code:
+                continue
+            name = (r.get("제품명") or r.get("商品名") or "").strip()
+            return {"제품명": name or None}
+        return {"제품명": None}
+    except Exception:
+        return {"제품명": None}
 
 
 @router.get("/unit-price-by-product-code")

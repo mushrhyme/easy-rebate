@@ -282,23 +282,31 @@ export function UnitPriceMatchModal({
     }
   }, [open, customerName, row])
 
-  /** 商品コード가 바뀌면 unit_price에서 仕切・本部長 조회해 자동완성 */
+  /** 商品コード가 바뀌면 unit_price에서 仕切・本部長 조회 + sap_product에서 제품명 조회해 検索 필드·자동완성 */
   useEffect(() => {
     const code = unitFinalForm.商品コード.trim()
     if (!code || !open || activeTab !== 'unit_price') {
-      if (!code) setUnitPriceAutoFill({ 仕切: null, 本部長: null })
+      if (!code) {
+        setUnitPriceAutoFill({ 仕切: null, 本部長: null })
+        setSapProductQuery('')
+      }
       return
     }
-    searchApi
-      .getUnitPriceByProductCode(code)
-      .then((res) => {
-        if (res.row) {
-          setUnitPriceAutoFill({ 仕切: res.row.仕切, 本部長: res.row.本部長 })
+    Promise.all([
+      searchApi.getUnitPriceByProductCode(code),
+      searchApi.getProductNameByCode(code),
+    ])
+      .then(([priceRes, nameRes]) => {
+        if (priceRes.row) {
+          setUnitPriceAutoFill({ 仕切: priceRes.row.仕切, 本部長: priceRes.row.本部長 })
         } else {
           setUnitPriceAutoFill({ 仕切: null, 本部長: null })
         }
+        if (nameRes.제품명) setSapProductQuery(nameRes.제품명)
       })
-      .catch(() => setUnitPriceAutoFill({ 仕切: null, 本部長: null }))
+      .catch(() => {
+        setUnitPriceAutoFill({ 仕切: null, 本部長: null })
+      })
   }, [open, activeTab, unitFinalForm.商品コード])
 
   /** sap_product 검색: 単価 最終候補 검색 필드 원천 */
@@ -547,10 +555,12 @@ export function UnitPriceMatchModal({
     onClose()
   }
 
-  /** 검색에서 선택 시 商品コード만 최종후보에 반영（仕切・本部長는 商品コード로 자동 조회） */
-  const applySapProductMatchToForm = useCallback((m: { 제품코드: string; 제품명: string }) => {
-    setUnitFinalForm({ 商品コード: m.제품코드 ?? '' })
-    setSapProductQuery('')
+  /** 검색에서 선택 시 商品コード를 최종후보에 반영, 검색 필드에는 선택한 제품명 표시（仕切・本部長는 商品コード로 자동 조회） */
+  const applySapProductMatchToForm = useCallback((m: { 제품코드?: string; 제품명?: string; 商品コード?: string; 商品名?: string }) => {
+    const code = m.제품코드 ?? m.商品コード ?? ''
+    const displayName = (m.제품명 ?? m.商品名 ?? '').trim()
+    setUnitFinalForm({ 商品コード: code })
+    setSapProductQuery((prev) => (displayName || prev))
     setSapProductMatches([])
   }, [])
 
