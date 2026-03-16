@@ -1,0 +1,321 @@
+REFERENCE_OCR (OCR example for structural reference):
+{example_ocr}
+
+REFERENCE_JSON (correct answer structure example):
+{example_answer_str}
+
+TARGET_OCR (actual OCR text to process):
+{ocr_text}
+
+MISSION
+
+Your task is to fully restructure the TARGET_OCR document into a JSON object.
+
+The output JSON must strictly follow the same structure and semantic system as REFERENCE_JSON.
+
+All extracted values must come only from TARGET_OCR.
+
+IMPORTANT PRINCIPLES
+
+All data must be extracted only from TARGET_OCR.
+
+Do not generate or guess values that do not exist in the document.
+
+JSON field names must remain exactly identical to REFERENCE_JSON.
+
+Field names must never be translated, modified, or mixed with other languages.
+
+The output must contain exactly one valid JSON object only.
+
+FIELD NAME IMMUTABILITY RULE (CRITICAL)
+
+The JSON field names must be copied EXACTLY from REFERENCE_JSON.
+
+Do NOT:
+
+invent new field names
+
+translate field names
+
+partially modify field names
+
+mix languages in field names
+
+create variations of existing field names
+
+If a key does not exist in REFERENCE_JSON, it must NEVER appear in the output.
+
+The output JSON schema must be a strict clone of REFERENCE_JSON keys.
+
+Only the values may change.
+
+OUTPUT STRUCTURE RULES
+
+The output JSON must have exactly the same structure as REFERENCE_JSON.
+
+This includes:
+
+object structure
+
+array structure
+
+key names
+
+key order
+
+All must remain identical to REFERENCE_JSON.
+
+GENERATION PROCEDURE
+
+Follow this procedure strictly:
+
+Copy the entire JSON structure from REFERENCE_JSON.
+
+Keep every key exactly identical.
+
+Replace only the values using information extracted from TARGET_OCR.
+
+Do not modify, add, remove, or rename any keys.
+
+JSON OUTPUT RULES
+
+Return exactly one JSON object
+
+Do not include explanations
+
+Do not include comments
+
+Do not include markdown code blocks
+
+Do not add any text before or after the JSON
+
+PAGE ROLE RULES
+
+The field page_role must be a string and must be one of:
+
+"cover"
+"detail"
+"summary"
+"reply"
+
+page_role must be inferred from the content of the current page.
+
+It is not explicitly written in the document.
+
+page_role decision rules (priority order):
+
+If the page contains repeating item rows such as product / quantity / amount records → "detail"
+
+If the page mainly contains totals, tax, or summary billing information → "summary"
+
+If the page mainly contains company name, address, invoice title, document identifiers,
+and no repeating item rows → "cover"
+
+Otherwise → "reply"
+
+ITEMS ARRAY RULES
+
+The items field is allowed **only when page_role = "detail"`.
+
+Strict rules:
+
+If page_role = "detail":
+
+items must always exist
+
+items must always be an array
+
+if no rows exist → items: []
+
+If page_role = "cover", "summary", or "reply":
+
+do not output the items key at all
+
+do not output items: []
+
+do not inherit items from REFERENCE_JSON
+
+Page classification takes precedence over schema imitation for the items field.
+
+ROW EXTRACTION RULES
+
+All recognizable item rows in OCR must be extracted into the items array.
+
+Important:
+
+Do not delete rows
+
+Do not merge rows
+
+If the same row appears multiple times, keep all occurrences
+
+VALUE EXTRACTION RULES
+
+All fields follow this rule:
+
+If the value exists in the document → extract it.
+
+If the value does not exist → return null.
+
+REFERENCE_OCR COLUMN STRUCTURE RULE
+
+REFERENCE_OCR preserves the approximate table column layout.
+
+Use REFERENCE_OCR to identify the relative column positions of fields.
+
+In TARGET_OCR:
+
+extract values using row-level alignment
+
+use relative column order
+
+do not rely on exact spacing
+
+AMOUNT NORMALIZATION RULE
+
+Money values may contain OCR punctuation artifacts such as :.
+
+Example OCR:
+
+1:500
+1:566
+12:600
+
+In these cases:
+
+Remove the colon and concatenate the digits.
+
+Examples:
+
+"1:500" → "1500"
+"12:600" → "12600"
+
+Do not invent digits that do not appear in OCR.
+
+NUMBER FORMAT RULE
+
+Extract numeric values conservatively from TARGET_OCR.
+
+Do not infer decimal placement unless it is clearly supported by the OCR text.
+
+If OCR numeric formatting is ambiguous, prefer preserving the OCR value rather than guessing a decimal conversion.
+
+備考 / 条件備考 RULES
+
+備考 and 条件備考 are different fields.
+
+If both keys exist in REFERENCE_JSON, both must be populated for each item row.
+
+備考
+
+備考 corresponds to the column labeled "備考" in the table.
+
+Use the column position indicated in REFERENCE_OCR to extract the value from the same row in TARGET_OCR.
+
+Typical content:
+
+staff names
+
+short notes
+
+Example:
+
+栗田 康広
+
+Output rule:
+
+Convert line breaks (\n) into a single space.
+Do not use tabs.
+
+条件備考
+
+Sometimes REFERENCE_JSON contains 条件備考 even when the header is not explicitly labeled.
+
+In this case:
+
+Use REFERENCE_OCR to determine the column position.
+
+Extract the corresponding text from the same row in TARGET_OCR.
+
+This is often a long text block located near the right side of the row.
+
+Example:
+
+ミセダシ ウリアゲ キホンジョウケン
+ＳＣ：７桁コード
+Ｎ１ Ｋ
+
+Output normalization:
+
+Inside the 条件備考 string:
+
+consecutive spaces
+
+tabs
+
+full-width spaces
+
+must be normalized into a single regular space.
+
+Tabs must never appear in JSON.
+
+SAME-AS SYMBOL RULE (DITTO HANDLING)
+
+Some table cells may contain symbols meaning “same as the previous row”.
+
+Examples include:
+
+〃
+″
+"
+'
+//
+／
+1/
+/
+
+If a cell contains only such repetition symbols, treat the value as null.
+
+These symbols must never appear in the output JSON.
+
+Example:
+
+If 商品名 cell contains only a ditto symbol → return
+
+商品名 = null
+
+The previous row value will be filled during post-processing.
+
+IMPORTANT
+
+This task is not answering a question.
+
+This task converts the OCR document into a normalized JSON structure.
+
+TARGET_OCR is used to analyze document structure, not to limit extraction scope.
+
+FAIL-SAFE RULE
+
+If extraction is uncertain:
+
+still return exactly one valid JSON object
+
+preserve the full REFERENCE_JSON structure
+
+fill uncertain values with null
+
+Never output:
+
+explanations
+
+notes
+
+comments
+
+markdown
+
+Always return valid JSON only.
+
+FINAL OUTPUT
+
+Return exactly one valid JSON object.s

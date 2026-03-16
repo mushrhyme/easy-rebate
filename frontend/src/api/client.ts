@@ -821,6 +821,18 @@ export const searchApi = {
   },
 
   /**
+   * 商品コード로 sap_product에서 제품명 1건 조회. 単価 탭 検索 필드 표시용.
+   */
+  getProductNameByCode: async (
+    code: string
+  ): Promise<{ 제품명: string | null }> => {
+    const response = await client.get('/api/search/product/name-by-code', {
+      params: { code },
+    })
+    return response.data
+  },
+
+  /**
    * 商品コード로 unit_price 1건 조회. 仕切・本部長 자동완성용.
    */
   getUnitPriceByProductCode: async (

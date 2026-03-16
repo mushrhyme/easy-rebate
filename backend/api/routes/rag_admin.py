@@ -411,6 +411,8 @@ def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> O
     if not ocr_text:
         return None
     answer_json = {**page_meta, "page_role": page_role, "items": merged_items}
+    # タイプ 확정 전 저장된 page_meta 대비, 문서 확정 form_type으로 덮어써 벡터 DB에 항상 최신 반영
+    answer_json["form_type"] = (first_row.get("form_type") or "").strip()
     metadata = {
         "pdf_name": pdf_name,
         "page_num": page_number,
@@ -559,11 +561,12 @@ async def build_vector_from_learning_pages(
             # OCR 추출 실패 시 스킵 (빈 텍스트로 임베딩할 수 없음)
             continue
 
-        # answer_json: page_meta(문서 메타) + page_role + items
+        # answer_json: page_meta(문서 메타) + page_role + items. form_type은 문서 확정값으로 덮어쓰기
         answer_json: Dict[str, Any] = {
             **page_meta,
             "page_role": page_role,
             "items": merged_items,
+            "form_type": form_type_for_page,
         }
 
         metadata: Dict[str, Any] = {
