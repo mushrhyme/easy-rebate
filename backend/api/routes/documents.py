@@ -1305,14 +1305,15 @@ def _reanalyze_page_rag_only_sync(
 ) -> Dict:
     """
     재분석 전용: OCR은 실행하지 않고 DB에서 받은 ocr_text로 RAG+LLM만 실행.
-    Returns: page_json (page_number 포함).
+    Returns: page_json (page_number 포함). 디버그 출력은 debug2/{문서명}/ 에 저장.
     """
-    import tempfile
     from modules.utils.config import rag_config
     from modules.core.extractors.rag_extractor import extract_json_with_rag
 
-    # debug2 의존 제거: 임시 디렉터리 사용 (RAG 내부 디버그 저장용, 실행 후 정리 가능)
-    debug_base = tempfile.mkdtemp(prefix="rag_reanalyze_")
+    # 재분석 결과를 debug2에 저장 (최초 분석과 동일 경로)
+    pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    debug_base = get_project_root() / "debug2" / pdf_name
+    debug_base.mkdir(parents=True, exist_ok=True)
 
     page_json = extract_json_with_rag(
         ocr_text=ocr_text,
