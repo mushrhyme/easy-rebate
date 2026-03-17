@@ -253,9 +253,21 @@ class RAGManager:
                             UNIQUE(pdf_filename, page_number)
                         )
                     """)
-                    cursor.execute(
+                        cursor.execute(
                         "CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_form_type ON rag_page_embeddings(form_type)"
                     )
+                    conn.commit()
+                # 벡터 검색용 HNSW 인덱스 (테이블 유무와 무관하게 항상 확인)
+                cursor.execute("""
+                    SELECT 1 FROM pg_indexes
+                    WHERE tablename = 'rag_page_embeddings'
+                    AND indexname = 'idx_rag_page_embeddings_hnsw'
+                """)
+                if not cursor.fetchone():
+                    cursor.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_hnsw
+                        ON rag_page_embeddings USING hnsw (embedding vector_cosine_ops)
+                    """)
                     conn.commit()
         except Exception as e:
             print(f"⚠️ pgvector 테이블 생성 중 오류 (무시 가능): {e}")
@@ -283,7 +295,7 @@ class RAGManager:
                                (embedding <=> %s::vector) AS dist
                         FROM rag_page_embeddings
                         WHERE form_type = %s
-                        ORDER BY embedding <=> %s::vector
+                        ORDER BY embedding <=> %s::vector ASC, updated_at DESC
                         LIMIT %s
                     """, (emb_str, form_type, emb_str, top_k * 2))
                 else:
@@ -291,14 +303,14 @@ class RAGManager:
                         SELECT pdf_filename, page_number, ocr_text, answer_json, form_type,
                                (embedding <=> %s::vector) AS dist
                         FROM rag_page_embeddings
-                        ORDER BY embedding <=> %s::vector
+                        ORDER BY embedding <=> %s::vector ASC, updated_at DESC
                         LIMIT %s
                     """, (emb_str, emb_str, top_k * 2))
                 rows = cursor.fetchall()
             results = []
             for row in rows:
                 pdf_filename, page_number, ocr_text, answer_json, ft, dist = row[0], row[1], row[2], row[3], row[4], float(row[5])
-                similarity = max(0.0, 1.0 - (dist / 100.0))
+                similarity = max(0.0, 1.0 - dist)
                 if similarity < similarity_threshold:
                     continue
                 pdf_name = pdf_filename[:-4] if (pdf_filename or "").lower().endswith(".pdf") else (pdf_filename or "")
@@ -351,6 +363,7 @@ class RAGManager:
                         answer_json = EXCLUDED.answer_json, form_type = EXCLUDED.form_type, updated_at = CURRENT_TIMESTAMP
                 """, (pdf_filename, page_number, ocr_text or "", emb_str, json.dumps(answer_json or {}, ensure_ascii=False), form_val))
                 conn.commit()
+            self._bm25_index = None  # 학습 요청 후 BM25 캐시 무효화 (다음 검색 시 pgvector 기준으로 재구축)
             return True
         except Exception as e:
             print(f"⚠️ pgvector upsert 실패: {e}")
@@ -1099,6 +1112,31 @@ class RAGManager:
         return None
     
     def get_all_examples(self) -> List[Dict[str, Any]]:
+        if self.use_db and getattr(self, "db", None):
+            try:
+                from modules.utils.hash_utils import get_page_key
+                with self.db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT pdf_filename, page_number, ocr_text, answer_json, form_type
+                        FROM rag_page_embeddings
+                        ORDER BY pdf_filename, page_number
+                    """)
+                    rows = cursor.fetchall()
+                examples = []
+                for row in rows:
+                    pdf_filename, page_number, ocr_text, answer_json, form_type = row
+                    pdf_name = pdf_filename[:-4] if (pdf_filename or "").lower().endswith(".pdf") else (pdf_filename or "")
+                    doc_id = get_page_key(pdf_name, page_number)
+                    examples.append({
+                        "id": doc_id,
+                        "ocr_text": ocr_text or "",
+                        "answer_json": answer_json or {},
+                        "metadata": {"pdf_name": pdf_name, "page_num": page_number, "form_type": form_type or ""},
+                    })
+                return examples
+            except Exception as e:
+                print(f"⚠️ pgvector get_all_examples 실패, FAISS 폴백: {e}")
         examples = []
         for doc_id, data in self.metadata.items():
             examples.append({
@@ -1111,33 +1149,16 @@ class RAGManager:
         return examples
     
     def count_examples(self) -> int:
-        if self.use_db:
+        if self.use_db and getattr(self, "db", None):
             try:
                 with self.db.get_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT vector_count
-                        FROM rag_vector_index
-                        WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '')
-                        ORDER BY updated_at DESC
-                        LIMIT 1
-                    """)
+                    cursor.execute("SELECT COUNT(*) FROM rag_page_embeddings")
                     row = cursor.fetchone()
-                    if row and row[0]:
-                        return row[0]
-                    cursor.execute("""
-                        SELECT COALESCE(SUM(vector_count), 0)
-                        FROM rag_vector_index
-                    """)
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        return row[0]
-                    return len(self.metadata)
+                    return int(row[0]) if row else 0
             except Exception as e:
                 print(f"⚠️ DB에서 벡터 수 확인 실패: {e}")
-                return len(self.metadata)
-        else:
-            return len(self.metadata)
+        return len(self.metadata)
     
     @staticmethod
     def preprocess_ocr_text(ocr_text: str) -> str:
@@ -1372,23 +1393,18 @@ class RAGManager:
                 bm25_scores[doc_id] = bm25_scores_list[bm25_idx]
         
         # 하이브리드 점수 계산
+        # BM25 정규화: 후보 풀이 아닌 전체 인덱스 기준 → top_k 크기에 무관하게 점수 안정
+        global_max_bm25 = float(max(bm25_scores_list)) if len(bm25_scores_list) > 0 else 1.0
+        global_min_bm25 = 0.0  # BM25 점수는 항상 0 이상
         hybrid_results = []
-        candidate_bm25_scores = [bm25_scores.get(r["id"], 0.0) for r in vector_results]
-        
-        if candidate_bm25_scores:
-            max_bm25 = max(candidate_bm25_scores)
-            min_bm25 = min(candidate_bm25_scores)
-        else:
-            max_bm25 = 1.0
-            min_bm25 = 0.0
-        
+
         for result in vector_results:
             doc_id = result["id"]
             vector_similarity = result["similarity"]
             
-            # BM25 점수 정규화
+            # BM25 점수 정규화 (전체 인덱스 기준)
             bm25_score = bm25_scores.get(doc_id, 0.0)
-            normalized_bm25 = self._normalize_score(bm25_score, min_bm25, max_bm25)
+            normalized_bm25 = self._normalize_score(bm25_score, global_min_bm25, global_max_bm25)
             
             # 하이브리드 점수
             hybrid_score = hybrid_alpha * vector_similarity + (1 - hybrid_alpha) * normalized_bm25
