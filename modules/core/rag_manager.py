@@ -253,7 +253,7 @@ class RAGManager:
                             UNIQUE(pdf_filename, page_number)
                         )
                     """)
-                        cursor.execute(
+                    cursor.execute(
                         "CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_form_type ON rag_page_embeddings(form_type)"
                     )
                     conn.commit()

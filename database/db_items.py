@@ -396,13 +396,14 @@ class ItemsMixin:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 # 재분석 시 기존 검토 상태 보존: DELETE 전에 item_order별 1차/2차 검토 상태 조회
+                # current에 없으면 archive에서 조회 (과거 연월 문서는 archive에 있을 수 있음)
                 review_by_order: Dict[int, Dict[str, Any]] = {}
-                try:
-                    cursor.execute("""
+                def _fill_review_from_table(table: str) -> None:
+                    cursor.execute(f"""
                         SELECT item_order, first_review_checked, second_review_checked,
                                first_reviewed_at, second_reviewed_at,
                                first_reviewed_by_user_id, second_reviewed_by_user_id
-                        FROM items_current
+                        FROM {table}
                         WHERE pdf_filename = %s AND page_number = %s
                         ORDER BY item_order
                     """, (pdf_filename, page_number))
@@ -415,6 +416,10 @@ class ItemsMixin:
                             "first_reviewed_by_user_id": row[5],
                             "second_reviewed_by_user_id": row[6],
                         }
+                try:
+                    _fill_review_from_table("items_current")
+                    if not review_by_order:
+                        _fill_review_from_table("items_archive")
                 except Exception:
                     pass
                 current_vector_version = 1
