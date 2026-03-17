@@ -236,41 +236,7 @@ CREATE TABLE page_images_archive (
 );
 
 -- ============================================
--- 7. RAG 학습 상태 테이블 (current/archive)
--- ============================================
-
--- rag_learning_status_current 테이블
-CREATE TABLE rag_learning_status_current (
-    learning_id SERIAL PRIMARY KEY,
-    pdf_filename VARCHAR(500) NOT NULL,
-    page_number INTEGER NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-    page_hash VARCHAR(64),
-    fingerprint_mtime REAL,
-    fingerprint_size INTEGER,
-    shard_id VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(pdf_filename, page_number)
-);
-
--- rag_learning_status_archive 테이블
-CREATE TABLE rag_learning_status_archive (
-    learning_id SERIAL PRIMARY KEY,
-    pdf_filename VARCHAR(500) NOT NULL,
-    page_number INTEGER NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-    page_hash VARCHAR(64),
-    fingerprint_mtime REAL,
-    fingerprint_size INTEGER,
-    shard_id VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(pdf_filename, page_number)
-);
-
--- ============================================
--- 8. RAG 벡터 인덱스 테이블 (필수)
+-- 7. RAG 벡터 인덱스 테이블 (필수)
 -- ============================================
 
 -- 단일 글로벌 벡터 인덱스만 사용 (양식별 인덱스 없음). form_type은 NULL 또는 '' = 글로벌.
@@ -288,7 +254,7 @@ CREATE TABLE rag_vector_index (
 );
 
 -- ============================================
--- 8-2. pgvector 페이지 임베딩 테이블 (Phase 2)
+-- 7-2. pgvector 페이지 임베딩 테이블 (Phase 2, RAG 검색 단일 소스)
 -- ============================================
 -- 페이지 1건 = 1행. 학습 요청 시 INSERT, 재학습 시 (pdf_filename, page_number) 기준 UPDATE.
 -- RAG 검색: ORDER BY embedding <=> query_embedding, form_type 필터 가능.
@@ -308,7 +274,7 @@ CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_form_type ON rag_page_embeddi
 -- 벡터 인덱스(ivfflat/hnsw)는 데이터 적재 후 필요 시 별도 생성 (빈 테이블에선 실패 가능)
 
 -- ============================================
--- 9. 필드 매핑 테이블 (논리키 → 양식별 실제 필드명)
+-- 8. 필드 매핑 테이블 (논리키 → 양식별 실제 필드명)
 -- ============================================
 
 CREATE TABLE form_field_mappings (
@@ -348,7 +314,7 @@ CREATE TABLE form_type_labels (
 );
 
 -- ============================================
--- 10. 인덱스 생성 (IF NOT EXISTS 로 재실행 시 에러 방지)
+-- 9. 인덱스 생성 (IF NOT EXISTS 로 재실행 시 에러 방지)
 -- ============================================
 
 -- documents_current 인덱스
@@ -419,16 +385,6 @@ CREATE INDEX IF NOT EXISTS idx_page_images_current_pdf_page ON page_images_curre
 CREATE INDEX IF NOT EXISTS idx_page_images_archive_pdf_filename ON page_images_archive(pdf_filename);
 CREATE INDEX IF NOT EXISTS idx_page_images_archive_pdf_page ON page_images_archive(pdf_filename, page_number);
 
--- rag_learning_status_current 인덱스
-CREATE INDEX IF NOT EXISTS idx_rag_learning_status_current_pdf_page ON rag_learning_status_current(pdf_filename, page_number);
-CREATE INDEX IF NOT EXISTS idx_rag_learning_status_current_status ON rag_learning_status_current(status);
-CREATE INDEX IF NOT EXISTS idx_rag_learning_status_current_hash ON rag_learning_status_current(page_hash);
-
--- rag_learning_status_archive 인덱스
-CREATE INDEX IF NOT EXISTS idx_rag_learning_status_archive_pdf_page ON rag_learning_status_archive(pdf_filename, page_number);
-CREATE INDEX IF NOT EXISTS idx_rag_learning_status_archive_status ON rag_learning_status_archive(status);
-CREATE INDEX IF NOT EXISTS idx_rag_learning_status_archive_hash ON rag_learning_status_archive(page_hash);
-
 -- rag_vector_index 인덱스
 CREATE INDEX IF NOT EXISTS idx_rag_vector_index_name ON rag_vector_index(index_name);
 CREATE INDEX IF NOT EXISTS idx_rag_vector_index_form_type ON rag_vector_index(form_type);
@@ -448,7 +404,7 @@ CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
 
 -- ============================================
--- 11. 함수 생성
+-- 10. 함수 생성
 -- ============================================
 
 -- 만료된 락 정리 함수 (current + archive 모두 처리)

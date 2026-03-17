@@ -156,14 +156,6 @@ class ArchiveMigration:
                                 WHERE pdf_filename IN ({placeholders})
                                 ON CONFLICT (pdf_filename, page_number) DO NOTHING
                             """, pdf_filenames)
-                        elif 'rag_learning_status' in current_table:
-                            # rag_learning_status는 (pdf_filename, page_number) UNIQUE
-                            cursor.execute(f"""
-                                INSERT INTO {archive_table}
-                                SELECT * FROM {current_table}
-                                WHERE pdf_filename IN ({placeholders})
-                                ON CONFLICT (pdf_filename, page_number) DO NOTHING
-                            """, pdf_filenames)
                         elif 'items' in current_table:
                             # items는 item_id가 PRIMARY KEY이므로 ON CONFLICT 사용
                             cursor.execute(f"""
@@ -229,7 +221,6 @@ class ArchiveMigration:
                     'items_archive',
                     'page_data_archive',
                     'page_images_archive',
-                    'rag_learning_status_archive',
                     'item_locks_archive'
                 ]
                 
@@ -301,7 +292,6 @@ class ArchiveMigration:
                 ('page_data_current', 'page_data_archive'),
                 ('items_current', 'items_archive'),
                 ('page_images_current', 'page_images_archive'),
-                ('rag_learning_status_current', 'rag_learning_status_archive'),
                 ('item_locks_current', 'item_locks_archive'),
             ]
             
