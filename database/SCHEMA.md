@@ -75,14 +75,7 @@
 - **주요 컬럼**: `image_id` (PK), `pdf_filename` (FK → documents_*), `page_number`, `image_path`, `image_format`, `image_size`, `created_at`
 - **제약조건**: `UNIQUE(pdf_filename, page_number)`
 
-### 6. RAG 학습 상태 테이블
-
-#### `rag_learning_status_current` / `rag_learning_status_archive`
-- **용도**: 벡터DB 학습 상태 관리.
-- **주요 컬럼**: `learning_id` (PK), `pdf_filename`, `page_number`, `status` (pending/staged/merged/deleted), `page_hash`, `fingerprint_mtime`, `fingerprint_size`, `shard_id`, `created_at`, `updated_at`
-- **제약조건**: `UNIQUE(pdf_filename, page_number)`
-
-### 7. RAG 벡터 인덱스 테이블
+### 6. RAG 벡터 인덱스 테이블
 
 #### `rag_vector_index`
 - **용도**: FAISS 벡터 인덱스 저장 (단일 글로벌 인덱스만 사용, 양식별 인덱스 없음).
@@ -90,7 +83,12 @@
 - **제약조건**: `UNIQUE(index_name, form_type)`
 - **참고**: 검색은 글로벌로 수행되며, 예제 메타데이터 내 `form_type`으로 구분. 기존 `form_type` NOT NULL이면 `ALTER COLUMN form_type DROP NOT NULL` 후 `(base, NULL)` 한 행만 사용.
 
-### 8. 필드 매핑 테이블
+#### `rag_page_embeddings` (pgvector)
+- **용도**: 페이지 단위 벡터 검색용. RAG 검색·벡터 DB 등록 여부의 단일 소스. (기존 `rag_learning_status_*` 테이블 제거됨.)
+- **주요 컬럼**: `id` (PK), `pdf_filename`, `page_number`, `ocr_text`, `embedding` (vector(384)), `answer_json`, `form_type`, `updated_at`
+- **제약조건**: `UNIQUE(pdf_filename, page_number)`
+
+### 7. 필드 매핑 테이블
 
 #### `form_field_mappings`
 - **용도**: 논리키(customer_code, management_id 등)와 양식별(form_code) 실제 필드명(physical_key) 매핑. DB 우선, 없으면 config fallback. (상품명은 item_data 내 商品名만 사용.)
@@ -101,7 +99,7 @@
 - **용도**: 양식 코드의 표시명 관리 (예: 01 → 조건①). API/관리 화면에서 표시명 변경 가능.
 - **주요 컬럼**: `form_code` (PK), `display_name`, `updated_at`
 
-### 9. 사용자 관리 테이블
+### 8. 사용자 관리 테이블
 
 #### `users`
 - **용도**: 사용자 정보 저장 (로그인ID.xlsx 기반 가져오기 지원).

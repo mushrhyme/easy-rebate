@@ -458,9 +458,8 @@ def detect_deleted_pages(
         with manifest.db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT pdf_filename, page_number, status
-                FROM rag_learning_status_current
-                WHERE status IN ('merged', 'staged')
+                SELECT pdf_filename, page_number
+                FROM rag_page_embeddings
             """)
 
             deleted_pages = []

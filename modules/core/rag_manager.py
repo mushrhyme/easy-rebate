@@ -1230,7 +1230,7 @@ class RAGManager:
 
     def _get_merged_page_keys(self, candidate_pairs: List[Tuple[str, int]]) -> Optional[Set[Tuple[str, int]]]:
         """
-        rag_learning_status_current에서 status='merged'인 (pdf_filename, page_number)만 반환.
+        rag_page_embeddings에 있는 (pdf_filename, page_number)만 반환.
         candidate_pairs에 있는 것만 조회. use_db가 False이면 None 반환(필터 미적용).
         """
         if not self.use_db or not hasattr(self, "db") or self.db is None:
@@ -1244,15 +1244,14 @@ class RAGManager:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT pdf_filename, page_number
-                    FROM rag_learning_status_current
-                    WHERE status = 'merged'
-                    AND (pdf_filename, page_number) IN (
+                    FROM rag_page_embeddings
+                    WHERE (pdf_filename, page_number) IN (
                         SELECT * FROM unnest(%s::text[], %s::int[]) AS t(pdf_filename, page_number)
                     )
                 """, (pdf_list, page_list))
                 return set((row[0], row[1]) for row in cursor.fetchall())
         except Exception as e:
-            print(f"⚠️ RAG 검색 merged 필터 조회 실패 (전체 결과 허용): {e}")
+            print(f"⚠️ RAG 검색 pgvector 필터 조회 실패 (전체 결과 허용): {e}")
             return None
 
     def _normalize_score(self, score: float, min_score: float, max_score: float) -> float:
@@ -1311,7 +1310,7 @@ class RAGManager:
             pass
             print(f"⚠️ RAG 검색: 인덱스가 비어있습니다. (ntotal={index.ntotal}, 메타데이터={len(metadata)}개)")
 
-        # rag_learning_status_current에서 status='merged'인 페이지만 검색 결과에 포함 (DB 모드일 때)
+        # rag_page_embeddings에 있는 페이지만 검색 결과에 포함 (DB 모드일 때)
         candidate_pairs = []
         for r in all_results:
             meta = r.get("metadata", {})
@@ -1551,25 +1550,27 @@ class RAGManager:
 
     def build_retail_rag_answer_index(self) -> int:
         """
-        정답지 문서(created_by_user_id IS NOT NULL) item에서 得意先/受注先コード/小売先コード 중복 제거 후
-        得意先 텍스트만 임베딩해 retail_rag_answer FAISS 인덱스 구축 후 DB 저장.
+        정답지 문서(created_by_user_id IS NOT NULL) item에서 得意先당 updated_at 최신 1건만 사용해
+        得意先/受注先コード/小売先コード를 추출한 뒤, 得意先 텍스트만 임베딩해 retail_rag_answer FAISS 인덱스 구축 후 DB 저장.
         반환: 저장된 벡터 수.
         """
         if not self.use_db or not getattr(self, "db", None):
             return 0
+        # 거래처명(得意先)당 최신 1건만 사용: updated_at DESC 기준으로 DISTINCT ON
         rows = []
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT DISTINCT
+                    SELECT DISTINCT ON (TRIM(COALESCE(i.item_data->>'得意先', '')))
                         i.item_data->>'得意先' AS "得意先",
                         i.item_data->>'受注先コード' AS "受注先コード",
                         i.item_data->>'小売先コード' AS "小売先コード"
                     FROM items_current i
                     INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
                     WHERE d.created_by_user_id IS NOT NULL
-                    ORDER BY "得意先", "受注先コード", "小売先コード"
+                      AND TRIM(COALESCE(i.item_data->>'得意先', '')) != ''
+                    ORDER BY TRIM(COALESCE(i.item_data->>'得意先', '')), i.updated_at DESC NULLS LAST
                 """)
                 for row in cursor.fetchall():
                     tokuisaki = (row[0] or "").strip()

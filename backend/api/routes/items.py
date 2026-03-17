@@ -144,14 +144,14 @@ def _ym_params_list(year: Optional[int], month: Optional[int], count: int = 1) -
 
 
 def _excluded_docs_cte() -> str:
-    """검토/현황 집계에서 제외할 문서 CTE: 정답지 + 벡터 DB 학습(병합) 완료 문서."""
+    """검토/현황 집계에서 제외할 문서 CTE: 정답지 + 벡터 DB(rag_page_embeddings) 등록 문서."""
     return """
                 excluded_docs AS (
                     SELECT pdf_filename FROM documents_current WHERE COALESCE(is_answer_key_document, FALSE) = TRUE
                     UNION
                     SELECT pdf_filename FROM documents_archive WHERE COALESCE(is_answer_key_document, FALSE) = TRUE
                     UNION
-                    SELECT pdf_filename FROM rag_learning_status_current WHERE status = 'merged'
+                    SELECT DISTINCT pdf_filename FROM rag_page_embeddings
                 ),"""
 
 

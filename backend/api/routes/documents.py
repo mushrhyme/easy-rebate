@@ -1047,36 +1047,26 @@ def _extract_pdf_filenames_from_index_metadata(meta) -> list:
 async def get_documents_in_vector_index(db=Depends(get_db)):
     """
     벡터 DB 등록 문서(pdf_filename) 목록 반환.
-    - rag_learning_status_current(status='merged') 와
-    - rag_vector_index 메타데이터에 있는 목록을 합쳐서 반환.
-    - status='deleted'(미사용 정답지)인 문서는 제외 → 재업로드 시 초록/readOnly로 잘못 표시되지 않음.
+    - rag_page_embeddings(pgvector)에 있는 문서 + rag_vector_index 메타데이터(FAISS) 목록 합침.
     """
     try:
         def _fetch_vector_index_names_sync(database):
             names = set()
-            deleted_names = set()
             with database.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT DISTINCT pdf_filename FROM rag_learning_status_current WHERE status = 'merged'")
-                for r in cursor.fetchall():
-                    if r and r[0]:
-                        names.add(r[0])
                 try:
-                    cursor.execute("SELECT DISTINCT pdf_filename FROM rag_learning_status_current WHERE status = 'deleted'")
+                    cursor.execute("SELECT DISTINCT pdf_filename FROM rag_page_embeddings")
                     for r in cursor.fetchall():
                         if r and r[0]:
-                            deleted_names.add(r[0])
+                            names.add(r[0])
                 except Exception:
                     pass
-            with database.get_connection() as conn:
-                cursor = conn.cursor()
                 cursor.execute("SELECT metadata_json FROM rag_vector_index WHERE index_name = 'base' AND (form_type IS NULL OR form_type = '') ORDER BY updated_at DESC LIMIT 1")
                 row = cursor.fetchone()
             if row and row[0]:
                 for p in _extract_pdf_filenames_from_index_metadata(row[0]):
                     if p:
                         names.add(p)
-            names -= deleted_names
             return {"pdf_filenames": sorted(names)}
         return await db.run_sync(_fetch_vector_index_names_sync, db)
     except Exception:
@@ -2586,11 +2576,7 @@ def _delete_document_sync(database, pdf_filename: str):
         if deleted_count == 0:
             raise HTTPException(status_code=404, detail="Document not found")
         try:
-            cursor.execute("""
-                UPDATE rag_learning_status_current
-                SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
-                WHERE pdf_filename = %s
-            """, (pdf_filename,))
+            cursor.execute("DELETE FROM rag_page_embeddings WHERE pdf_filename = %s", (pdf_filename,))
         except Exception:
             pass
         conn.commit()

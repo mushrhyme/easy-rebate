@@ -159,8 +159,7 @@ async def get_vector_db_status(
 ):
     """
     현재 벡터 DB 상태 조회. 로그인 사용자 전체 허용 (읽기 전용).
-    - total_vectors: pgvector(rag_page_embeddings) 우선, 없으면 FAISS(rag_vector_index) 벡터 수
-    - merged_pages: pgvector 사용 시 = total_vectors(전부 사용중), 아니면 rag_learning_status_current merged 수
+    - total_vectors / merged_pages: rag_page_embeddings(pgvector) 기준. 테이블 없으면 0.
     - unused_pages: total_vectors - merged_pages
     - answer_key_pages_in_period: year/month 지정 시 해당 연월 merged 수 (pgvector 시 updated_at 기준)
     """
@@ -173,42 +172,22 @@ async def get_vector_db_status(
             cursor.execute("""
                 SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'rag_page_embeddings')
             """)
-            row = cursor.fetchone()
-            use_pgvector = bool(row and row[0])
-
-            if use_pgvector:
-                cursor.execute("SELECT COUNT(*) FROM rag_page_embeddings")
-                total_vectors = int(cursor.fetchone()[0] or 0)
-                cursor.execute("""
-                    SELECT COALESCE(form_type, '') AS form_type, COUNT(*) AS cnt
-                    FROM rag_page_embeddings GROUP BY form_type ORDER BY form_type
-                """)
-                per_form = [{"form_type": (row[0] or "").strip() or None, "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
-                merged_pages = total_vectors  # pgvector 행은 모두 검색에 사용 중
-                answer_key_pages_in_period = None
-                if y is not None and m is not None:
-                    cursor.execute("""
-                        SELECT COUNT(*) FROM rag_page_embeddings
-                        WHERE updated_at >= date_trunc('month', make_date(%s, %s, 1))
-                          AND updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
-                    """, (y, m, y, m))
-                    answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
-                return total_vectors, per_form, merged_pages, answer_key_pages_in_period
-
-            # FAISS(rag_vector_index) + rag_learning_status_current 기준
-            total_vectors = rag_manager.count_examples()
-            cursor.execute("SELECT form_type, SUM(vector_count) AS total_vectors FROM rag_vector_index GROUP BY form_type ORDER BY form_type")
-            per_form = [{"form_type": row[0], "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
-            cursor.execute("SELECT COUNT(*) FROM rag_learning_status_current WHERE status = 'merged'")
-            merged_pages = int(cursor.fetchone()[0] or 0)
+            if not cursor.fetchone()[0]:
+                return 0, [], 0, None
+            cursor.execute("SELECT COUNT(*) FROM rag_page_embeddings")
+            total_vectors = int(cursor.fetchone()[0] or 0)
+            cursor.execute("""
+                SELECT COALESCE(form_type, '') AS form_type, COUNT(*) AS cnt
+                FROM rag_page_embeddings GROUP BY form_type ORDER BY form_type
+            """)
+            per_form = [{"form_type": (r[0] or "").strip() or None, "vector_count": int(r[1] or 0)} for r in cursor.fetchall()]
+            merged_pages = total_vectors
             answer_key_pages_in_period = None
             if y is not None and m is not None:
                 cursor.execute("""
-                    SELECT COUNT(*) FROM rag_learning_status_current r
-                    WHERE r.status = 'merged' AND r.updated_at >= date_trunc('month', make_date(%s, %s, 1))
-                      AND r.updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
-                      AND (EXISTS (SELECT 1 FROM documents_current d WHERE d.pdf_filename = r.pdf_filename AND d.created_by_user_id IS NOT NULL)
-                           OR EXISTS (SELECT 1 FROM documents_archive a WHERE a.pdf_filename = r.pdf_filename AND a.created_by_user_id IS NOT NULL))
+                    SELECT COUNT(*) FROM rag_page_embeddings
+                    WHERE updated_at >= date_trunc('month', make_date(%s, %s, 1))
+                      AND updated_at < date_trunc('month', make_date(%s, %s, 1)) + interval '1 month'
                 """, (y, m, y, m))
                 answer_key_pages_in_period = int(cursor.fetchone()[0] or 0)
             return total_vectors, per_form, merged_pages, answer_key_pages_in_period
@@ -618,29 +597,13 @@ async def build_vector_from_learning_pages(
     await asyncio.to_thread(rag_manager.reload_index)
     total_vectors = rag_manager.count_examples()
 
-    def _update_status_and_per_form(database, pages: list, shard_id: str):
+    def _get_per_form(database):
         with database.get_connection() as conn:
             cursor = conn.cursor()
-            for sp in pages:
-                pdf_name = (sp.get("metadata") or {}).get("pdf_name") or ""
-                page_num = (sp.get("metadata") or {}).get("page_num")
-                page_hash_val = sp.get("page_hash") or ""
-                if not pdf_name or page_num is None:
-                    continue
-                pdf_filename = pdf_name if pdf_name.lower().endswith(".pdf") else f"{pdf_name}.pdf"
-                cursor.execute(
-                    """
-                    INSERT INTO rag_learning_status_current (pdf_filename, page_number, status, page_hash, shard_id)
-                    VALUES (%s, %s, 'merged', %s, %s)
-                    ON CONFLICT (pdf_filename, page_number) DO UPDATE SET status = 'merged', page_hash = EXCLUDED.page_hash, shard_id = EXCLUDED.shard_id, updated_at = CURRENT_TIMESTAMP
-                    """,
-                    (pdf_filename, page_num, page_hash_val, shard_id),
-                )
-            conn.commit()
             cursor.execute("SELECT form_type, SUM(vector_count) AS total_vectors FROM rag_vector_index GROUP BY form_type ORDER BY form_type")
             return [{"form_type": row[0], "vector_count": int(row[1] or 0)} for row in cursor.fetchall()]
     db = get_db()
-    per_form = await db.run_sync(_update_status_and_per_form, db, shard_pages, shard_identifier)
+    per_form = await db.run_sync(_get_per_form, db)
     return {
         "success": True,
         "message": "선택된 페이지들로부터 벡터 DB를 생성했습니다.",
