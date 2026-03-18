@@ -36,7 +36,6 @@ frontend/dist-ssr/
 *.local
 
 # 디버그/임시
-static/
 debug/
 debug2/
 test/
