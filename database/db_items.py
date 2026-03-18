@@ -764,7 +764,7 @@ class ItemsMixin:
                     # 검토 탭 그리드 row에 タイプ 항상 포함 (없으면 null → 저장 시 条件 반영용)
                     if 'タイプ' not in merged_item:
                         merged_item['タイプ'] = item_data.get('タイプ')
-                    # 검토 상태 추가 (증빙용: 누가/언제 체크했는지)
+                        # 검토 상태 추가 (증빙용: 누가/언제 체크했는지)
                     merged_item['review_status'] = {
                         'first_review': {
                             'checked': row_dict.get('first_review_checked', False),

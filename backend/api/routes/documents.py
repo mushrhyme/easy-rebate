@@ -44,7 +44,6 @@ def _delete_debug2_for_document(pdf_filename: str) -> None:
     if debug_dir.exists() and debug_dir.is_dir():
         shutil.rmtree(debug_dir, ignore_errors=True)
 
-
 from backend.core.config import settings
 from backend.core.auth import get_current_user, get_current_user_id
 from backend.core.activity_log import log as activity_log

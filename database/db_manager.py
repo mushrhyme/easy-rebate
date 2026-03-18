@@ -504,6 +504,7 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     # タイプ가 없으면 null로 넣어 그리드 row에 키 존재 (검토 탭 저장 시 条件 반영용)
                     if 'タイプ' not in merged_item:
                         merged_item['タイプ'] = item_data.get('タイプ')
+
                     # 검토 상태 추가 (증빙용: 누가/언제)
                     merged_item['review_status'] = {
                         'first_review': {
