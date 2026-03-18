@@ -813,7 +813,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
       version: updatedItem.version
     })
 
-    // item_data 추출 (공통·표시전용 필드 제외). タイプ null/빈값 → '条件'
+    // item_data 추출 (공통·표시전용 필드 제외). タイプ null/빈값/없음 → '条件'
     const itemData: any = {}
     Object.keys(rowData).forEach((key) => {
       if (
@@ -828,6 +828,11 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         itemData[key] = val
       }
     })
+    // row에 タイプ 키가 없어도 DB에 条件 저장되도록 보정 (검토 탭 detail 페이지)
+    if (!('タイプ' in itemData)) itemData['タイプ'] = '条件'
+    // 전송 직전 한 번 더: null/빈값이면 条件 (편집 후 저장해도 DB에 null 남는 현상 방지)
+    const t = itemData['タイプ']
+    if (t == null || String(t).trim() === '') itemData['タイプ'] = '条件'
 
     try {
       // 변경사항 저장
@@ -1007,24 +1012,71 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     setSelectedComplexField(null)
   }, [pdfFilename, pageNumber])
 
-  /** 편집 중인 모든 행을 병렬 저장 후 성공한 행만 한 번에 편집 해제 (저장 버튼 / Ctrl+S 공통) */
+  /** 편집 중인 모든 행 저장. 편집 중인 행이 없어도 タイプ가 null/빈 행은 전부 '条件'로 보정해 저장 (저장 버튼 / Ctrl+S 공통) */
   const saveAllEditingRows = useCallback(async () => {
     const editingIds = Array.from(editingItemIdsRef.current.values()).filter(
       (id): id is number => typeof id === 'number'
     )
-    if (editingIds.length === 0) return
-    const results = await Promise.allSettled(
-      editingIds.map((id) => handleSaveAndUnlock(id, { skipClearEditing: true }))
-    )
-    const succeeded = editingIds.filter((_, i) => results[i].status === 'fulfilled')
-    if (succeeded.length > 0) {
-      setEditingItemIds((prev) => {
-        const next = new Set(prev)
-        succeeded.forEach((id) => next.delete(id))
-        return next
-      })
+    const currentRows = rowsRef.current
+
+    if (editingIds.length > 0) {
+      const results = await Promise.allSettled(
+        editingIds.map((id) => handleSaveAndUnlock(id, { skipClearEditing: true }))
+      )
+      const succeeded = editingIds.filter((_, i) => results[i].status === 'fulfilled')
+      if (succeeded.length > 0) {
+        setEditingItemIds((prev) => {
+          const next = new Set(prev)
+          succeeded.forEach((id) => next.delete(id))
+          return next
+        })
+      }
+      return
     }
-  }, [handleSaveAndUnlock])
+
+    // 편집 중인 행 없음: タイプ가 null/빈 행만 条件로 보정해 저장 (그리드에서 수정 후 저장 시 DB 반영)
+    const rowsNeedingType = currentRows.filter(
+      (r) => r['タイプ'] == null || String((r['タイプ'] as string) ?? '').trim() === ''
+    )
+    if (rowsNeedingType.length === 0 || !sessionId) return
+    const results = await Promise.allSettled(
+      rowsNeedingType.map(async (rowData) => {
+        const it = items.find((i: { item_id: number }) => i.item_id === rowData.item_id)
+        if (!it || (it as { version?: number }).version == null) return
+        const itemData: Record<string, unknown> = {}
+        Object.keys(rowData).forEach((key) => {
+          if (
+            key !== 'item_id' &&
+            key !== 'item_order' &&
+            key !== 'customer' &&
+            key !== 'first_review_checked' &&
+            key !== 'second_review_checked'
+          ) {
+            let val = (rowData as Record<string, unknown>)[key]
+            if (key === 'タイプ' && (val == null || String(val ?? '').trim() === '')) val = '条件'
+            itemData[key] = val
+          }
+        })
+        if (!('タイプ' in itemData)) itemData['タイプ'] = '条件'
+        await updateItem.mutateAsync({
+          itemId: rowData.item_id,
+          request: {
+            item_data: itemData,
+            review_status: {
+              first_review: { checked: rowData.first_review_checked || false },
+              second_review: { checked: rowData.second_review_checked || false },
+            },
+            expected_version: (it as { version: number }).version,
+            session_id: sessionId,
+          },
+        })
+      })
+    )
+    const succeeded = results.filter((r) => r.status === 'fulfilled').length
+    if (succeeded > 0) {
+      queryClient.invalidateQueries({ queryKey: ['items', pdfFilename, pageNumber] })
+    }
+  }, [handleSaveAndUnlock, items, sessionId, updateItem, queryClient, pdfFilename, pageNumber])
 
   // Ctrl+S / Cmd+S 로 편집 중인 모든 행 저장
   useEffect(() => {
