@@ -85,18 +85,6 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
     queryFn: () => documentsApi.getListForAnswerKeyTab(),
   })
 
-  const { data: inVectorData } = useQuery({
-    queryKey: ['documents', 'in-vector-index'],
-    queryFn: () => documentsApi.getInVectorIndex(),
-  })
-  const inVectorPdfSet = useMemo(
-    () => new Set((inVectorData?.pdf_filenames ?? []).map((f) => (f ?? '').trim().toLowerCase())),
-    [inVectorData?.pdf_filenames]
-  )
-  const isDocInVector = !!(
-    selectedDoc && inVectorPdfSet.has(selectedDoc.pdf_filename.trim().toLowerCase())
-  )
-
   /** base DB 문서: answer-json 한 번 로드 → 메모리에서 편집 → 저장 시에만 DB 반영 (순서/정렬 이슈 제거) */
   const { data: answerJsonFromDb } = useQuery({
     queryKey: ['document-answer-json', selectedDoc?.pdf_filename ?? ''],
@@ -806,7 +794,7 @@ export function AnswerKeyTab({ initialDocument, onConsumeInitialDocument, onRevo
             saveCtx={{
               saveStatus,
               saveMessage,
-              readOnly: isDocInVector,
+              readOnly: false,
             }}
           />
         </div>
