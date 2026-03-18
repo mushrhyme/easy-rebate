@@ -11,6 +11,12 @@ import logging
 logger = logging.getLogger(__name__)
 import numpy as np
 from typing import Dict, Any, List, Optional, Set, Tuple
+
+# rag_page_embeddings.answer_json 저장 시 item에서 제외할 키 (검토/내부용, RAG 정답지에는 불필요)
+RAG_ANSWER_ITEM_EXCLUDE_KEYS = frozenset({
+    "first_review_reviewed_at", "first_review_reviewed_by",
+    "second_review_reviewed_at", "second_review_reviewed_by",
+})
 from threading import Lock
 import faiss
 import ssl
@@ -335,6 +341,17 @@ class RAGManager:
             logger.warning("pgvector 검색 실패: %s", e)
             return []
 
+    def _sanitize_answer_json_for_rag(self, answer_json: Dict[str, Any]) -> Dict[str, Any]:
+        """RAG 저장용: answer_json.items[]에서 검토/내부 전용 필드 제거 (복사본 반환)."""
+        if not answer_json or not isinstance(answer_json.get("items"), list):
+            return answer_json or {}
+        out = dict(answer_json)
+        out["items"] = [
+            {k: v for k, v in (item if isinstance(item, dict) else {}).items() if k not in RAG_ANSWER_ITEM_EXCLUDE_KEYS}
+            for item in out["items"]
+        ]
+        return out
+
     def upsert_page_embedding(
         self,
         pdf_filename: str,
@@ -346,6 +363,7 @@ class RAGManager:
         """Phase 2: 해당 (pdf_filename, page_number) 1건을 pgvector에 INSERT 또는 UPDATE."""
         if not self.use_db or not getattr(self, "db", None):
             return False
+        answer_json = self._sanitize_answer_json_for_rag(answer_json or {})  # 검토 필드 제외 후 저장
         from modules.utils.text_normalizer import normalize_ocr_text
         processed = self.preprocess_ocr_text(normalize_ocr_text(ocr_text or "", use_fullwidth=True))
         model = self._get_embedding_model()
@@ -361,7 +379,7 @@ class RAGManager:
                     ON CONFLICT (pdf_filename, page_number)
                     DO UPDATE SET ocr_text = EXCLUDED.ocr_text, embedding = EXCLUDED.embedding,
                         answer_json = EXCLUDED.answer_json, form_type = EXCLUDED.form_type, updated_at = CURRENT_TIMESTAMP
-                """, (pdf_filename, page_number, ocr_text or "", emb_str, json.dumps(answer_json or {}, ensure_ascii=False), form_val))
+                """, (pdf_filename, page_number, ocr_text or "", emb_str, json.dumps(answer_json, ensure_ascii=False), form_val))
                 conn.commit()
             self._bm25_index = None  # 학습 요청 후 BM25 캐시 무효화 (다음 검색 시 pgvector 기준으로 재구축)
             return True

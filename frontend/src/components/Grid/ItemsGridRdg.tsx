@@ -948,40 +948,22 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   }, [items, hasItems])
 
   // page_meta의 최상위 키들을 배지로 표시 (cover 페이지용)
+  // 시스템 필드(DB/앱이 붙인 것)는 제외하고 LLM 출력 필드만 표시
+  const PAGE_META_SYSTEM_KEYS = new Set([
+    'last_edited_at', 'is_rag_candidate', 'ocr_text',
+    'analyzed_vector_version', 'last_analyzed_at', '_ocr_text',
+  ])
   const pageMetaFields = useMemo(() => {
-    if (!pageMetaData?.page_meta) {
-      console.log('🔵 [pageMetaFields] page_meta 없음:', pageMetaData)
-      return []
-    }
-    
+    if (!pageMetaData?.page_meta) return []
     const fields: Array<{ key: string; value: any }> = []
     const pageMeta = pageMetaData.page_meta
-    
-    console.log('🔵 [pageMetaFields] page_meta 구조:', {
-      pageMeta,
-      keys: Object.keys(pageMeta),
-      keysLength: Object.keys(pageMeta).length,
-    })
-    
     Object.keys(pageMeta).forEach((key) => {
+      if (PAGE_META_SYSTEM_KEYS.has(key)) return
       const value = pageMeta[key]
-      console.log(`🔵 [pageMetaFields] 키 확인: ${key}`, {
-        value,
-        type: typeof value,
-        isObject: typeof value === 'object',
-        isArray: Array.isArray(value),
-        isNull: value === null,
-        isUndefined: value === undefined,
-      })
-      
-      // 최상위 키만 배지로 표시 (객체/배열인 경우)
-      if (value !== null && value !== undefined && (typeof value === 'object' || Array.isArray(value))) {
+      if (value !== null && value !== undefined) {
         fields.push({ key, value })
-        console.log(`✅ [pageMetaFields] 필드 추가: ${key}`)
       }
     })
-    
-    console.log('🔵 [pageMetaFields] 최종 필드:', fields)
     return fields
   }, [pageMetaData])
 
