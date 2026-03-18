@@ -249,6 +249,10 @@ class ItemsMixin:
                                 item_dict["本部長"] = honbu
                         apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                         apply_form04_mishu_decimal(item_dict, form_type)
+                        # 최초 분석: LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
+                        _typ = item_dict.get("タイプ")
+                        if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                            item_dict["タイプ"] = "条件"
                         # 공통 필드와 item_data 분리 (표준 키: 得意先 등은 item_data에만 유지)
                         separated = self._separate_item_fields(item_dict, form_type=form_type)
                         
@@ -473,6 +477,10 @@ class ItemsMixin:
                             item_dict["本部長"] = honbu
                     apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                     apply_form04_mishu_decimal(item_dict, form_type)
+                    # 최초 분석: LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
+                    _typ = item_dict.get("タイプ")
+                    if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                        item_dict["タイプ"] = "条件"
                     separated = self._separate_item_fields(item_dict, form_type=form_type)
                     prev = review_by_order.get(item_order, {})
                     cursor.execute("""
@@ -753,7 +761,9 @@ class ItemsMixin:
                     # 상품명: item_data 내 商品名만 사용 (DB 컬럼 product_name 제거됨)
                     if item_data.get('商品名') is not None:
                         merged_item['商品名'] = item_data['商品名']
-                    
+                    # 검토 탭 그리드 row에 タイプ 항상 포함 (없으면 null → 저장 시 条件 반영용)
+                    if 'タイプ' not in merged_item:
+                        merged_item['タイプ'] = item_data.get('タイプ')
                     # 검토 상태 추가 (증빙용: 누가/언제 체크했는지)
                     merged_item['review_status'] = {
                         'first_review': {

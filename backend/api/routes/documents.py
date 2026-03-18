@@ -35,6 +35,16 @@ def _delete_static_images_for_document(pdf_filename: str) -> None:
     img_dir = root / "static" / "images" / pdf_filename
     if img_dir.exists() and img_dir.is_dir():
         shutil.rmtree(img_dir, ignore_errors=True)
+
+
+def _delete_debug2_for_document(pdf_filename: str) -> None:
+    """문서(pdf_filename)에 해당하는 debug2 디렉터리 삭제 (RAG/LLM 디버그 출력 등)."""
+    root = get_project_root()
+    debug_dir = root / "debug2" / pdf_filename
+    if debug_dir.exists() and debug_dir.is_dir():
+        shutil.rmtree(debug_dir, ignore_errors=True)
+
+
 from backend.core.config import settings
 from backend.core.auth import get_current_user, get_current_user_id
 from backend.core.activity_log import log as activity_log
@@ -1826,6 +1836,10 @@ async def save_document_answer_json(
                     upload_channel = doc.get("upload_channel")
                     apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                     apply_form04_mishu_decimal(item_dict, form_type)
+                    # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
+                    _typ = item_dict.get("タイプ")
+                    if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                        item_dict["タイプ"] = "条件"
                     separated = db._separate_item_fields(item_dict, form_type=form_type)
                     item_data = separated.get("item_data") or {}
                     if first_item_keys is None and item_data:
@@ -2274,6 +2288,10 @@ def _create_items_from_answer_sync(
                     item_dict["本部長"] = honbu
             apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
             apply_form04_mishu_decimal(item_dict, form_type)
+            # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
+            _typ = item_dict.get("タイプ")
+            if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                item_dict["タイプ"] = "条件"
             separated = database._separate_item_fields(item_dict, form_type=form_type)
             item_data = separated.get("item_data") or {}
             customer = separated.get("customer")
@@ -2364,6 +2382,10 @@ def _create_items_from_template_sync(database, pdf_filename: str, page_number: i
                     item_dict["本部長"] = honbu
             apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
             apply_form04_mishu_decimal(item_dict, form_type)
+            # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
+            _typ = item_dict.get("タイプ")
+            if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                item_dict["タイプ"] = "条件"
             separated = database._separate_item_fields(item_dict, form_type=form_type)
             item_data = separated.get("item_data") or {}
             cursor.execute("""
@@ -2581,6 +2603,7 @@ def _delete_document_sync(database, pdf_filename: str):
             pass
         conn.commit()
     _delete_static_images_for_document(pdf_filename)
+    _delete_debug2_for_document(pdf_filename)
 
 
 @router.delete("/{pdf_filename}")
@@ -2637,6 +2660,7 @@ def purge_old_documents_impl(db, retention_years: float = 1.0):
         conn.commit()
     for pdf_filename in pdf_filenames:
         _delete_static_images_for_document(pdf_filename)
+        _delete_debug2_for_document(pdf_filename)
     return {
         "message": f"Purged documents older than {retention_years} year(s)",
         "deleted_count": len(pdf_filenames),
