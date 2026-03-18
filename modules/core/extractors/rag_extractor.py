@@ -230,6 +230,25 @@ def _attach_bbox_to_json(obj: Any, words: list, path: str = "") -> None:
             _attach_bbox_to_json(item, words, path + f"[{i}]")
 
 
+def _ref_has_valid_type(ref_doc: Dict[str, Any]) -> bool:
+    """
+    참조문서에 유효한 タイプ이 하나라도 있으면 True.
+    answer_json 최상위 또는 items[] 내 タイプ이 null/빈 문자열이면 해당 문서는 참조에서 제외.
+    """
+    ans = ref_doc.get("answer_json") or {}
+    if not isinstance(ans, dict):
+        return False
+    top = ans.get("タイプ")
+    if top is not None and str(top).strip():
+        return True
+    for item in (ans.get("items") or []):
+        if isinstance(item, dict):
+            t = item.get("タイプ")
+            if t is not None and str(t).strip():
+                return True
+    return False
+
+
 def extract_json_with_rag(
     ocr_text: str,
     question: Optional[str] = None,
@@ -325,7 +344,10 @@ def extract_json_with_rag(
             hybrid_alpha=hybrid_alpha,
             form_type=effective_form_type or None,
         )
-    
+
+    # タイプ이 null인 참조문서는 제외 (answer_json 또는 items 내 タイプ이 하나라도 유효해야 참조)
+    similar_examples = [e for e in (similar_examples or []) if _ref_has_valid_type(e)]
+
     # RAG에서 선택된 최상위 예제 메타데이터 (문서/페이지/form_type)를 추출해 둔다.
     # - debug JSON 저장뿐만 아니라, LLM 결과(JSON)에도 _rag_reference로 포함시키기 위함.
     top_example_metadata = None

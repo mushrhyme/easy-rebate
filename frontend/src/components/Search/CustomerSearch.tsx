@@ -166,20 +166,6 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
     refetchOnMount: 'always',
   })
 
-  // 벡터 DB에 학습된(병합된) 문서 목록 — 검토 탭에서는 제외
-  const { data: inVectorData } = useQuery({
-    queryKey: ['documents', 'in-vector-index'],
-    queryFn: () => documentsApi.getInVectorIndex(),
-    refetchInterval: 60000,
-  })
-  const pdfInVectorSet = useMemo(
-    () =>
-      new Set(
-        (inVectorData?.pdf_filenames ?? []).map((f) => (f ?? '').trim().toLowerCase())
-      ),
-    [inVectorData?.pdf_filenames]
-  )
-
   // 검토 상태 통계 조회 (성능 최적화: 10초마다 갱신)
   const { data: reviewStats } = useQuery({
     queryKey: ['review-stats'],
@@ -1225,7 +1211,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
               pageNumber={currentPage.pageNumber}
               formType={currentPage.formType}
               onBulkCheckStateChange={setBulkCheckState}
-              readOnly={pdfInVectorSet.has((currentPage.pdfFilename ?? '').trim().toLowerCase())}
+              readOnly={false}
             />
           )}
         </div>
