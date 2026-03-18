@@ -40,7 +40,9 @@ def _delete_static_images_for_document(pdf_filename: str) -> None:
 def _delete_debug2_for_document(pdf_filename: str) -> None:
     """문서(pdf_filename)에 해당하는 debug2 디렉터리 삭제 (RAG/LLM 디버그 출력 등)."""
     root = get_project_root()
-    debug_dir = root / "debug2" / pdf_filename
+    # debug2 폴더는 .pdf 제거한 stem으로 생성되므로 동일하게 처리
+    pdf_stem = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+    debug_dir = root / "debug2" / pdf_stem
     if debug_dir.exists() and debug_dir.is_dir():
         shutil.rmtree(debug_dir, ignore_errors=True)
 
@@ -1654,6 +1656,7 @@ async def analyze_from_page(
         _reanalysis_cancel_events[body.pdf_filename] = cancel_ev
 
     analyzed = []
+    failed = []
     cancelled = False
     sem = asyncio.Semaphore(_ANALYZE_FROM_PAGE_CONCURRENCY)
 
@@ -1697,6 +1700,8 @@ async def analyze_from_page(
                 )
                 if success:
                     analyzed.append(pnum)
+            elif err and err != "cancelled":
+                failed.append({"page": pnum, "error": err})
     finally:
         async with _reanalysis_lock:
             _reanalysis_cancel_events.pop(body.pdf_filename, None)
@@ -1704,6 +1709,7 @@ async def analyze_from_page(
     return {
         "success": True,
         "analyzed": analyzed,
+        "failed": failed,
         "cancelled": cancelled,
         "from_page": from_page,
         "total_pages": total_pages,

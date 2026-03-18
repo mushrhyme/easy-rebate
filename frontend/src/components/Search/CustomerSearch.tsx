@@ -604,6 +604,9 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
       setAnalyzingFromPage(false)
       if (data.cancelled) {
         alert('学習リクエストのため再分析を中断しました。必要に応じて再度「このページ以降の全ページを再分析」を実行してください。')
+      } else if (data.failed && data.failed.length > 0) {
+        const failedPages = data.failed.map((f: { page: number; error: string }) => `p${f.page}: ${f.error}`).join('\n')
+        alert(`再分析で一部のページが失敗しました:\n${failedPages}`)
       }
     },
     onError: () => setAnalyzingFromPage(false),
