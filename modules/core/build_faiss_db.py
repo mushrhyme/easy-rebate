@@ -304,6 +304,10 @@ def sync_img_pages_to_documents_db(
                         if not isinstance(item_dict, dict):
                             continue
                         apply_form04_mishu_decimal(item_dict, form_type_default)
+                        # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
+                        _typ = item_dict.get("タイプ")
+                        if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                            item_dict["タイプ"] = "条件"
                         separated = db._separate_item_fields(item_dict, form_type=form_type_default)
                         cursor.execute(
                             """

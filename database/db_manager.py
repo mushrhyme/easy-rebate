@@ -501,7 +501,10 @@ class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
                     # 상품명: item_data 내 商品名만 사용 (DB 컬럼 product_name 제거됨)
                     if item_data.get('商品名') is not None:
                         merged_item['商品名'] = item_data['商品名']
-                    
+                    # タイプ가 없으면 null로 넣어 그리드 row에 키 존재 (검토 탭 저장 시 条件 반영용)
+                    if 'タイプ' not in merged_item:
+                        merged_item['タイプ'] = item_data.get('タイプ')
+
                     # 검토 상태 추가 (증빙용: 누가/언제)
                     merged_item['review_status'] = {
                         'first_review': {

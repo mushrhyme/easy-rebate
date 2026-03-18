@@ -357,7 +357,9 @@ async def learning_request_page(
 
 
 def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> Optional[Dict[str, Any]]:
-    """단일 페이지에 대해 build-from-learning-pages와 동일한 shard_page 딕셔너리 생성."""
+    """단일 페이지에 대해 build-from-learning-pages와 동일한 shard_page 딕셔너리 생성.
+    page_role이 detail인데 タイプ가 null인 행은 DB에 条件으로 저장한 뒤 벡터에 반영.
+    """
     with database.get_connection() as conn:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         cursor.execute("""
@@ -369,9 +371,35 @@ def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> O
             ORDER BY i.item_order NULLS LAST
         """, (pdf_filename, page_number))
         rows = cursor.fetchall()
-    if not rows:
-        return None
-    first_row = rows[0]
+        if not rows:
+            return None
+        first_row = rows[0]
+        page_role = (first_row.get("page_role") or "detail").strip() or "detail"
+        merged_items = []
+        for row in rows:
+            if row.get("item_id") is None:
+                continue
+            item_data = row.get("item_data") or {}
+            if isinstance(item_data, str):
+                try:
+                    item_data = json.loads(item_data)
+                except json.JSONDecodeError:
+                    item_data = {}
+            if not isinstance(item_data, dict):
+                item_data = {}
+            else:
+                item_data = dict(item_data)
+            # detail 페이지이고 タイプ가 null/빈값이면 DB에 条件으로 저장 (눈속임 아닌 실제 UPDATE)
+            if page_role == "detail":
+                _t = item_data.get("タイプ")
+                if _t is None or (isinstance(_t, str) and not (_t or "").strip()):
+                    item_data["タイプ"] = "条件"
+                    cursor.execute(
+                        "UPDATE items_current SET item_data = %s::json WHERE item_id = %s",
+                        (json.dumps(item_data, ensure_ascii=False), row["item_id"]),
+                    )
+            merged_items.append(item_data)
+        conn.commit()
     pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
     page_meta = first_row.get("page_meta") or {}
     if isinstance(page_meta, str):
@@ -379,12 +407,6 @@ def _fetch_one_learning_page(database, pdf_filename: str, page_number: int) -> O
             page_meta = json.loads(page_meta)
         except json.JSONDecodeError:
             page_meta = {}
-    merged_items = []
-    for row in rows:
-        if row.get("item_id") is None:
-            continue
-        item_data = row.get("item_data") or {}
-        merged_items.append(dict(item_data) if isinstance(item_data, dict) else {})
     page_role = first_row.get("page_role") or "detail"
     ocr_text = _extract_ocr_for_page_sync(database, pdf_filename, page_number)
     if not ocr_text:

@@ -1022,6 +1022,10 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
         doc = db.get_document(pdf_filename)
         form_type = doc.get("form_type") if doc else None
         payload_item_data = dict(update_data.item_data or {})
+        # 검토 탭 저장 시 タイプ 없음/null/빈값 → '条件' 로 보정 (그리드 row에 키가 없어도 DB에 반영)
+        _t = payload_item_data.get("タイプ")
+        if _t is None or (isinstance(_t, str) and not (_t or "").strip()):
+            payload_item_data["タイプ"] = "条件"
         # 사용자가 代表スーパー 등에서 지정한 값이 있으면 그대로 사용, 없을 때만 resolve로 보정
         stored_rc = (payload_item_data.get("小売先コード") or payload_item_data.get("小売先CD") or "").strip()
         stored_dc = (payload_item_data.get("受注先コード") or payload_item_data.get("受注先CD") or "").strip()
@@ -1056,7 +1060,12 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
                 params.append(current_user_id if cv else None)
         if "item_data" in separated:
             set_clauses.append("item_data = %s::json")
-            params.append(_json_mod.dumps(separated["item_data"], ensure_ascii=False))
+            # DB 기록 직전 タイプ 한 번 더 보정 (편집 후 저장해도 null로 남는 경우 방지)
+            idata = dict(separated["item_data"])
+            _typ = idata.get("タイプ")
+            if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
+                idata["タイプ"] = "条件"
+            params.append(_json_mod.dumps(idata, ensure_ascii=False))
         set_clauses.append("version = version + 1")
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
         params.append(item_id)
