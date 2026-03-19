@@ -31,8 +31,10 @@ def apply_form04_mishu_decimal(
     """
     3·4번 양식일 때 未収条件를 뒤에서 2째 자리 소수점 형식으로 변환 (in-place).
     예: "1000" → "10.00", "370" → "3.70"
+    - form_type: "03", "3", "04", "4" 또는 int 3, 4
+    - 이미 100 미만 값(소수 형태)은 변환하지 않음 (이중 변환 방지)
     """
-    ft = (form_type or "").strip()
+    ft = str(form_type or "").strip()
     if ft not in ("04", "4", "03", "3"):
         return
     key = "未収条件"
@@ -40,5 +42,8 @@ def apply_form04_mishu_decimal(
     num = _parse_num(v)
     if num is None:
         return
-    # 값/100, 소수 둘째자리 문자열 (예: 1000 → "10.00")
+    # 이미 소수 형태(100 미만)면 변환 스킵. 예: "3.70" → 그대로
+    if num < 100:
+        return
+    # 값/100, 소수 둘째자리 문자열 (예: 1000 → "10.00", 370 → "3.70")
     item_dict[key] = f"{num / 100:.2f}"

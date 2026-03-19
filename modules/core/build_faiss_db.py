@@ -299,16 +299,18 @@ def sync_img_pages_to_documents_db(
                 )
 
                 items = answer_json.get("items") or []
+                # 문서별 form_type 사용 (mail 폴더라도 페이지가 03이면 후처리 적용)
+                doc_form_type = doc_info.get(pdf_filename, {}).get("form_type") or form_type_default
                 if isinstance(items, list):
                     for item_order, item_dict in enumerate(items, 1):
                         if not isinstance(item_dict, dict):
                             continue
-                        apply_form04_mishu_decimal(item_dict, form_type_default)
+                        apply_form04_mishu_decimal(item_dict, doc_form_type)
                         # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
                         _typ = item_dict.get("タイプ")
                         if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
                             item_dict["タイプ"] = "条件"
-                        separated = db._separate_item_fields(item_dict, form_type=form_type_default)
+                        separated = db._separate_item_fields(item_dict, form_type=doc_form_type)
                         cursor.execute(
                             """
                             INSERT INTO items_current (

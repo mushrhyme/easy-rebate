@@ -532,8 +532,17 @@ async def get_product_candidates_by_sap_product(
             score = max(s1, s2, code_score)
             if score >= min_similarity:
                 scored.append((score, code, name or sap_name))
-        scored.sort(key=lambda x: -x[0])
-        rows = scored[:top_k]
+        scored.sort(key=lambda x: (-x[0], -(int(x[1]) if x[1].isdigit() else 0)))
+        # 제품명이 동일할 경우 숫자(商品コード)가 더 큰 것만 남김
+        seen_name: dict[str, tuple[float, str, str]] = {}
+        for score, code, name in scored:
+            try:
+                code_num = int(code)
+            except (ValueError, TypeError):
+                code_num = 0
+            if name not in seen_name or (int(seen_name[name][1]) if seen_name[name][1].isdigit() else 0) < code_num:
+                seen_name[name] = (score, code, name)
+        rows = sorted(seen_name.values(), key=lambda x: (-x[0], -(int(x[1]) if x[1].isdigit() else 0)))[:top_k]
         matches = [{"제품코드": code, "제품명": name or ""} for _, code, name in rows]
         return {"query": q, "matches": matches}
     except Exception as e:
