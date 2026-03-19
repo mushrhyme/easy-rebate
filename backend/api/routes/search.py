@@ -500,7 +500,7 @@ async def get_product_candidates_by_sap_product(
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
 ):
     """
-    sap_product.csv에서 제품명으로만 유사도 검색. 단가 탭 최종후보 검색 → 제품코드만 반환.
+    sap_product.csv에서 제품명·商品コード로 검색. 단가 탭 최종후보 검색 → 제품코드만 반환.
     반환: [{ 제품코드, 제품명 }, ...] （仕切・本部長는 unit_price에서 商品コード로 별도 조회）
     """
     q = (query or "").strip()
@@ -521,7 +521,15 @@ async def get_product_candidates_by_sap_product(
                 continue
             s1 = _similarity_difflib(q, name) if name else 0.0
             s2 = _similarity_difflib(q, sap_name) if sap_name else 0.0
-            score = max(s1, s2)
+            # 商品コード(숫자) 검색: 일치/접두사/포함 시 높은 점수
+            code_score = 0.0
+            if q == code:
+                code_score = 1.0
+            elif code.startswith(q):
+                code_score = 0.95
+            elif q in code:
+                code_score = 0.9
+            score = max(s1, s2, code_score)
             if score >= min_similarity:
                 scored.append((score, code, name or sap_name))
         scored.sort(key=lambda x: -x[0])
@@ -895,8 +903,38 @@ async def get_product_candidates_by_rag_answer(
                 "matches": [],
                 "skipped_reason": "RAG 정답지 인덱스가 비어있거나 검색 결과 없음",
             }
-        matches = []
+        # 商品コード + 商品名 조합 기준 중복 제거
+        # - 동일 (商品コード, 商品名)이 여러 후보로 나오면 similarity가 가장 높은 1건만 유지
+        best_by_key: dict[tuple[str, str], dict] = {}
         for r in raw:
+            code = (r.get("商品コード") or "").strip()
+            name = (r.get("商品名") or "").strip()
+            if not code and not name:
+                continue
+            try:
+                sim = float(r.get("similarity", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                sim = 0.0
+            key = (code, name)
+            prev = best_by_key.get(key)
+            if prev is None:
+                best_by_key[key] = r
+                continue
+            try:
+                prev_sim = float(prev.get("similarity", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                prev_sim = 0.0
+            if sim > prev_sim:
+                best_by_key[key] = r
+
+        deduped_raw = sorted(
+            best_by_key.values(),
+            key=lambda x: float(x.get("similarity", 0.0) or 0.0),
+            reverse=True,
+        )
+
+        matches = []
+        for r in deduped_raw:
             shikiri = r.get("仕切")
             honbu = r.get("本部長")
             if isinstance(shikiri, str) and shikiri.strip() != "":

@@ -899,16 +899,22 @@ async def get_retail_rag_answer_items(
 ):
     """
     documents_current.created_by_user_id IS NOT NULL 인 문서에 속한 item만 조회.
-    item_data에서 得意先, 受注先コード, 小売先コード 를 꺼내 중복 제거 후 반환 (RAG 정답지 후보).
+    item_data에서 得意先당 updated_at 최신 1건만 꺼내 반환 (RAG 정답지 후보, 得意先당 1건).
     """
     _ensure_admin(current_user)
     def _fetch_retail_rag_items_sync(database):
         with database.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT DISTINCT i.item_data->>'得意先' AS "得意先", i.item_data->>'受注先コード' AS "受注先コード", i.item_data->>'小売先コード' AS "小売先コード"
-                FROM items_current i INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
-                WHERE d.created_by_user_id IS NOT NULL ORDER BY "得意先", "受注先コード", "小売先コード"
+                SELECT DISTINCT ON (TRIM(COALESCE(i.item_data->>'得意先', '')))
+                    i.item_data->>'得意先' AS "得意先",
+                    i.item_data->>'受注先コード' AS "受注先コード",
+                    i.item_data->>'小売先コード' AS "小売先コード"
+                FROM items_current i
+                INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                WHERE d.created_by_user_id IS NOT NULL
+                  AND TRIM(COALESCE(i.item_data->>'得意先', '')) != ''
+                ORDER BY TRIM(COALESCE(i.item_data->>'得意先', '')), i.updated_at DESC NULLS LAST
             """)
             rows = cursor.fetchall()
         return [{"得意先": (r.get("得意先") or "").strip(), "受注先コード": (r.get("受注先コード") or "").strip(), "小売先コード": (r.get("小売先コード") or "").strip()} for r in rows]
@@ -943,14 +949,14 @@ async def get_product_rag_answer_items(
 ):
     """
     documents_current.created_by_user_id IS NOT NULL 인 문서에 속한 item만 조회.
-    item_data에서 商品名, 商品コード, 仕切, 本部長 를 꺼내 중복 제거 후 반환 (제품 RAG 정답지 후보).
+    item_data에서 商品名당 updated_at 최신 1건만 꺼내 반환 (제품 RAG 정답지 후보, 商品名당 1건).
     """
     _ensure_admin(current_user)
     def _fetch_product_rag_items_sync(database):
         with database.get_connection() as conn:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute("""
-                SELECT DISTINCT
+                SELECT DISTINCT ON (TRIM(COALESCE(i.item_data->>'商品名', '')))
                     i.item_data->>'商品名' AS "商品名",
                     i.item_data->>'商品コード' AS "商品コード",
                     i.item_data->>'仕切' AS "仕切",
@@ -958,9 +964,9 @@ async def get_product_rag_answer_items(
                 FROM items_current i
                 INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
                 WHERE d.created_by_user_id IS NOT NULL
-                AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
-                AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
-                ORDER BY "商品名", "商品コード"
+                  AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
+                  AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
+                ORDER BY TRIM(COALESCE(i.item_data->>'商品名', '')), i.updated_at DESC NULLS LAST
             """)
             rows = cursor.fetchall()
         return [

@@ -210,6 +210,9 @@ export function UnitPriceMatchModal({
   const customerName = getCustomerName(row)
   const customerCode = getCustomerCode(row)
 
+  /** 商品コード 입력이 숫자(전각/반각)인지 판별 */
+  const isProductCodeLike = (v: string): boolean => /^[0-9０-９]+$/.test((v ?? '').trim())
+
   // 단가 탭: 후보 목록 + 最終候補 폼（適用 후 수정 가능, 確定 시 그리드 반영）
   const [unitMatches, setUnitMatches] = useState<UnitPriceMatch[]>([])
   const [unitLoading, setUnitLoading] = useState(false)
@@ -223,6 +226,8 @@ export function UnitPriceMatchModal({
   const [unitFinalForm, setUnitFinalForm] = useState<UnitPriceFinalForm>(EMPTY_UNIT_FINAL_FORM)
   /** 商品コード로 unit_price 조회한 仕切・本部長（자동완성, 수정 불가） */
   const [unitPriceAutoFill, setUnitPriceAutoFill] = useState<{ 仕切: number | null; 本部長: number | null }>({ 仕切: null, 本部長: null })
+  /** 商品コード 변경 후 unit_price 자동 조회 중 */
+  const [unitPriceAutoLoading, setUnitPriceAutoLoading] = useState(false)
   const [sapProductQuery, setSapProductQuery] = useState('')
   const [sapProductMatches, setSapProductMatches] = useState<Array<{ 제품코드: string; 제품명: string }>>([])
   const [sapProductLoading, setSapProductLoading] = useState(false)
@@ -262,6 +267,7 @@ export function UnitPriceMatchModal({
       setFinalForm(EMPTY_FINAL_FORM)
       setUnitFinalForm(EMPTY_UNIT_FINAL_FORM)
       setUnitPriceAutoFill({ 仕切: null, 本部長: null })
+      setUnitPriceAutoLoading(false)
       lastSapFetchedRef.current = null
       lastSapVendorFetchedRef.current = null
     } else if (row) {
@@ -284,14 +290,24 @@ export function UnitPriceMatchModal({
 
   /** 商品コード가 바뀌면 unit_price에서 仕切・本部長 조회 + sap_product에서 제품명 조회해 検索 필드·자동완성 */
   useEffect(() => {
-    const code = unitFinalForm.商品コード.trim()
-    if (!code || !open || activeTab !== 'unit_price') {
-      if (!code) {
+    const raw = unitFinalForm.商品コード.trim()
+    if (!raw || !open || activeTab !== 'unit_price') {
+      if (!raw) {
         setUnitPriceAutoFill({ 仕切: null, 本部長: null })
         setSapProductQuery('')
       }
+      setUnitPriceAutoLoading(false)
       return
     }
+    // 商品コード 칸에 문자를 입력한 경우에는 unit_price 자동조회는 스킵합니다.
+    // (候補 검색은 sapProductQuery/useEffect가 담당)
+    if (!isProductCodeLike(raw)) {
+      setUnitPriceAutoFill({ 仕切: null, 本部長: null })
+      setUnitPriceAutoLoading(false)
+      return
+    }
+    const code = toHankakuNum(raw)
+    setUnitPriceAutoLoading(true)
     Promise.all([
       searchApi.getUnitPriceByProductCode(code),
       searchApi.getProductNameByCode(code),
@@ -307,6 +323,7 @@ export function UnitPriceMatchModal({
       .catch(() => {
         setUnitPriceAutoFill({ 仕切: null, 本部長: null })
       })
+      .finally(() => setUnitPriceAutoLoading(false))
   }, [open, activeTab, unitFinalForm.商品コード])
 
   /** sap_product 검색: 単価 最終候補 검색 필드 원천 */
@@ -530,17 +547,12 @@ export function UnitPriceMatchModal({
     setUnitFinalForm({ 商品コード: m.제품코드 != null ? String(m.제품코드) : '' })
   }
 
-  /** 商品名 RAG 정답지 후보 適用 → 最終候補에 商品コード・仕切・本部長 반영 */
+  /** 商品名 RAG 정답지 후보 適用 → 最終候補에 商品コード만 반영 */
   const handleSelectProductRagToFinal = (m: ProductRagMatch) => {
     setUnitFinalForm({ 商品コード: m.商品コード || '' })
-    const shikiri =
-      typeof m.仕切 === 'number' ? m.仕切 : m.仕切 != null && m.仕切 !== '' ? Number(m.仕切) : null
-    const honbu =
-      typeof m.本部長 === 'number' ? m.本部長 : m.本部長 != null && m.本部長 !== '' ? Number(m.本部長) : null
-    setUnitPriceAutoFill({
-      仕切: shikiri != null && !Number.isNaN(shikiri) ? shikiri : null,
-      本部長: honbu != null && !Number.isNaN(honbu) ? honbu : null,
-    })
+    // 2) 방법(두번째): RAG는 매핑(상품코드)만 담당하고,
+    // 仕切・本部長는 항상 unit_price 자동 조회 결과만 사용한다.
+    setUnitPriceAutoFill({ 仕切: null, 本部長: null })
   }
 
   /** 単価 最終候補 確定 → 그리드 반영 후 모달 닫기 */
@@ -558,9 +570,9 @@ export function UnitPriceMatchModal({
   /** 검색에서 선택 시 商品コード를 최종후보에 반영, 검색 필드에는 선택한 제품명 표시（仕切・本部長는 商品コード로 자동 조회） */
   const applySapProductMatchToForm = useCallback((m: { 제품코드?: string; 제품명?: string; 商品コード?: string; 商品名?: string }) => {
     const code = m.제품코드 ?? m.商品コード ?? ''
-    const displayName = (m.제품명 ?? m.商品名 ?? '').trim()
     setUnitFinalForm({ 商品コード: code })
-    setSapProductQuery((prev) => (displayName || prev))
+    // 선택 후에는 후보 목록을 정리
+    setSapProductQuery('')
     setSapProductMatches([])
   }, [])
 
@@ -736,7 +748,7 @@ export function UnitPriceMatchModal({
               <section className="retail-final-section">
                 <h4 className="retail-mapping-section-title">最終候補</h4>
                 <div className="retail-final-box">
-                  <p className="unit-price-match-modal-hint">検索は商品名でsap_productから。商品コードのみ入力。仕切・本部長はunit_priceで自動表示。</p>
+                  <p className="unit-price-match-modal-hint">この「商品コード」欄に商品名(文字)または商品コード(数字)を入力すると sap_product から候補を探します。仕切・本部長は unit_price で自動表示。</p>
                   <div className="retail-final-form">
                     <label className="retail-final-label">
                       <span>商品コード</span>
@@ -744,7 +756,26 @@ export function UnitPriceMatchModal({
                         type="text"
                         className="retail-final-input"
                         value={unitFinalForm.商品コード}
-                        onChange={(e) => setUnitFinalForm((f) => ({ ...f, 商品コード: e.target.value }))}
+                        onChange={(e) => {
+                          const nextRaw = e.target.value
+                          const nextTrim = (nextRaw ?? '').trim()
+                          const normalized = isProductCodeLike(nextTrim) ? toHankakuNum(nextTrim) : nextRaw
+                          setUnitFinalForm({ 商品コード: normalized })
+
+                          if (!nextTrim) {
+                            setSapProductQuery('')
+                            setSapProductMatches([])
+                            return
+                          }
+                          if (isProductCodeLike(nextTrim)) {
+                            // 숫자=상품코드 → unit_price 자동조회만 사용
+                            setSapProductQuery('')
+                            setSapProductMatches([])
+                          } else {
+                            // 문자=상품명 → sap_product 후보 검색
+                            setSapProductQuery(nextTrim)
+                          }
+                        }}
                         placeholder="商品コード"
                       />
                     </label>
@@ -753,28 +784,12 @@ export function UnitPriceMatchModal({
                         仕切: {unitPriceAutoFill.仕切 != null ? Number(unitPriceAutoFill.仕切).toLocaleString() : '—'} / 本部長: {unitPriceAutoFill.本部長 != null ? Number(unitPriceAutoFill.本部長).toLocaleString() : '—'}
                       </p>
                     )}
-                  </div>
-                  <div className="retail-final-sap-search">
-                    <label className="retail-final-label">
-                      <span>検索（商品名・sap_product）</span>
-                      <input
-                        type="text"
-                        className="retail-final-input"
-                        value={sapProductQuery}
-                        onChange={(e) => setSapProductQuery(e.target.value)}
-                        placeholder="商品名で検索"
-                      />
-                    </label>
                     {sapProductLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
                     {!sapProductLoading && sapProductMatches.length > 0 && (
                       <ul className="retail-final-sap-list">
                         {sapProductMatches.map((m, i) => (
                           <li key={i}>
-                            <button
-                              type="button"
-                              className="retail-final-sap-item"
-                              onClick={() => applySapProductMatchToForm(m)}
-                            >
+                            <button type="button" className="retail-final-sap-item" onClick={() => applySapProductMatchToForm(m)}>
                               {m.제품코드} / {m.제품명}
                             </button>
                           </li>
@@ -785,7 +800,7 @@ export function UnitPriceMatchModal({
                   <button
                     type="button"
                     className="retail-confirm-btn"
-                    disabled={!unitFinalForm.商品コード.trim()}
+                    disabled={!isProductCodeLike(unitFinalForm.商品コード.trim()) || unitPriceAutoLoading}
                     onClick={handleConfirmUnitPrice}
                   >
                     確定
@@ -794,7 +809,7 @@ export function UnitPriceMatchModal({
               </section>
 
               <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">1) 商品名 RAG 정답지 類似度（벡터 DB）</h4>
+                <h4 className="retail-mapping-section-title">1) 商品名 RAG 정답지（벡터 DB）</h4>
                 {unitByRagAnswer.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
                 {unitByRagAnswer.skippedReason && !unitByRagAnswer.loading && (
                   <p className="unit-price-match-modal-empty">{unitByRagAnswer.skippedReason}</p>
@@ -814,9 +829,6 @@ export function UnitPriceMatchModal({
                       <tr>
                         <th>商品名</th>
                         <th>商品コード</th>
-                        <th>類似度</th>
-                        <th>仕切</th>
-                        <th>本部長</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -825,17 +837,6 @@ export function UnitPriceMatchModal({
                         <tr key={i}>
                           <td>{m.商品名 || '—'}</td>
                           <td>{m.商品コード || '—'}</td>
-                          <td>{typeof m.similarity === 'number' ? m.similarity.toFixed(2) : '—'}</td>
-                          <td>
-                            {m.仕切 != null && m.仕切 !== ''
-                              ? Number(m.仕切).toLocaleString()
-                              : '—'}
-                          </td>
-                          <td>
-                            {m.本部長 != null && m.本部長 !== ''
-                              ? Number(m.本部長).toLocaleString()
-                              : '—'}
-                          </td>
                           <td>
                             <button type="button" onClick={() => handleSelectProductRagToFinal(m)}>
                               適用

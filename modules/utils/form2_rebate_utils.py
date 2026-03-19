@@ -8,6 +8,7 @@
 page_results 구조: RAG 파서와 동일, 각 페이지 {"items": [...]} 형태.
 """
 
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 
@@ -39,10 +40,10 @@ def _get_str_value(item: Dict[str, Any], key: str) -> Optional[str]:
 
 
 def _parse_amount(value: Any) -> int:
-    """金額/金額2 값을 정수로 파싱 (쉼표 제거)."""
+    """金額/金額2 값을 정수로 파싱. 전각 숫자·쉼표(NFKC) 후 반각 쉼표 제거."""
     if value is None:
         return 0
-    s = str(value).replace(",", "").strip()
+    s = unicodedata.normalize("NFKC", str(value)).replace(",", "").replace("，", "").strip()
     if not s:
         return 0
     try:

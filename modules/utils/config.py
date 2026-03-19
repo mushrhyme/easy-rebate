@@ -5,6 +5,7 @@ PIL Image 설정, .env 로드, 프로젝트 루트 경로 계산 등
 애플리케이션 전역 설정을 중앙에서 관리합니다.
 """
 
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 from PIL import Image, ImageFile
@@ -52,6 +53,13 @@ class RAGConfig:
             "finet": "excel",
             "mail": "azure",
         }
+        # .env 로드 후 RAG/Gemini 프롬프트 파일명 오버라이드 (RAG_PROMPT_FILE, GEMINI_PROMPT_FILE)
+        env_rag = os.getenv("RAG_PROMPT_FILE", "").strip()
+        if env_rag:
+            self.rag_prompt_file = env_rag
+        env_gemini = os.getenv("GEMINI_PROMPT_FILE", "").strip()
+        if env_gemini:
+            self.gemini_prompt_file = env_gemini
     top_k: int = 15
     similarity_threshold: float = 0.7
     search_method: str = "hybrid"
@@ -62,7 +70,7 @@ class RAGConfig:
     max_parallel_workers: int = 3  # Azure OCR 1단계 병렬 수 (1=순차, 3~5 권장. 업스테이지와 달리 동시 호출 가능)
     rag_llm_parallel_workers: int = 5  # RAG+LLM 2단계 병렬 워커 수
     ocr_request_delay: float = 2.0  # (미사용) Upstage 등 호출 간격용 예비
-    rag_prompt_file: str = "rag_with_example_v7.txt"
+    rag_prompt_file: str = "rag_with_example_v8.txt"
     gemini_prompt_file: str = "prompt_v5.txt"
 
 

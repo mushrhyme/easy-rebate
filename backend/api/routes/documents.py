@@ -1337,6 +1337,40 @@ def _reanalyze_page_rag_only_sync(
     return page_json
 
 
+# db_items.save_single_page_data 와 동일한 제외 키 — debug2에 DB 저장 결과와 동일한 JSON 기록용
+_DEBUG2_PAGE_META_EXCLUDE = frozenset(
+    {"items", "page_role", "page_number", "_rag_reference", "ocr_text", "analyzed_vector_version", "last_analyzed_at"}
+)
+
+
+def _write_debug2_db_result(pdf_filename: str, page_number: int, page_json: Dict) -> None:
+    """
+    DB에 저장된 결과와 동일한 구조를 debug2에 기록.
+    page_meta 제외 키는 db_items.save_single_page_data 와 동일.
+    """
+    try:
+        pdf_name = pdf_filename[:-4] if pdf_filename.lower().endswith(".pdf") else pdf_filename
+        debug_base = get_project_root() / "debug2" / pdf_name
+        debug_base.mkdir(parents=True, exist_ok=True)
+        page_meta = {
+            k: v for k, v in page_json.items()
+            if k not in _DEBUG2_PAGE_META_EXCLUDE
+        }
+        stored = {
+            "page_number": page_number,
+            "page_role": page_json.get("page_role", "detail"),
+            **page_meta,
+            "items": page_json.get("items", []),
+        }
+        if page_json.get("ocr_text") is not None:
+            stored["ocr_text"] = page_json["ocr_text"]
+        out_path = debug_base / f"page_{page_number}_llm_response_parsed.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(stored, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def _get_ocr_text_from_db(db, pdf_filename: str, page_number: int) -> Optional[str]:
     """DB에서 해당 페이지의 ocr_text 반환 (컬럼 또는 page_meta._ocr_text). 없으면 None."""
     page_result = db.get_page_result(pdf_filename, page_number)
@@ -1616,6 +1650,7 @@ async def analyze_single_page(
     )
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save page")
+    _write_debug2_db_result(body.pdf_filename, body.page_number, page_json)
     return {"success": True, "page": page_json}
 
 
@@ -1700,6 +1735,7 @@ async def analyze_from_page(
                 )
                 if success:
                     analyzed.append(pnum)
+                    _write_debug2_db_result(body.pdf_filename, pnum, pjson)
             elif err and err != "cancelled":
                 failed.append({"page": pnum, "error": err})
     finally:

@@ -832,28 +832,32 @@ class ItemsMixin:
                 data_year = doc_info.get("data_year")
                 data_month = doc_info.get("data_month")
             
-            # 2. page_data 조회 (메타데이터) - 연월에 따라 테이블 선택
+            # 2. page_data 조회 (메타데이터) — 저장은 항상 current에만 되므로 current 우선 조회 후, 없으면 archive
             query_start = time.perf_counter()  # page_data 쿼리 시간 측정 시작
             page_row = None
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
-                
-                if data_year is not None and data_month is not None:
-                    # 특정 연월 테이블 조회
-                    table_suffix = get_table_suffix(data_year, data_month)
-                    page_data_table = f"page_data_{table_suffix}"
-                    cursor.execute(f"""
+                try:
+                    cursor.execute("""
                         SELECT page_role, page_meta, last_edited_at, is_rag_candidate, ocr_text, analyzed_vector_version, last_analyzed_at
-                        FROM {page_data_table}
+                        FROM page_data_current
                         WHERE pdf_filename = %s AND page_number = %s
+                        LIMIT 1
                     """, (pdf_filename, page_num))
                     page_row = cursor.fetchone()
-                else:
-                    # current에서 먼저 찾고, 없으면 archive에서 찾기 (ocr_text 등 Phase 1 컬럼 포함)
+                except Exception:
+                    cursor.execute("""
+                        SELECT page_role, page_meta, last_edited_at, is_rag_candidate
+                        FROM page_data_current
+                        WHERE pdf_filename = %s AND page_number = %s
+                        LIMIT 1
+                    """, (pdf_filename, page_num))
+                    page_row = cursor.fetchone()
+                if not page_row:
                     try:
                         cursor.execute("""
                             SELECT page_role, page_meta, last_edited_at, is_rag_candidate, ocr_text, analyzed_vector_version, last_analyzed_at
-                            FROM page_data_current
+                            FROM page_data_archive
                             WHERE pdf_filename = %s AND page_number = %s
                             LIMIT 1
                         """, (pdf_filename, page_num))
@@ -861,29 +865,11 @@ class ItemsMixin:
                     except Exception:
                         cursor.execute("""
                             SELECT page_role, page_meta, last_edited_at, is_rag_candidate
-                            FROM page_data_current
+                            FROM page_data_archive
                             WHERE pdf_filename = %s AND page_number = %s
                             LIMIT 1
                         """, (pdf_filename, page_num))
                         page_row = cursor.fetchone()
-                    
-                    if not page_row:
-                        try:
-                            cursor.execute("""
-                                SELECT page_role, page_meta, last_edited_at, is_rag_candidate, ocr_text, analyzed_vector_version, last_analyzed_at
-                                FROM page_data_archive
-                                WHERE pdf_filename = %s AND page_number = %s
-                                LIMIT 1
-                            """, (pdf_filename, page_num))
-                            page_row = cursor.fetchone()
-                        except Exception:
-                            cursor.execute("""
-                                SELECT page_role, page_meta, last_edited_at, is_rag_candidate
-                                FROM page_data_archive
-                                WHERE pdf_filename = %s AND page_number = %s
-                                LIMIT 1
-                            """, (pdf_filename, page_num))
-                            page_row = cursor.fetchone()
             
                     
             # 3. 키 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys
@@ -989,44 +975,22 @@ class ItemsMixin:
             페이지별 파싱 결과 리스트
         """
         try:
-            # 성능 최적화: N+1 쿼리 문제 해결
-            # 각 페이지마다 get_page_result()를 호출하는 대신,
-            # 필요한 경우 배치 조회를 고려할 수 있으나,
-            # 현재 구조상 get_page_result()가 복잡한 로직을 포함하므로
-            # 일단 기존 방식 유지하되, page_data 조회는 배치로 최적화
-            
-            # 먼저 문서 정보 조회 (테이블 선택용)
-            doc_info = self.get_document(pdf_filename)
-            data_year = doc_info.get("data_year") if doc_info else None
-            data_month = doc_info.get("data_month") if doc_info else None
-            
+            # 페이지 목록은 항상 current + archive UNION으로 조회 (저장은 항상 current만 사용하므로 화면에 바로 반영되도록)
             with self.get_connection() as conn:
                 cursor = conn.cursor(cursor_factory=RealDictCursor)
                 
                 # 1. 모든 페이지 번호와 메타데이터를 한 번에 조회 (배치 조회)
-                if data_year is not None and data_month is not None:
-                    # 특정 연월 테이블 조회
-                    table_suffix = get_table_suffix(data_year, data_month)
-                    page_data_table = f"page_data_{table_suffix}"
-                    cursor.execute(f"""
-                        SELECT DISTINCT page_number, page_role, page_meta
-                        FROM {page_data_table}
-                        WHERE pdf_filename = %s
-                        ORDER BY page_number
-                    """, (pdf_filename,))
-                else:
-                    # current와 archive 모두 조회
-                    cursor.execute("""
-                        SELECT DISTINCT page_number, page_role, page_meta
-                        FROM page_data_current
-                        WHERE pdf_filename = %s
-                        UNION ALL
-                        SELECT DISTINCT page_number, page_role, page_meta
-                        FROM page_data_archive
-                        WHERE pdf_filename = %s
-                        ORDER BY page_number
-                    """, (pdf_filename, pdf_filename))
-                
+                # 저장은 항상 page_data_current에만 되므로, current를 항상 포함해 조회해야 방금 저장한 결과가 화면에 보임
+                cursor.execute("""
+                    SELECT DISTINCT page_number, page_role, page_meta
+                    FROM page_data_current
+                    WHERE pdf_filename = %s
+                    UNION
+                    SELECT DISTINCT page_number, page_role, page_meta
+                    FROM page_data_archive
+                    WHERE pdf_filename = %s
+                    ORDER BY page_number
+                """, (pdf_filename, pdf_filename))
                 page_data_rows = cursor.fetchall()
                 page_numbers = [row['page_number'] for row in page_data_rows]
                 

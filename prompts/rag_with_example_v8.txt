@@ -1,0 +1,204 @@
+REFERENCE_OCR (OCR example for structural reference):
+{example_ocr}
+
+REFERENCE_JSON (correct answer structure example):
+{example_answer_str}
+
+TARGET_OCR (actual OCR text to process):
+{ocr_text}
+
+MISSION
+
+Your task is to fully restructure the TARGET_OCR document into a JSON object.
+
+The output JSON must strictly follow the same structure and semantic system as REFERENCE_JSON.
+
+REFERENCE_JSON is both:
+- a structure reference
+- a semantic labeling reference
+
+Fields like タイプ should follow the same labeling logic shown in REFERENCE_JSON.
+
+Classification fields such as タイプ and page_role:
+- are NOT direct extraction fields
+- may be inferred from document patterns and REFERENCE_JSON
+
+
+IMPORTANT PRINCIPLES
+
+All values must be extracted from TARGET_OCR,
+EXCEPT for classification fields (タイプ, page_role).
+
+タイプ is a classification field:
+- it must NOT be extracted by literal matching only
+- it must be inferred based on row patterns and REFERENCE_JSON
+
+If a row matches the same semantic pattern as REFERENCE_JSON,
+assign the same タイプ.
+
+Do NOT return null for タイプ if a matching pattern clearly exists.
+
+
+FIELD NAME IMMUTABILITY RULE (CRITICAL)
+
+The JSON field names must be copied EXACTLY from REFERENCE_JSON.
+
+Do NOT:
+- invent new field names
+- translate field names
+- partially modify field names
+- mix languages in field names
+- create variations of existing field names
+
+If a key does not exist in REFERENCE_JSON,
+it must NEVER appear in the output.
+
+
+STRUCTURE RULES
+
+The output JSON schema must be a strict clone of REFERENCE_JSON keys,
+EXCEPT for the items field.
+
+This includes:
+- object structure
+- array structure
+- key names
+- key order
+
+Only values may change.
+
+
+STRUCTURE EXCEPTION RULE (ITEMS)
+
+items is controlled ONLY by page_role.
+
+If page_role = "detail":
+- items MUST exist
+- items MUST be an array
+- if no rows exist → "items": []
+
+If page_role = "cover", "summary", or "reply":
+- omit the items key entirely
+- do NOT output items: []
+- do NOT inherit items from REFERENCE_JSON
+
+
+GENERATION PROCEDURE
+
+Follow strictly:
+
+1. Copy the entire JSON structure from REFERENCE_JSON
+2. Keep all keys exactly identical
+3. Determine page_role
+4. Apply items rule based on page_role
+5. Fill values using TARGET_OCR
+6. Infer タイプ using REFERENCE_JSON patterns
+
+
+PAGE ROLE RULES
+
+page_role must be one of:
+
+"cover"
+"detail"
+"summary"
+"reply"
+
+page_role is inferred from content (not explicitly written).
+
+Priority:
+
+1. Repeating item rows → "detail"
+2. Totals / tax / summary → "summary"
+3. Company info only → "cover"
+4. Otherwise → "reply"
+
+
+ROW EXTRACTION RULES
+
+All recognizable rows must be extracted into items.
+
+Do NOT:
+- delete rows
+- merge rows
+
+Duplicates must be preserved.
+
+
+VALUE EXTRACTION RULES
+
+If value exists → extract  
+If not → null
+
+
+REFERENCE_OCR COLUMN RULE
+
+Use REFERENCE_OCR to understand column alignment.
+
+In TARGET_OCR:
+- extract by row alignment
+- follow relative column order
+- ignore spacing inconsistencies
+
+
+AMOUNT NORMALIZATION RULE
+
+"1:500" → "1500"  
+"12:600" → "12600"
+
+Remove ":" only.  
+Do NOT invent digits.
+
+
+NUMBER RULE
+
+Do NOT guess decimals.  
+Prefer raw OCR value if ambiguous.
+
+
+備考 / 条件備考 RULES
+
+Both must be populated if both exist.
+
+備考:
+- extract from 備考 column
+- replace line breaks with space
+- no tabs
+
+条件備考:
+- extract based on REFERENCE_OCR column
+- normalize all whitespace → single space
+- no tabs
+
+
+DITTO RULE
+
+Symbols:
+〃 ″ " ' // ／ 1/ /
+
+If cell contains only these → null
+
+Never output these symbols.
+
+
+FAIL-SAFE RULE
+
+If uncertain:
+- keep structure
+- return null for values
+
+
+JSON OUTPUT RULES
+
+Return exactly ONE JSON object
+
+Do NOT include:
+- explanations
+- comments
+- markdown
+- extra text
+
+
+FINAL OUTPUT
+
+Return exactly one valid JSON object

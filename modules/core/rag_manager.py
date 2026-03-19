@@ -1753,8 +1753,9 @@ class RAGManager:
 
     def build_product_rag_answer_index(self) -> int:
         """
-        정답지 문서(created_by_user_id IS NOT NULL) item에서 商品名/商品コード/仕切/本部長 중복 제거 후
-        商品名 텍스트만 임베딩해 product_rag_answer FAISS 인덱스 구축 후 DB 저장.
+        정답지 문서(created_by_user_id IS NOT NULL) item에서 商品名당 updated_at 최신 1건만 사용해
+        商品名/商品コード/仕切/本部長를 추출한 뒤, 商品名 텍스트만 임베딩해 product_rag_answer FAISS 인덱스 구축 후 DB 저장.
+        (동일 제품명에 여러 商品コード가 있으면 가장 최근에 추가/수정된 행의 정보로 통일)
         반환: 저장된 벡터 수.
         """
         if not self.use_db or not getattr(self, "db", None):
@@ -1763,8 +1764,9 @@ class RAGManager:
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
+                # 商品名당 최신 1건만 사용: updated_at DESC 기준 DISTINCT ON (retail 정답지와 동일 정책)
                 cursor.execute("""
-                    SELECT DISTINCT
+                    SELECT DISTINCT ON (TRIM(COALESCE(i.item_data->>'商品名', '')))
                         i.item_data->>'商品名' AS "商品名",
                         i.item_data->>'商品コード' AS "商品コード",
                         i.item_data->>'仕切' AS "仕切",
@@ -1772,9 +1774,9 @@ class RAGManager:
                     FROM items_current i
                     INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
                     WHERE d.created_by_user_id IS NOT NULL
-                    AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
-                    AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
-                    ORDER BY "商品名", "商品コード"
+                      AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
+                      AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
+                    ORDER BY TRIM(COALESCE(i.item_data->>'商品名', '')), i.updated_at DESC NULLS LAST
                 """)
                 for row in cursor.fetchall():
                     name = (row[0] or "").strip()

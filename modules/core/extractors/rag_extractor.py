@@ -9,13 +9,14 @@ import os
 import re
 import json
 import time
+import unicodedata
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 from openai import OpenAI
 import numpy as np
 
 from modules.core.rag_manager import get_rag_manager
-from modules.utils.config import get_project_root, load_rag_prompt
+from modules.utils.config import get_project_root, load_rag_prompt, get_rag_prompt_path
 from modules.utils.llm_retry import call_with_retry
 
 
@@ -341,7 +342,31 @@ def extract_json_with_rag(
             "form_type": top_meta.get("form_type"),
             "metadata": top_meta,
         }
-    
+
+    # 디버그: 동일 쿼리로 threshold=0, top_k=10 검색 결과를 txt로 저장 (환경별 순위 비교용)
+    if debug_dir and page_num and os.path.exists(debug_dir):
+        try:
+            top10_raw = rag_manager.search_similar_advanced(
+                query_text=ocr_text,
+                top_k=10,
+                similarity_threshold=0.0,
+                search_method=search_method,
+                hybrid_alpha=hybrid_alpha,
+                form_type=effective_form_type,
+            )
+            out_path = os.path.join(debug_dir, f"page_{page_num}_rag_top_results.txt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write("rank\tpdf_name\tpage_number\tsimilarity\thybrid_score\n")
+                for i, r in enumerate(top10_raw, 1):
+                    meta = r.get("metadata", {}) or {}
+                    pdf_name = meta.get("pdf_name") or ""
+                    page_num_val = meta.get("page_num", "")
+                    sim = r.get("similarity", 0)
+                    hybrid = r.get("hybrid_score", "")
+                    f.write(f"{i}\t{pdf_name}\t{page_num_val}\t{sim}\t{hybrid}\n")
+        except Exception:
+            pass
+
     if progress_callback:
         if similar_examples:
             # 점수 키 확인 (hybrid_score, final_score, similarity 중 하나)
@@ -385,7 +410,10 @@ def extract_json_with_rag(
                 pass
 
     # 2. 프롬프트 구성 (include_bbox이고 ocr_words 있을 때만 단어 인덱스·좌표용 지시 추가)
+    prompt_path = get_rag_prompt_path()
     prompt_template = load_rag_prompt()
+    if page_num is not None:
+        print(f"[RAG] 프롬프트 파일: {prompt_path.name} (page {page_num})")
     text_for_prompt = ocr_text
     word_index_instruction = ""
     if include_bbox and ocr_words and len(ocr_words) > 0:
@@ -502,20 +530,31 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                 result_text = _sanitize_invalid_json_escapes(result_text)
                 result_json = json.loads(result_text)  # 잘못된 이스케이프 정규화 후 재시도 1회
             
-            # items 내 문자열 값 정규화: 탭·全角スペース→공백, 연속 공백/줄바꿈 하나로
+            # 전체 JSON 내 문자열 정규화: 전각 숫자/문자→반각(NFKC), 탭·全角スペース→공백, 연속 공백/줄바꿈 하나로
+            # → 조건금액·totals·document_number 등 모든 필드가 NET 계산 등에서 파싱 가능해짐
             def _normalize_item_string(s):
                 if not isinstance(s, str):
                     return s
+                s = unicodedata.normalize("NFKC", s)  # ０-９→0-9, ，→, 등
                 s = s.replace("\t", " ").replace("\u3000", " ").replace("\n", " ")
                 s = re.sub(r" +", " ", s).strip()
                 return s
-            
-            if isinstance(result_json.get("items"), list):
-                for item in result_json["items"]:
-                    if isinstance(item, dict):
-                        for k, v in list(item.items()):
-                            if isinstance(v, str):
-                                item[k] = _normalize_item_string(v)
+
+            def _normalize_all_strings_in_place(obj: Any) -> Any:
+                """result_json 전체를 재귀 순회하며 모든 str에 전각→반각·공백 정규화 적용."""
+                if isinstance(obj, dict):
+                    for k, v in list(obj.items()):
+                        obj[k] = _normalize_all_strings_in_place(v)
+                    return obj
+                if isinstance(obj, list):
+                    for i, x in enumerate(obj):
+                        obj[i] = _normalize_all_strings_in_place(x)
+                    return obj
+                if isinstance(obj, str):
+                    return _normalize_item_string(obj)
+                return obj
+
+            _normalize_all_strings_in_place(result_json)
             
             # result_json이 딕셔너리가 아닌 경우 처리 (리스트인 경우 등)
             if not isinstance(result_json, dict):
