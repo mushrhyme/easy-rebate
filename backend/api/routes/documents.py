@@ -1633,10 +1633,23 @@ async def analyze_single_page(
     try:
         from modules.utils.fill_empty_values_utils import normalize_ditto_like_values_in_page_results, fill_empty_values_in_page_results
         from modules.utils.form2_rebate_utils import normalize_form2_rebate_conditions
-        page_results = normalize_ditto_like_values_in_page_results([page_json])
-        page_results = fill_empty_values_in_page_results(page_results, form_type=form_type)
-        page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)
-        page_json = page_results[0]
+        # 페이지 간 빈값 채우기를 위해 직전 페이지를 DB에서 로드해 컨텍스트로 포함
+        prev_page_json = None
+        if body.page_number > 1:
+            try:
+                prev_page_json = db.get_page_result(body.pdf_filename, body.page_number - 1)
+            except Exception:
+                prev_page_json = None
+        if prev_page_json:
+            page_results = normalize_ditto_like_values_in_page_results([prev_page_json, page_json])
+            page_results = fill_empty_values_in_page_results(page_results, form_type=form_type)
+            page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)
+            page_json = page_results[1]
+        else:
+            page_results = normalize_ditto_like_values_in_page_results([page_json])
+            page_results = fill_empty_values_in_page_results(page_results, form_type=form_type)
+            page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)
+            page_json = page_results[0]
     except Exception:
         pass
     page_json["ocr_text"] = ocr_text  # 저장 시 DB에 유지
@@ -1718,6 +1731,9 @@ async def analyze_from_page(
         pages_to_run = list(range(from_page, total_pages + 1))
         tasks = [run_one(pg) for pg in pages_to_run]
         results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 성공한 페이지 결과 수집 (페이지 순 정렬)
+        success_pages: list[tuple[int, dict]] = []
         for r in results:
             if isinstance(r, Exception):
                 continue
@@ -1726,18 +1742,41 @@ async def analyze_from_page(
                 cancelled = True
                 continue
             if pjson and not err:
-                success = db.save_single_page_data(
-                    pdf_filename=body.pdf_filename,
-                    page_json=pjson,
-                    form_type=form_type,
-                    upload_channel=upload_channel,
-                    image_data=None,
-                )
-                if success:
-                    analyzed.append(pnum)
-                    _write_debug2_db_result(body.pdf_filename, pnum, pjson)
+                success_pages.append((pnum, pjson))
             elif err and err != "cancelled":
                 failed.append({"page": pnum, "error": err})
+        success_pages.sort(key=lambda x: x[0])
+
+        # 페이지 간 빈값 채우기: from_page 직전 페이지를 DB에서 로드해 컨텍스트로 사용
+        if success_pages:
+            try:
+                from modules.utils.fill_empty_values_utils import normalize_ditto_like_values_in_page_results, fill_empty_values_in_page_results
+                from modules.utils.form2_rebate_utils import normalize_form2_rebate_conditions
+                context_pages = []
+                if from_page > 1:
+                    prev_page = db.get_page_result(body.pdf_filename, from_page - 1)
+                    if prev_page:
+                        context_pages = [prev_page]
+                all_jsons = context_pages + [pjson for _, pjson in success_pages]
+                all_jsons = normalize_ditto_like_values_in_page_results(all_jsons)
+                all_jsons = fill_empty_values_in_page_results(all_jsons, form_type=form_type)
+                all_jsons = normalize_form2_rebate_conditions(all_jsons, form_type=form_type)
+                offset = len(context_pages)
+                success_pages = [(pnum, all_jsons[offset + i]) for i, (pnum, _) in enumerate(success_pages)]
+            except Exception:
+                pass
+
+        for pnum, pjson in success_pages:
+            success = db.save_single_page_data(
+                pdf_filename=body.pdf_filename,
+                page_json=pjson,
+                form_type=form_type,
+                upload_channel=upload_channel,
+                image_data=None,
+            )
+            if success:
+                analyzed.append(pnum)
+                _write_debug2_db_result(body.pdf_filename, pnum, pjson)
     finally:
         async with _reanalysis_lock:
             _reanalysis_cancel_events.pop(body.pdf_filename, None)
