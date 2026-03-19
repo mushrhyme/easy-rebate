@@ -145,18 +145,40 @@ def _parse_float(val: Any) -> Optional[float]:
         return None
 
 
+def _lookup_prices_by_code(code: str, csv_path: Path) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """
+    unit_price.csv에서 제품코드로 시키리/본부장 조회.
+    반환: (仕切, 本部長) 또는 None (코드 없거나 파일 없음)
+    """
+    if not code or not csv_path.exists():
+        return None
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8")
+        df = df.dropna(subset=["제품코드", "시키리", "본부장"])
+        match = df[df["제품코드"].astype(str).str.strip() == code.strip()]
+        if match.empty:
+            return None
+        row = match.iloc[0]
+        return (_parse_float(row.get("시키리")), _parse_float(row.get("본부장")))
+    except Exception:
+        return None
+
+
 def resolve_product_and_prices(
     product_name: Optional[str], csv_path: Path
 ) -> Optional[Tuple[Optional[str], Optional[float], Optional[float]]]:
     """
     商品名으로 1) product_rag_answer RAG 검색 우선, 2) 없거나 유사도 낮으면 unit_price.csv 유사도 매칭.
     반환: (商品コード, 仕切, 本部長) 또는 None
+
+    주의: RAG 인덱스의 仕切/本部長은 CS 후처리가 적용된 값일 수 있으므로,
+    RAG에서 商品コード를 얻은 후 unit_price.csv에서 원본 단가를 재조회한다.
     """
     if not product_name or not str(product_name).strip():
         return None
     query_name = str(product_name).strip()
 
-    # 1) RAG 정답지 인덱스 우선 검색
+    # 1) RAG 정답지 인덱스 우선 검색 (商品コード 해석용)
     try:
         from modules.core.rag_manager import get_rag_manager
         rag = get_rag_manager()
@@ -167,9 +189,13 @@ def resolve_product_and_prices(
             r = rag_results[0]
             code = (r.get("商品コード") or "").strip()
             if code:
-                shikiri = _parse_float(r.get("仕切"))
-                honbu = _parse_float(r.get("本部長"))
-                return (code, shikiri, honbu)
+                # RAG는 商品コード 매핑만 사용. 仕切/本部長는 항상 unit_price에서 단가 조회 후 후처리(個/CS)에서 계산.
+                csv_prices = _lookup_prices_by_code(code, csv_path)
+                if csv_prices is not None:
+                    shikiri, honbu = csv_prices
+                    return (code, shikiri, honbu)
+                # CSV에 해당 제품코드 없으면 商品コード만 반환 (仕切/本部長는 None → 후처리에서 채우지 않음)
+                return (code, None, None)
     except Exception:
         pass
 
