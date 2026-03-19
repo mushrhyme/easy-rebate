@@ -231,6 +231,88 @@ def _attach_bbox_to_json(obj: Any, words: list, path: str = "") -> None:
             _attach_bbox_to_json(item, words, path + f"[{i}]")
 
 
+def _generate_strict_json_schema(example_answer: Dict[str, Any], include_bbox: bool) -> Optional[Dict[str, Any]]:
+    """example_answer를 기반으로 OpenAI Strict JSON Schema를 동적으로 생성합니다."""
+    if not example_answer or not isinstance(example_answer, dict):
+        return None
+        
+    properties = {}
+    required = []
+    
+    if "page_role" not in example_answer:
+        properties["page_role"] = {"type": ["string", "null"]}
+        required.append("page_role")
+        
+    for k, v in example_answer.items():
+        if k == "items":
+            item_props = {}
+            item_req = []
+            
+            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                all_item_keys = set()
+                for item in v:
+                    if isinstance(item, dict):
+                        all_item_keys.update(item.keys())
+                
+                for ik in v[0].keys():
+                    if ik not in item_req:
+                        item_req.append(ik)
+                for ik in all_item_keys:
+                    if ik not in item_req:
+                        item_req.append(ik)
+                        
+                for ik in item_req:
+                    item_props[ik] = {"type": ["string", "number", "boolean", "null"]}
+                    if include_bbox:
+                        item_props[f"{ik}_word_indices"] = {
+                            "type": ["array", "null"],
+                            "items": {"type": "integer"}
+                        }
+                        item_req.append(f"{ik}_word_indices")
+            
+            # OpenAI Strict Schema requires all objects to have defined properties
+            if not item_props:
+                return None
+                
+            properties["items"] = {
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object",
+                    "properties": item_props,
+                    "required": item_req,
+                    "additionalProperties": False
+                }
+            }
+            required.append("items")
+        else:
+            properties[k] = {"type": ["string", "number", "boolean", "null"]}
+            required.append(k)
+            if include_bbox:
+                properties[f"{k}_word_indices"] = {
+                    "type": ["array", "null"],
+                    "items": {"type": "integer"}
+                }
+                required.append(f"{k}_word_indices")
+                
+    if not properties:
+        return None
+        
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "rebate_extraction",
+            "description": "Extract structured data from rebate documents.",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False
+            }
+        }
+    }
+
+
 def extract_json_with_rag(
     ocr_text: str,
     question: Optional[str] = None,
@@ -475,8 +557,30 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
             "timeout": 120,
             "max_completion_tokens": 8000,
             "temperature": temperature,
-            "reasoning_effort": "none",  # GPT-5.2/5.1: temperature 사용 시 필수
         }
+        
+        # GPT-5.2/5.1 등 최신 모델에서 temperature 사용 시 reasoning_effort 설정 필요
+        if getattr(config, "_use_reasoning_effort", False) or "o1" in model_name or "o3" in model_name or "5" in model_name:
+            if "reasoning_effort" in config.__dict__:
+                api_params["reasoning_effort"] = config.reasoning_effort
+            else:
+                api_params["reasoning_effort"] = "none"
+
+        # Strict JSON Schema (Structured Outputs) 동적 적용
+        if similar_examples:
+            example = similar_examples[0]
+            example_answer = _sanitize_example_answer_for_prompt(
+                example["answer_json"],
+                example.get("key_order"),
+            )
+            strict_schema = _generate_strict_json_schema(example_answer, include_bbox)
+            if strict_schema:
+                api_params["response_format"] = strict_schema
+            else:
+                api_params["response_format"] = {"type": "json_object"}
+        else:
+            api_params["response_format"] = {"type": "json_object"}
+
         response = call_with_retry(lambda: client.chat.completions.create(**api_params))
         llm_end_time = time.time()
         llm_duration = llm_end_time - llm_start_time
@@ -540,18 +644,36 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                 s = re.sub(r" +", " ", s).strip()
                 return s
 
-            def _normalize_all_strings_in_place(obj: Any) -> Any:
+            # OCR 공백 분리 숫자 정규화 대상 필드 (소수점 2자리 값)
+            _SPACED_NUMBER_FIELDS = {"条件", "条件2", "単価", "販売価格", "仕切"}
+
+            def _normalize_spaced_number(s: str) -> str:
+                """
+                OCR이 공백으로 분리한 숫자를 소수점 있는 숫자로 정규화.
+                例: "71 00" → "71.00", "1 42 00" → "142.00", "43 50" → "43.50"
+                숫자와 공백으로만 이루어진 문자열이고 이미 소수점이 없을 때만 적용.
+                """
+                if re.match(r'^\d[\d ]*\d$', s) and '.' not in s:
+                    digits = s.replace(' ', '')
+                    if len(digits) > 2:
+                        return digits[:-2] + '.' + digits[-2:]
+                return s
+
+            def _normalize_all_strings_in_place(obj: Any, _field_key: str = "") -> Any:
                 """result_json 전체를 재귀 순회하며 모든 str에 전각→반각·공백 정규화 적용."""
                 if isinstance(obj, dict):
                     for k, v in list(obj.items()):
-                        obj[k] = _normalize_all_strings_in_place(v)
+                        obj[k] = _normalize_all_strings_in_place(v, _field_key=k)
                     return obj
                 if isinstance(obj, list):
                     for i, x in enumerate(obj):
-                        obj[i] = _normalize_all_strings_in_place(x)
+                        obj[i] = _normalize_all_strings_in_place(x, _field_key=_field_key)
                     return obj
                 if isinstance(obj, str):
-                    return _normalize_item_string(obj)
+                    s = _normalize_item_string(obj)
+                    if _field_key in _SPACED_NUMBER_FIELDS:
+                        s = _normalize_spaced_number(s)
+                    return s
                 return obj
 
             _normalize_all_strings_in_place(result_json)

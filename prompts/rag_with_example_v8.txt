@@ -53,6 +53,15 @@ Do NOT:
 If a key does not exist in REFERENCE_JSON,
 it must NEVER appear in the output.
 
+FORBIDDEN mutations (examples):
+- "受注先コード" must NEVER become "受注先_code", "受注先code", "受注先Code"
+- "得意先コード" must NEVER become "得意先_code", "得意先code"
+- Any Japanese key must NOT be partially converted to underscored or Latin form
+- Do NOT add keys with underscores (_) unless they exist in REFERENCE_JSON
+
+If you are uncertain about a key name, output null with the EXACT key from REFERENCE_JSON.
+Never output both a correct and an incorrect variant of the same key.
+
 
 STRUCTURE RULES
 
@@ -143,16 +152,33 @@ In TARGET_OCR:
 
 AMOUNT NORMALIZATION RULE
 
-"1:500" → "1500"  
+"1:500" → "1500"
 "12:600" → "12600"
 
-Remove ":" only.  
+Remove ":" only.
 Do NOT invent digits.
+
+
+OCR SPACE-SEPARATED NUMBER RULE
+
+OCR often splits a single decimal number into space-separated groups.
+Apply to numeric condition fields (条件, 単価, 販売価格, etc.):
+
+Rule: Remove all spaces between digit groups, then treat the last 2 digits as decimal places.
+
+Examples:
+"71 00"   → "71.00"
+"43 50"   → "43.50"
+"1 42 00" → "142.00"
+"80 00"   → "80.00"
+
+Do NOT apply to: 商品コード, 請求番号, 得意先コード, 配送支店, or any ID/code field.
+Do NOT apply if a decimal point already exists.
 
 
 NUMBER RULE
 
-Do NOT guess decimals.  
+Do NOT guess decimals.
 Prefer raw OCR value if ambiguous.
 
 
