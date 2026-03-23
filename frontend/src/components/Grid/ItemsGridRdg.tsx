@@ -1199,16 +1199,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         本部長: match.본부장 ?? unitPriceModalRow['本部長'],
         商品コード: match.제품코드 != null ? String(match.제품코드) : unitPriceModalRow['商品コード'],
       }
-      // FINET 01 + 数量単位=CS → 仕切・本部長 *= 入数 (매핑 모달에서 단가 적용 시에도 동일 계산)
-      if (data?.form_type === '01' && data?.upload_channel === 'finet' && String(unitPriceModalRow['数量単位'] ?? '').trim() === 'CS') {
-        const irisu = parseCellNum(unitPriceModalRow['入数'])
-        if (irisu != null && irisu > 0) {
-          const shikiri = parseCellNum(updatedRow['仕切'])
-          const honbu = parseCellNum(updatedRow['本部長'])
-          if (shikiri != null) updatedRow = { ...updatedRow, 仕切: Math.round(shikiri * irisu * 100) / 100 }
-          if (honbu != null) updatedRow = { ...updatedRow, 本部長: Math.round(honbu * irisu * 100) / 100 }
-        }
-      }
+      // FINET 01 + 数量単位=CS 일 때도 仕切・本部長은 unit_price.csv 원본(단가리스트 값) 그대로 유지.
+      // NET 계산에서만 条件 / 入数로 단가 기준 처리를 수행한다.
       setRows((prev) =>
         prev.map((r) => (r.item_id === itemId ? updatedRow : r))
       )
@@ -1419,6 +1411,25 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
               const shikiriNum = parseCellNum(row['仕切'])
               const honbuchoNum = parseCellNum(row['本部長'])
               let condNum = CONDITION_AMOUNT_KEYS.map((k) => parseCellNum(row[k])).find((n) => n != null) ?? null
+              
+              // FINET 01 + 数量単位=CS:
+              // 仕切・本部長은 unit_price.csv 원본(단가리스트) 그대로 유지.
+              // 따라서 NET/비교는 条件 값을 入数으로 나눈 후 단가 기준으로 계산.
+              // (예: NET = 仕切 - (条件 / 入数))
+              const unitRaw = String(row['数量単位'] ?? '').trim()
+              const unitNorm = unitRaw.replace('\uFF23', 'C').replace('\uFF33', 'S').toUpperCase() // 全角ＣＳ→CS
+              const irisuNum = parseCellNum(row['入数'])
+              const isCsTarget = String(data?.form_type ?? _formType ?? '').trim() === '01' &&
+                String(data?.upload_channel ?? '').trim() === 'finet' &&
+                unitNorm === 'CS' &&
+                irisuNum != null &&
+                irisuNum > 0 &&
+                '条件' in row
+              
+              if (isCsTarget) {
+                const condRaw = parseCellNum(row['条件'])
+                if (condRaw != null) condNum = condRaw / irisuNum
+              }
 
               // 4번 유형(form_type=04): NET 비교 입력은 반드시 未収条件 + 未収条件2(없으면 0)
               // 이 타입에는 '条件' 컬럼이 없고, '対象数量又は金額'에는 "60個" 같은 단위가 붙을 수 있어 parseCellNum이 실패할 수 있다.

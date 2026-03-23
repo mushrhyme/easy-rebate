@@ -669,7 +669,8 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
                 例: "71 00" → "71.00", "1 42 00" → "142.00", "43 50" → "43.50"
                 숫자와 공백으로만 이루어진 문자열이고 이미 소수점이 없을 때만 적용.
                 """
-                if re.match(r'^\d[\d ]*\d$', s) and '.' not in s:
+                # 공백 분리된 숫자에만 적용 (예: "71 00"). "222"처럼 공백 없는 값은 보존.
+                if re.match(r'^\d[\d ]*\d$', s) and ' ' in s and '.' not in s:
                     digits = s.replace(' ', '')
                     if len(digits) > 2:
                         return digits[:-2] + '.' + digits[-2:]

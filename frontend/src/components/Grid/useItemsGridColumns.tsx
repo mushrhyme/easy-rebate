@@ -372,7 +372,17 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             // 그 외 유형: 조건금액 후보(条件 / 対象数量又は金額 중 존재하는 키) 사용
             const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
             if (condNum == null) return <span>—</span>
-            return <span>{(shikiriNum - condNum).toLocaleString()}</span>
+            
+            // FINET 01 + 数量単位=CS:
+            // 仕切・本部長은 단가리스트 원본 그대로 유지.
+            // NET 비교/표시는 条件을 入数로 나눈 단가 기준으로 계산.
+            const unitRaw = String(row['数量単位'] ?? '').trim()
+            const unitNorm = unitRaw.replace('\uFF23', 'C').replace('\uFF33', 'S').toUpperCase() // 全角ＣＳ→CS
+            const irisuNum = parseCellNum(row['入数'])
+            const condForNet =
+              unitNorm === 'CS' && conditionAmountKey === '条件' && irisuNum != null && irisuNum > 0 ? condNum / irisuNum : condNum
+            
+            return <span>{(shikiriNum - condForNet).toLocaleString()}</span>
           },
         })
       }

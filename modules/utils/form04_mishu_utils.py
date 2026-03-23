@@ -16,6 +16,32 @@ _NUM_TOKEN_RE = re.compile(
 )
 
 
+def _normalize_form_type(form_type: Optional[str]) -> str:
+    """form_type 입력값을 2자리 문자열로 정규화. 예: '3' -> '03', '04' -> '04'"""
+    ft = str(form_type or "").strip()
+    if not ft:
+        return ""
+    m = re.search(r"\d+", ft)
+    if not m:
+        return ""
+    return m.group(0).zfill(2)
+
+
+def _looks_like_form03_04_item(item_dict: Dict[str, Any], normalized_form_type: str) -> bool:
+    """
+    item_dict 스키마 기반 안전 가드.
+    - form 03 예시 키: 条件％, ケース, バラ
+    - form 04 예시 키: 対象数量又は金額, 未収条件2, 入出荷支店
+    """
+    if "未収条件" not in item_dict:  # {'未収条件': '370'} 형태가 없으면 변환 대상 아님
+        return False
+    if normalized_form_type == "03":
+        return any(k in item_dict for k in ("条件％", "ケース", "バラ"))
+    if normalized_form_type == "04":
+        return any(k in item_dict for k in ("対象数量又は金額", "未収条件2", "入出荷支店"))
+    return False
+
+
 def _parse_num_token_and_has_decimal(v: Any) -> Tuple[Optional[float], bool]:
     """
     문자열/숫자에서 '첫 숫자 토큰'만 추출해 float로 파싱.
@@ -68,8 +94,10 @@ def apply_form04_mishu_decimal(
     - form_type: "03", "3", "04", "4" 또는 int 3, 4
     - '未収条件' 값의 숫자 토큰에 소수점(., ．, ·)이 있으면 이미 정규화된 값으로 간주하고 /100 변환을 생략
     """
-    ft = str(form_type or "").strip()
-    if ft not in ("04", "4", "03", "3"):
+    ft = _normalize_form_type(form_type)
+    if ft not in ("03", "04"):
+        return
+    if not _looks_like_form03_04_item(item_dict, ft):
         return
     key = "未収条件"
     v = item_dict.get(key)

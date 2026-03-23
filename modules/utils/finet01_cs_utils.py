@@ -59,7 +59,12 @@ def apply_finet01_cs_irisu(
     upload_channel: Optional[str],
 ) -> None:
     """
-    FINET 01이고 数量単位가 CS일 때 仕切・本部長에 入数 곱셈 적용 (in-place).
+    FINET 01 + 数量単位=CS인 경우의 과거 로직에서는
+    仕切・本部長을 入数으로 곱해 "행 단가"로 만들었습니다.
+
+    하지만 현재는 NET을 프론트에서
+    NET = 仕切 - (条件 / 入数) 로 "단가 기준"으로 계산하므로,
+    仕切・本部長은 unit_price.csv의 원본(단가리스트 값)을 그대로 유지합니다.
     form_type은 "01" 또는 "1", 数量単位는 "CS"/"ＣＳ"/"cs" 등 정규화 후 비교.
     """
     ch = (upload_channel or "").strip().lower()
@@ -82,8 +87,5 @@ def apply_finet01_cs_irisu(
     if irisu is None or irisu <= 0:
         return
 
-    for key in ("仕切", "本部長"):
-        val = item_dict.get(key)
-        num = _parse_num(val)
-        if num is not None:
-            item_dict[key] = round(num * irisu, 2)
+    # NET 계산 기준을 변경했으므로 仕切・本部長 값을 갱신하지 않음.
+    return
