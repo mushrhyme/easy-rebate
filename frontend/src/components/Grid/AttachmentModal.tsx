@@ -1,6 +1,7 @@
 /**
- * 첨부 파일 모달: PDF 업로드, 목록 표시, 클릭 시 새 탭에서 열기
- * 저장 경로: static/attachments/{pdf_filename}/
+ * 첨부 파일 모달: 행(item_id) 단위 PDF 업로드·목록
+ * 저장: static/attachments/{safe_doc}/items/{item_id}/
+ * 레거시(문서 루트 PDF)는 1行目で「この行に移動」で 이행 가능
  */
 import { useEffect, useRef, useState } from 'react'
 import { attachmentsApi } from '@/api/client'
@@ -9,35 +10,59 @@ interface AttachmentModalProps {
   open: boolean
   onClose: () => void
   pdfFilename: string
+  /** 열린 행의 item_id */
+  itemId: number
+  /** true: 旧ページ単位の残りをこの行に取り込める（通常は先頭行のみ） */
+  canClaimLegacy: boolean
 }
 
-export function AttachmentModal({ open, onClose, pdfFilename }: AttachmentModalProps) {
+export function AttachmentModal({
+  open,
+  onClose,
+  pdfFilename,
+  itemId,
+  canClaimLegacy,
+}: AttachmentModalProps) {
   const [files, setFiles] = useState<Array<{ name: string; url: string }>>([])
+  const [legacyFiles, setLegacyFiles] = useState<Array<{ name: string; url: string }>>([])
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [claiming, setClaiming] = useState(false)
   const [deletingName, setDeletingName] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const fetchList = async () => {
-    if (!pdfFilename) return
+    if (!pdfFilename || !itemId) return
     setLoading(true)
     setError(null)
     try {
-      const res = await attachmentsApi.list(pdfFilename)
+      const res = await attachmentsApi.list(pdfFilename, itemId) // 행 단위 목록
       setFiles(res.files ?? [])
+      // legacy-list 실패(404 등)는 본문 목록에 영향 없음
+      if (canClaimLegacy) {
+        try {
+          const leg = await attachmentsApi.legacyList(pdfFilename)
+          setLegacyFiles(leg.files ?? [])
+        } catch {
+          setLegacyFiles([])
+        }
+      } else {
+        setLegacyFiles([])
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
       setFiles([])
+      setLegacyFiles([])
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    if (open && pdfFilename) void fetchList()
-  }, [open, pdfFilename])
+    if (open && pdfFilename && itemId) void fetchList()
+  }, [open, pdfFilename, itemId, canClaimLegacy])
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -45,7 +70,7 @@ export function AttachmentModal({ open, onClose, pdfFilename }: AttachmentModalP
     setUploading(true)
     setError(null)
     try {
-      await attachmentsApi.upload(pdfFilename, file)
+      await attachmentsApi.upload(pdfFilename, itemId, file)
       await fetchList()
       e.target.value = ''
     } catch (e: unknown) {
@@ -66,13 +91,29 @@ export function AttachmentModal({ open, onClose, pdfFilename }: AttachmentModalP
     setDeletingName(fileName)
     setError(null)
     try {
-      await attachmentsApi.delete(pdfFilename, fileName)
+      await attachmentsApi.delete(pdfFilename, itemId, fileName)
       await fetchList()
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
     } finally {
       setDeletingName(null)
+    }
+  }
+
+  const handleClaimLegacy = async () => {
+    if (!canClaimLegacy || legacyFiles.length === 0) return
+    if (!window.confirm('ページ単位で保存されていた添付を、この行（先頭行）に移しますか？')) return
+    setClaiming(true)
+    setError(null)
+    try {
+      await attachmentsApi.claimLegacy(pdfFilename, itemId)
+      await fetchList()
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg)
+    } finally {
+      setClaiming(false)
     }
   }
 
@@ -87,12 +128,37 @@ export function AttachmentModal({ open, onClose, pdfFilename }: AttachmentModalP
         aria-label="添付ファイル"
       >
         <div className="attachment-modal-header">
-          <h3>添付ファイル（PDF）</h3>
+          <h3>添付ファイル（PDF）— 行単位</h3>
           <button type="button" className="attachment-modal-close" onClick={onClose}>
             ×
           </button>
         </div>
         <div className="attachment-modal-body">
+          {canClaimLegacy && legacyFiles.length > 0 && (
+            <div
+              className="attachment-modal-legacy-banner"
+              style={{
+                marginBottom: 12,
+                padding: '8px 10px',
+                background: 'var(--legacy-banner-bg, #2a2418)',
+                border: '1px solid var(--legacy-banner-border, #5c4d2a)',
+                borderRadius: 6,
+                fontSize: 13,
+              }}
+            >
+              <p style={{ margin: '0 0 8px' }}>
+                旧保存（ページ共有）のPDFが {legacyFiles.length} 件あります。先頭行に取り込みます。
+              </p>
+              <button
+                type="button"
+                className="attachment-modal-btn-upload"
+                disabled={claiming}
+                onClick={() => void handleClaimLegacy()}
+              >
+                {claiming ? '移動中...' : 'この行に移動（先頭行）'}
+              </button>
+            </div>
+          )}
           <div className="attachment-modal-upload">
             <input
               ref={inputRef}

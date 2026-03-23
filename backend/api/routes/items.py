@@ -655,28 +655,14 @@ async def get_page_items(
             data_month,
         )
 
-        # 검토 탭 컬럼 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys
+        # item_data_keys: 아래에서 첫 행 item_data 키 순서로 채움 (DB·파싱 순서, RAG/메타로 재정렬하지 않음)
         item_data_keys: Optional[List[str]] = None
         form_type: Optional[str] = None
         upload_channel: Optional[str] = None
-        try:
-            if doc:
-                form_type = doc.get("form_type")
-                upload_channel = doc.get("upload_channel")
-                if form_type:
-                    from modules.core.rag_manager import get_rag_manager
-                    rag = get_rag_manager()
-                    key_order = rag.get_key_order_by_form_type(form_type)
-                    if key_order and key_order.get("item_keys"):
-                        item_data_keys = key_order["item_keys"]
-                if item_data_keys is None:
-                    doc_meta = doc.get("document_metadata") if isinstance(doc.get("document_metadata"), dict) else None
-                    if doc_meta and doc_meta.get("item_data_keys"):
-                        item_data_keys = doc_meta["item_data_keys"]
-        except Exception as e:
-            print(f"[items API] key_order 조회 예외: {e}")
-            pass
-        
+        if doc:
+            form_type = doc.get("form_type")
+            upload_channel = doc.get("upload_channel")
+
         # reviewed_by_user_id → display_name 캐시 (증빙용 툴팁)
         user_id_to_name: Dict[int, str] = {}
         for item in items:
@@ -746,16 +732,7 @@ async def get_page_items(
                         if honbu is not None:
                             item_data["本部長"] = honbu
 
-            # キー・値 탭에서 JSON 순서 유지: item_data_keys 순으로 item_data 재정렬
-            if item_data_keys:
-                ordered_item_data: Dict[str, Any] = {}
-                for k in item_data_keys:
-                    if k in item_data:
-                        ordered_item_data[k] = item_data[k]
-                for k in item_data:
-                    if k not in item_data_keys:
-                        ordered_item_data[k] = item_data[k]
-                item_data = ordered_item_data
+            # item_data는 get_items가 넘긴 순서 유지 (item_data_keys로 재정렬하지 않음)
 
             # frozen 컬럼: 1(RAG)→2→3→4 순서 매핑 (저장된 受注先コード/小売先コード 우선, 없으면 resolve)
             stored_rc = (item_data.get("小売先コード") or item_data.get("小売先CD") or "").strip()
@@ -786,6 +763,9 @@ async def get_page_items(
                     frozen_product_code=frozen_product_code,
                 )
             )
+        if item_list:
+            item_data_keys = list(item_list[0].item_data.keys())
+
         return {
             "items": item_list,
             "item_data_keys": item_data_keys,

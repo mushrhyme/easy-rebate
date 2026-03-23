@@ -1,8 +1,28 @@
 /**
- * 액션 메뉴가 있는 셀 (편집/추가/삭제). 메뉴 위치를 동적으로 계산하여 버튼 아래에 표시
+ * 액션 메뉴가 있는 셀 (편집/추가/삭제). 메뉴 위치를 동적으로 계산하여 버튼 옆에 표시
+ * 마지막 행 등: 뷰포트 아래로 잘리면 메뉴 하단을 버튼(행) 하단에 맞춤
  */
 import { useRef, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+
+const VIEWPORT_MARGIN = 8
+
+/** menuHeight, buttonRect 기준으로 fixed top(px) — 아래 잘리면 bottom = button.bottom 정렬 */
+function computeActionMenuTop(buttonRect: DOMRect, menuHeight: number): number {
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+  const buttonCenterY = buttonRect.top + buttonRect.height / 2
+  let top = buttonCenterY - menuHeight / 2 // 기본: 버튼 세로 중앙 기준
+  if (top + menuHeight > vh - VIEWPORT_MARGIN) {
+    top = buttonRect.bottom - menuHeight // 행(버튼) 하단과 메뉴 하단 맞춤
+  }
+  if (top < VIEWPORT_MARGIN) {
+    top = VIEWPORT_MARGIN
+  }
+  if (top + menuHeight > vh - VIEWPORT_MARGIN) {
+    top = Math.max(VIEWPORT_MARGIN, vh - VIEWPORT_MARGIN - menuHeight)
+  }
+  return top
+}
 
 interface ActionCellWithMenuProps {
   isHovered: boolean
@@ -42,26 +62,25 @@ export function ActionCellWithMenu({
       const updatePosition = () => {
         if (!buttonRef.current) return
         const buttonRect = buttonRef.current.getBoundingClientRect()
+        const left = buttonRect.right - 4
         if (menuRef.current) {
           const menuHeight = menuRef.current.offsetHeight
-          const buttonCenterY = buttonRect.top + buttonRect.height / 2
           setMenuPosition({
-            top: buttonCenterY - menuHeight / 2,
-            left: buttonRect.right - 4,
+            top: computeActionMenuTop(buttonRect, menuHeight),
+            left,
           })
         } else {
           setMenuPosition({
             top: buttonRect.top + buttonRect.height / 2 - 60,
-            left: buttonRect.right - 4,
+            left,
           })
           setTimeout(() => {
             if (menuRef.current && buttonRef.current) {
               const menuHeight = menuRef.current.offsetHeight
-              const buttonRect = buttonRef.current.getBoundingClientRect()
-              const buttonCenterY = buttonRect.top + buttonRect.height / 2
+              const br = buttonRef.current.getBoundingClientRect()
               setMenuPosition({
-                top: buttonCenterY - menuHeight / 2,
-                left: buttonRect.right - 4,
+                top: computeActionMenuTop(br, menuHeight),
+                left: br.right - 4,
               })
             }
           }, 0)
@@ -70,6 +89,22 @@ export function ActionCellWithMenu({
       updatePosition()
     } else {
       setMenuPosition(null)
+    }
+  }, [isHovered])
+
+  useEffect(() => {
+    if (!isHovered) return
+    const sync = () => {
+      if (!buttonRef.current || !menuRef.current) return
+      const br = buttonRef.current.getBoundingClientRect()
+      const mh = menuRef.current.offsetHeight
+      setMenuPosition({ top: computeActionMenuTop(br, mh), left: br.right - 4 })
+    }
+    window.addEventListener('scroll', sync, true)
+    window.addEventListener('resize', sync)
+    return () => {
+      window.removeEventListener('scroll', sync, true)
+      window.removeEventListener('resize', sync)
     }
   }, [isHovered])
 

@@ -6,22 +6,56 @@
 - item_dict in-place 수정
 """
 
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, Tuple
 
 
-def _parse_num(v: Any) -> Optional[float]:
-    """문자열/숫자 → float. None·빈문자·변환 실패 시 None."""
+_DEC_SEPARATORS = r"[.\uFF0E\u00B7]"  # . / ．(전각) / ·(중간점)
+_NUM_TOKEN_RE = re.compile(
+    rf"\d+(?:,\d{{3}})*(?:{_DEC_SEPARATORS}\d+)?"
+)
+
+
+def _parse_num_token_and_has_decimal(v: Any) -> Tuple[Optional[float], bool]:
+    """
+    문자열/숫자에서 '첫 숫자 토큰'만 추출해 float로 파싱.
+
+    Returns:
+      (num, has_decimal)
+      - has_decimal: 토큰 자체에 소수점(.,．,·) 구분자가 있었는지 여부
+    """
     if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v) if (v == v) else None
-    s = str(v).strip().replace(",", "").replace("．", ".").replace("·", ".")
+        return None, False
+
+    if isinstance(v, int):
+        # 숫자 타입(int)으로 들어오면 원본(raw=OCR 합침)으로 간주하고 /100을 수행
+        return float(v), False
+    if isinstance(v, float):
+        # 숫자 타입(float)으로 들어오면 프론트/사용자 편집 결과일 가능성이 높으므로
+        # "이미 정규화됨"으로 간주하고 소수표기만 포맷 통일
+        return float(v), True
+
+    s = str(v).strip()
     if not s:
-        return None
+        return None, False
+    # 회계 점선 ':'가 문자열 내부에 남아있는 경우:
+    # 예: "128:00円" / "1:608個" -> "12800円" / "1608個"
+    # 이후 여기서는 "token에 소수점(.)이 있으면 이미 정규화됨" 정책을 사용합니다.
+    s = re.sub(r"(\d+):(\d{2,4})", r"\1\2", s)
+
+    m = _NUM_TOKEN_RE.search(s)
+    if not m:
+        return None, False
+
+    token = m.group(0)
+    has_decimal = any(sep in token for sep in [".", "\uFF0E", "\u00B7"])
+
+    # 파싱 안정화를 위해 구분자 정규화 + 천단위 콤마 제거
+    token_norm = token.replace(",", "").replace("\uFF0E", ".").replace("\u00B7", ".")
     try:
-        return float(s)
+        return float(token_norm), has_decimal
     except (ValueError, TypeError):
-        return None
+        return None, False
 
 
 def apply_form04_mishu_decimal(
@@ -32,18 +66,26 @@ def apply_form04_mishu_decimal(
     3·4번 양식일 때 未収条件를 뒤에서 2째 자리 소수점 형식으로 변환 (in-place).
     예: "1000" → "10.00", "370" → "3.70"
     - form_type: "03", "3", "04", "4" 또는 int 3, 4
-    - 이미 100 미만 값(소수 형태)은 변환하지 않음 (이중 변환 방지)
+    - '未収条件' 값의 숫자 토큰에 소수점(., ．, ·)이 있으면 이미 정규화된 값으로 간주하고 /100 변환을 생략
     """
     ft = str(form_type or "").strip()
     if ft not in ("04", "4", "03", "3"):
         return
     key = "未収条件"
     v = item_dict.get(key)
-    num = _parse_num(v)
+    num, has_decimal = _parse_num_token_and_has_decimal(v)
     if num is None:
         return
-    # 이미 소수 형태(100 미만)면 변환 스킵. 예: "3.70" → 그대로
-    if num < 100:
-        return
-    # 값/100, 소수 둘째자리 문자열 (예: 1000 → "10.00", 370 → "3.70")
-    item_dict[key] = f"{num / 100:.2f}"
+
+    # 데이터 흐름:
+    # - raw(OCR): "13400" (예: "134(점선)00" -> OCR 합침)
+    # - normalized(LMM/사용자): "134.00" 또는 "134.0"/"134.00円" 같이 토큰에 소수점 포함
+    # 정책:
+    # - 토큰에 소수점이 있으면: /100 변환을 생략하고 "xx.xx" 포맷만 통일
+    # - 소수점이 없으면: raw로 보고 /100 변환 후 "xx.xx" 포맷
+    if has_decimal:
+        # 예: "145.00" / "134.0" / "145.00円" -> "145.00" / "134.00" / "145.00"
+        item_dict[key] = f"{num:.2f}"
+    else:
+        # 예: "14500" / "13900" -> "145.00" / "139.00"
+        item_dict[key] = f"{num / 100:.2f}"

@@ -21,10 +21,26 @@ from modules.utils.llm_retry import call_with_retry
 
 
 def _normalize_amount_colon(value: Any) -> Any:
-    """OCR 회계 점선이 콜론으로 읽힌 금액 문자열을 숫자만 이어 붙인 형태로 정규화. 예: '1:500' -> '1500'"""
-    if isinstance(value, str) and re.fullmatch(r"\d+:\d+", value):
-        return value.replace(":", "")
-    return value
+    """
+    OCR 회계 점선이 콜론(:)으로 읽힌 패턴 정규화.
+
+    예:
+      - "1:500" -> "1500"
+      - "1:608個" -> "1608個"
+      - "134:00円" -> "13400円"
+
+    주의:
+      - 원래 구현은 re.fullmatch로만 처리해서 "단위(個/円 등)가 붙은 값"을 놓쳤습니다.
+      - 여기서는 문자열 내부의 "숫자:숫자"를 찾아 콜론을 제거합니다.
+    """
+    if not isinstance(value, str):
+        return value
+    s = value.strip()
+    if ":" not in s:
+        return value
+    # 점선 케이스는 보통 오른쪽이 2~4자리(예: 00/500/600 등)인 경우가 많아 범위를 제한합니다.
+    s2 = re.sub(r"(\d+):(\d{2,4})", r"\1\2", s)
+    return s2 if s2 != s else value
 
 
 def _sanitize_invalid_json_escapes(s: str) -> str:

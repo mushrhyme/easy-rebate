@@ -90,8 +90,9 @@ from modules.utils.config import get_project_root
 from database.db_items import ItemsMixin
 from database.db_locks import LocksMixin
 from database.db_users import UsersMixin
+from database.db_user_preferences import UserPreferencesMixin
 
-class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin):
+class DatabaseManager(ItemsMixin, LocksMixin, UsersMixin, UserPreferencesMixin):
     """PostgreSQL 데이터베이스 관리 클래스 (새 스키마: documents + items, item_data 등 JSON)"""
     
     # getconn 타임아웃 시 별도 스레드에서 대기 후 putconn 하기 위한 실행자 (모듈 공유)

@@ -6,10 +6,10 @@ import { useMemo, useState, useCallback, useRef, useEffect, forwardRef, useImper
 import { createPortal } from 'react-dom'
 import { DataGrid, type DataGridHandle } from 'react-data-grid'
 import 'react-data-grid/lib/styles.css'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query'
 import { useItems, useUpdateItem, useCreateItem, useDeleteItem, useAcquireLock, useReleaseLock, usePageMeta } from '@/hooks/useItems'
 import { useItemLocks } from '@/hooks/useItemLocks'
-import { itemsApi } from '@/api/client'
+import { itemsApi, userSettingsApi } from '@/api/client'
 import { useAuth } from '@/contexts/AuthContext'
 import type { ReviewStatus } from '@/types'
 import {
@@ -24,6 +24,12 @@ import { ComplexFieldDetail } from './ComplexFieldDetail'
 import { UnitPriceMatchModal } from './UnitPriceMatchModal'
 import { AttachmentModal } from './AttachmentModal'
 import { useItemsGridColumns } from './useItemsGridColumns'
+import {
+  ReviewGridColumnOrderStorage,
+  applyFlexOrderToColumns,
+  mergeFlexColumnOrder,
+  reorderFlexKeys,
+} from './reviewGridColumnOrder'
 import './ItemsGridRdg.css'
 
 // 외부에서 import 가능하도록 re-export
@@ -55,7 +61,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const acquireLock = useAcquireLock()
   const releaseLock = useReleaseLock()
   const queryClient = useQueryClient() // 쿼리 무효화를 위한 queryClient
-  const { sessionId } = useAuth() // 실제 로그인 세션 ID 사용 (useUploadStore의 랜덤 UUID가 아님)
+  const { sessionId, user } = useAuth() // sessionId: 락·저장 / user: 컬럼 순서 로컬 저장 키
   const [editingItemIds, setEditingItemIds] = useState<Set<number>>(new Set())
   const [containerWidth, setContainerWidth] = useState<number>(1200) // 기본값
   const gridRef = useRef<DataGridHandle>(null)
@@ -65,8 +71,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const [reviewTooltip, setReviewTooltip] = useState<{ text: string; x: number; y: number } | null>(null) // 1次/2次 증빙 툴팁
   const [unitPriceModalRow, setUnitPriceModalRow] = useState<GridRow | null>(null) // 단가 후보 모달
   const [retailSaving, setRetailSaving] = useState(false) // 代表スーパー 확정 저장 중
-  const [attachmentModalOpen, setAttachmentModalOpen] = useState(false) // 첨부 파일 모달
-  
+  const [attachmentModalItemId, setAttachmentModalItemId] = useState<number | null>(null) // 첨부 모달: 해당 행 item_id
   // 컨테이너 너비 측정
   useEffect(() => {
     const updateWidth = () => {
@@ -147,6 +152,12 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 
   const items = data?.items || []
   const hasItems = items.length > 0 // items 존재 여부
+  /** item_order 기준 첫 행 — 구 문서 루트 첨부를 이 행으로만 이행 가능 */
+  const firstRowItemId = useMemo(() => {
+    if (!items.length) return null
+    const sorted = [...items].sort((a, b) => a.item_order - b.item_order)
+    return sorted[0]?.item_id ?? null
+  }, [items])
 
   // 행 데이터 변환 (초기 데이터, 증빙용 reviewed_at/reviewed_by 포함)
   const initialRows = useMemo<GridRow[]>(() => {
@@ -697,10 +708,65 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     createItemPending: createItem.isPending,
     deleteItemPending: deleteItem.isPending,
     onOpenUnitPriceModal: setUnitPriceModalRow,
-    onOpenAttachments: () => setAttachmentModalOpen(true),
+    onOpenAttachments: (itemId: number) => setAttachmentModalItemId(itemId),
     readOnly,
     pageRole: pageMetaData?.page_role ?? null,
   })
+
+  /** 비로그인 시 드래그 후 즉시 반영용 (localStorage와 동기) */
+  const [offlineFlexOrder, setOfflineFlexOrder] = useState<string[] | null>(null)
+
+  const { data: reviewColumnOrderRes } = useQuery({
+    queryKey: ['settings', 'reviewGridColumnOrder'],
+    queryFn: () => userSettingsApi.getReviewGridColumnOrder(),
+    enabled: !!sessionId,
+  })
+
+  const defaultFlexKeys = useMemo(
+    () => columns.filter((c) => !c.frozen).map((c) => String(c.key)), // 예: ['得意先','金額',...]
+    [columns]
+  )
+
+  const persistedKeysFromApi = sessionId ? reviewColumnOrderRes?.column_keys ?? null : null
+  const persistedKeysFromStorage = useMemo(() => {
+    if (sessionId || typeof window === 'undefined') return null
+    return ReviewGridColumnOrderStorage.load(user?.user_id ?? null)
+  }, [sessionId, user?.user_id])
+
+  const rawPersistedKeys = sessionId ? persistedKeysFromApi : offlineFlexOrder ?? persistedKeysFromStorage
+
+  const mergedFlexOrder = useMemo(
+    () => mergeFlexColumnOrder(rawPersistedKeys, defaultFlexKeys), // 저장+현재 문서 키 병합
+    [rawPersistedKeys, defaultFlexKeys]
+  )
+
+  const displayColumns = useMemo(
+    () => applyFlexOrderToColumns(columns, mergedFlexOrder), // 동결 유지·flex만 재배열
+    [columns, mergedFlexOrder]
+  )
+
+  const saveColumnOrderMutation = useMutation({
+    mutationFn: (keys: string[]) => userSettingsApi.setReviewGridColumnOrder(keys),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['settings', 'reviewGridColumnOrder'], res)
+    },
+  })
+
+  const handleColumnsReorder = useCallback(
+    (sourceKey: string, targetKey: string) => {
+      if (readOnly) return
+      const next = reorderFlexKeys(mergedFlexOrder, sourceKey, targetKey) // 드롭: source → target 왼쪽
+      if (next === mergedFlexOrder) return
+      if (sessionId) {
+        queryClient.setQueryData(['settings', 'reviewGridColumnOrder'], { column_keys: next })
+        saveColumnOrderMutation.mutate(next)
+      } else {
+        ReviewGridColumnOrderStorage.save(user?.user_id ?? null, next)
+        setOfflineFlexOrder(next)
+      }
+    },
+    [readOnly, mergedFlexOrder, sessionId, queryClient, saveColumnOrderMutation, user?.user_id]
+  )
 
   // 행 편집 시작 (락 획득)
   const handleEdit = async (itemId: number) => {
@@ -1280,11 +1346,15 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         onSelectRetail={handleRetailSelect}
         retailSaving={retailSaving}
       />
-      <AttachmentModal
-        open={attachmentModalOpen}
-        onClose={() => setAttachmentModalOpen(false)}
-        pdfFilename={pdfFilename}
-      />
+      {attachmentModalItemId !== null && (
+        <AttachmentModal
+          open
+          onClose={() => setAttachmentModalItemId(null)}
+          pdfFilename={pdfFilename}
+          itemId={attachmentModalItemId}
+          canClaimLegacy={attachmentModalItemId === firstRowItemId}
+        />
+      )}
       {/* 복잡한 구조 필드 배지 영역 (좌측) */}
       {/* cover/summary 페이지인 경우 page_meta의 최상위 키들을 배지로 표시 (totals, recipient 등) */}
       {showPageMetaBadges && pageMetaFields.length > 0 && (
@@ -1332,7 +1402,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         <div className="rdg-container" ref={containerRef}>
           <DataGrid
             ref={gridRef}
-            columns={columns}
+            columns={displayColumns}
             rows={rows}
             rowHeight={getRowHeight}
             onRowsChange={onRowsChange}
@@ -1346,9 +1416,19 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
                 classes = classes ? `${classes} row-checked` : 'row-checked'
               }
               // NET < 本部長 이면 행 전체 노란색 음영 (条件金額: 単価|条件|対象数量又は金額 중 첫 유효값)
-              const condNum = CONDITION_AMOUNT_KEYS.map((k) => parseCellNum(row[k])).find((n) => n != null) ?? null
               const shikiriNum = parseCellNum(row['仕切'])
               const honbuchoNum = parseCellNum(row['本部長'])
+              let condNum = CONDITION_AMOUNT_KEYS.map((k) => parseCellNum(row[k])).find((n) => n != null) ?? null
+
+              // 4번 유형(form_type=04): NET 비교 입력은 반드시 未収条件 + 未収条件2(없으면 0)
+              // 이 타입에는 '条件' 컬럼이 없고, '対象数量又は金額'에는 "60個" 같은 단위가 붙을 수 있어 parseCellNum이 실패할 수 있다.
+              const hasMishuKeys = '未収条件' in row || '未収条件2' in row
+              if (hasMishuKeys) {
+                const misu1 = parseCellNum(row['未収条件'])
+                const misu2 = parseCellNum(row['未収条件2'])
+                condNum = misu1 != null ? misu1 + (misu2 ?? 0) : null
+              }
+
               if (condNum != null && shikiriNum != null && honbuchoNum != null) {
                 const net = shikiriNum - condNum
                 if (net < honbuchoNum) {
@@ -1357,9 +1437,11 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
               }
               return classes.trim()
             }}
+            onColumnsReorder={readOnly ? undefined : handleColumnsReorder}
             defaultColumnOptions={{
               resizable: true,
               sortable: false,
+              draggable: !readOnly, // 검토 그리드: 비동결 컬럼 헤더 드래그로 순서 변경 (useItemsGridColumns에서 frozen만 draggable:false)
             }}
             className="rdg-theme"
             style={{ width: '100%', minWidth: '100%', height: '100%' }}

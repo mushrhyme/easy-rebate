@@ -694,35 +694,16 @@ class ItemsMixin:
                         """, (pdf_filename, pdf_filename))
                         rows = cursor.fetchall()
                 
-                # form_type·키 순서: form_type 있으면 RAG 정답 순서 우선, 없으면 document_metadata.item_data_keys 사용
-                if form_type is None or item_key_order is None:
+                # item_data JSON·병합 순서 유지 (RAG/document_metadata.item_data_keys로 재정렬하지 않음)
+                # — 검토 그리드 열 순을 파싱·저장 순과 맞추기 위함 (merge된 메타 키 순이 덮어쓰던 문제 제거)
+                if form_type is None:
                     try:
                         doc_info = self.get_document(pdf_filename)
                         if doc_info:
-                            if form_type is None:
-                                form_type = doc_info.get("form_type")
-                            # fallback: 문서 저장 시 키 순서 (RAG에서 못 가져올 때만)
-                            if item_key_order is None:
-                                doc_meta = doc_info.get("document_metadata")
-                                if isinstance(doc_meta, dict) and doc_meta.get("item_data_keys"):
-                                    item_key_order = doc_meta["item_data_keys"]
+                            form_type = doc_info.get("form_type")
                     except Exception:
                         pass
-                
-                # form_type 있으면 RAG 기준 정답 키 순서 우선 (순서 깨짐 방지)
-                if form_type:
-                    try:
-                        from modules.core.rag_manager import get_rag_manager
-                        rag_manager = get_rag_manager()
-                        key_order = rag_manager.get_key_order_by_form_type(form_type)
-                        if key_order and key_order.get("item_keys"):
-                            item_key_order = key_order.get("item_keys")
-                            print(f"[db_items get_items] form_type={form_type} RAG key_order 적용 개수={len(item_key_order)} 순서={item_key_order[:15]}{'...' if len(item_key_order) > 15 else ''}")
-                    except Exception as e:
-                        print(f"[db_items get_items] key_order 조회 예외: {e}")
-                if item_key_order is None:
-                    print(f"[db_items get_items] form_type 없음 또는 key_order 없음 -> 재정렬 안 함")
-                
+
                 results = []
                 for row in rows:
                     row_dict = dict(row)
@@ -777,25 +758,7 @@ class ItemsMixin:
                             'reviewed_by_user_id': row_dict.get('second_reviewed_by_user_id'),
                         },
                     }
-                    
-                    # 키 순서 정렬
-                    if item_key_order:
-                        try:
-                            before_keys = list(merged_item.keys())[:10]  # 처음 10개만 로그
-                            reordered_item = {}
-                            for item_key in item_key_order:
-                                if item_key in merged_item:
-                                    reordered_item[item_key] = merged_item[item_key]
-                            for item_key in merged_item.keys():
-                                if item_key not in item_key_order:
-                                    reordered_item[item_key] = merged_item[item_key]
-                            merged_item = reordered_item
-                            if len(results) == 0:  # 첫 행만 로그
-                                after_keys = list(merged_item.keys())[:10]
-                        except Exception as e:
-                            print(f"[db_items get_items] 재정렬 예외: {e}")
-                            pass
-                    
+
                     results.append(merged_item)
                 
                 return results

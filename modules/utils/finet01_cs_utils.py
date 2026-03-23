@@ -6,6 +6,7 @@ FINET 1번 양식지 전용 후처리: 数量単位=CS일 때 仕切・本部長
 - 동작: item_dict 내 仕切, 本部長에 入数를 곱한 값으로 갱신 (원본 dict in-place 수정)
 """
 
+import re
 from typing import Any, Dict, Optional
 
 
@@ -16,6 +17,9 @@ def _parse_num(v: Any) -> Optional[float]:
     if isinstance(v, (int, float)):
         return float(v) if (v == v) else None  # NaN 방지
     s = str(v).strip().replace(",", "").replace("．", ".").replace("·", ".")
+    # 회계 점선이 ':'로 인식된 케이스: "1:608個" -> "1608個"
+    # (숫자 사이에만 ':'가 있는 경우에 한해 콜론 제거)
+    s = re.sub(r"(\d+):(\d{2,4})", r"\1\2", s)
     if not s:
         return None
     try:

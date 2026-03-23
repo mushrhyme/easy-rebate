@@ -55,6 +55,22 @@ export const formTypesApi = {
   },
 }
 
+/** 사용자 UI 설정 (검토 그리드 컬럼 순서 등) — 세션 헤더로 본인 행만 조회/저장 */
+export const userSettingsApi = {
+  /** GET → { column_keys: string[] | null } — DB에 없으면 null */
+  getReviewGridColumnOrder: async (): Promise<{ column_keys: string[] | null }> => {
+    const response = await client.get('/api/settings/review-grid-column-order')
+    return response.data
+  },
+  /** PUT 본문 { column_keys: string[] } */
+  setReviewGridColumnOrder: async (
+    column_keys: string[]
+  ): Promise<{ column_keys: string[] | null }> => {
+    const response = await client.put('/api/settings/review-grid-column-order', { column_keys })
+    return response.data
+  },
+}
+
 // 文書API
 export const documentsApi = {
   /**
@@ -412,17 +428,45 @@ export const documentsApi = {
   },
 }
 
-/** 문서별 PDF 첨부: static/attachments/{pdf_filename}/ 에 저장·목록 조회 */
+/** 행(item_id) 단위 PDF 첨부 — API 경로는 구 /attachments/* 와 동일 + 쿼리 item_id */
 export const attachmentsApi = {
-  list: async (pdfFilename: string): Promise<{ files: Array<{ name: string; url: string }> }> => {
+  /** 구 문서 루트에 남은 PDF(페이지/문서 단위 저장) 목록 */
+  legacyList: async (
+    pdfFilename: string
+  ): Promise<{ files: Array<{ name: string; url: string }> }> => {
     const encoded = encodeURIComponent(pdfFilename)
     const response = await client.get<{ files: Array<{ name: string; url: string }> }>(
-      `/api/documents/${encoded}/attachments/list`
+      `/api/documents/${encoded}/attachments/legacy-list`
+    )
+    return response.data
+  },
+  /** 레거시 루트 PDF를 이 행 폴더로 이동 */
+  claimLegacy: async (
+    pdfFilename: string,
+    itemId: number
+  ): Promise<{ moved: string[]; count: number }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.post<{ moved: string[]; count: number }>(
+      `/api/documents/${encoded}/attachments/claim-legacy`,
+      {},
+      { params: { item_id: itemId } }
+    )
+    return response.data
+  },
+  list: async (
+    pdfFilename: string,
+    itemId: number
+  ): Promise<{ files: Array<{ name: string; url: string }> }> => {
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.get<{ files: Array<{ name: string; url: string }> }>(
+      `/api/documents/${encoded}/attachments/list`,
+      { params: { item_id: itemId } }
     )
     return response.data
   },
   upload: async (
     pdfFilename: string,
+    itemId: number,
     file: File
   ): Promise<{ name: string; url: string }> => {
     const encoded = encodeURIComponent(pdfFilename)
@@ -430,15 +474,20 @@ export const attachmentsApi = {
     formData.append('file', file)
     const response = await client.post<{ name: string; url: string }>(
       `/api/documents/${encoded}/attachments/upload`,
-      formData
+      formData,
+      { params: { item_id: itemId } }
     )
     return response.data
   },
-  delete: async (pdfFilename: string, fileName: string): Promise<{ message: string }> => {
+  delete: async (
+    pdfFilename: string,
+    itemId: number,
+    fileName: string
+  ): Promise<{ message: string }> => {
     const encoded = encodeURIComponent(pdfFilename)
     const response = await client.delete<{ message: string }>(
       `/api/documents/${encoded}/attachments/delete`,
-      { params: { file_name: fileName } }
+      { params: { item_id: itemId, file_name: fileName } }
     )
     return response.data
   },

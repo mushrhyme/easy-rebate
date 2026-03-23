@@ -104,6 +104,22 @@ Follow strictly:
 6. Infer タイプ using REFERENCE_JSON patterns
 
 
+REFERENCE ALIGNMENT RULE (HIGHEST PRIORITY)
+
+If TARGET_OCR is structurally equivalent to REFERENCE_OCR,
+then the number of items and row structure MUST match REFERENCE_JSON exactly.
+
+In this case:
+- Ignore OCR noise, broken lines, or extra lines
+- Do NOT create additional items beyond REFERENCE_JSON
+- Do NOT infer additional rows from OCR 
+
+REFERENCE_JSON becomes the ground truth for:
+- number of items 
+- row segmentation
+- row boundaries
+
+
 PAGE ROLE RULES
 
 page_role must be one of:
@@ -139,6 +155,24 @@ VALUE EXTRACTION RULES
 If value exists → extract  
 If not → null
 
+VALUE FORMAT ALIGNMENT RULE (HIGHEST PRIORITY)
+
+For any field that exists in REFERENCE_JSON:
+
+- The output format of the value MUST follow the format used in REFERENCE_JSON,
+  not the raw format from TARGET_OCR.
+
+This includes:
+- presence or absence of unit symbols (e.g., 円, %)
+- numeric formatting (decimal style, separators)
+- text normalization style
+
+Rules:
+- If REFERENCE_JSON shows the value without a unit, remove the unit from TARGET_OCR value
+- If REFERENCE_JSON includes a unit or symbol, preserve it accordingly
+- The semantic value comes from TARGET_OCR, but the formatting comes from REFERENCE_JSON
+
+REFERENCE_JSON defines the canonical representation format for each field.
 
 REFERENCE_OCR COLUMN RULE
 

@@ -27,6 +27,9 @@ export function parseCellNum(v: unknown): number | null {
   if (!s) return null
   // 소수점 문자 정규화: ．(U+FF0E), ·(U+00B7) → .
   s = s.replace(/[\uFF0E\u00B7]/g, '.')
+  // 회계 점선 ':' → 숫자만 이어붙이기 (예: "1:608個" → "1608個")
+  // 주로 오른쪽이 2~4자리인 케이스를 대상으로 범위를 제한합니다.
+  s = s.replace(/(\d+):(\d{2,4})/g, '$1$2')
   // 콤마가 소수점인 경우(예: "39,2"): 콤마 하나이고 뒤가 1~3자리 숫자면 소수점으로 처리
   if (!/\./.test(s) && /^\d+,\d{1,3}$/.test(s)) {
     s = s.replace(',', '.')

@@ -487,6 +487,84 @@
   max-width: 0; /* table-layout: fixedと一緒に使用して幅을制限 */
 }
 
+/* page_meta 객체 배열など — データフレーム風テーブル */
+.complex-field-dataframe-wrap {
+  overflow-x: auto;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.complex-field-dataframe {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.complex-field-dataframe thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.complex-field-dataframe th {
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  background: linear-gradient(180deg, #f8f9fc 0%, #eef1f8 100%);
+  border-bottom: 2px solid #c5cae0;
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.complex-field-dataframe td.complex-field-df-index {
+  width: 2.5rem;
+  text-align: right;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+  background: #fafafa;
+}
+
+.complex-field-dataframe .complex-field-df-cell {
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  vertical-align: top;
+  max-width: 320px;
+  color: #333;
+}
+
+.complex-field-dataframe tbody tr:hover {
+  background-color: #f5f7ff;
+}
+
+.complex-field-cell-empty {
+  color: #aaa;
+}
+
+.complex-field-cell-json {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+  background: #f6f8fa;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.complex-field-empty-msg {
+  margin: 0;
+  color: #888;
+  font-size: 14px;
+}
+
 /* 행 컨트롤 버튼들 */
 .row-controls {
   display: flex;
@@ -591,6 +669,9 @@
   overflow: hidden !important; /* 클릭 영역 보호를 위해 hidden으로 복원 */
   pointer-events: auto !important;
   padding: 4px 0 !important; /* 상하 패딩 추가로 호버 영역 확대 */
+  max-height: calc(100vh - 16px) !important; /* 짧은 뷰포트에서 잘림 방지 */
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
   /* top, left는 JavaScript로 동적 설정 */
 }
 

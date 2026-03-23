@@ -36,8 +36,8 @@ export interface UseItemsGridColumnsParams {
   deleteItemPending: boolean
   /** 액션 메뉴에서 "単価" 클릭 시 해당 행으로 단가 후보 모달 열기 */
   onOpenUnitPriceModal: (row: GridRow) => void
-  /** 액션 메뉴에서 "添付" 클릭 시 첨부 파일 모달 열기 */
-  onOpenAttachments?: () => void
+  /** 액션 메뉴에서 "添付" 클릭 시 해당 행 item_id로 첨부 모달 열기 */
+  onOpenAttachments?: (itemId: number) => void
   /** true면 편집·추가/삭제·체크박스 비활성 */
   readOnly?: boolean
   /** detail일 때만 タイプ/受注先コード/小売先コード/商品コード/仕切/本部長/NET 컬럼 표시 */
@@ -97,11 +97,14 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           Object.keys(item.item_data).forEach((key) => keysInDb.add(key))
         }
       })
-      const itemDataKeys = itemDataKeysFromApi?.length
-        ? [...itemDataKeysFromApi]
-        : firstItem.item_data
-          ? Object.keys(firstItem.item_data)
-          : []
+      // 첫 행 item_data의 키 삽입 순서(파싱·DB 저장 순)를 우선 — API item_data_keys(RAG/메타)는 보조만
+      const rawFromItem = firstItem.item_data ? Object.keys(firstItem.item_data) : []
+      const itemDataKeys =
+        rawFromItem.length > 0
+          ? rawFromItem
+          : itemDataKeysFromApi?.length
+            ? [...itemDataKeysFromApi]
+            : []
       const normalizeKey = (key: string): string => {
         if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先')) return '得意先'
         if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先名')) return '得意先名'
@@ -180,7 +183,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
               onAdd={() => handleAddRow(itemId)}
               onDelete={() => handleDeleteRow(itemId)}
               onUnitPrice={() => onOpenUnitPriceModal(row)}
-              onAttachments={onOpenAttachments}
+              onAttachments={onOpenAttachments ? () => onOpenAttachments(itemId) : undefined}
               createItemPending={createItemPending}
               deleteItemPending={deleteItemPending}
             />
@@ -351,9 +354,24 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           resizable: true,
           editable: false,
           renderCell: ({ row }) => {
-            const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
             const shikiriNum = parseCellNum(row['仕切'])
-            if (condNum == null || shikiriNum == null) return <span>—</span>
+            if (shikiriNum == null) return <span>—</span>
+
+            // 4번 유형(form_type=04): NET 비교는 반드시 未収条件 + 未収条件2(없으면 0)
+            // 이 타입에는 '条件'이 없고, '対象数量又は金額'(예: "60個")은 parseCellNum 실패 가능.
+            // 따라서 미수 키가 존재하면 그것을 우선 사용한다.
+            const hasMishuKeys = orderedKeys.includes('未収条件') || orderedKeys.includes('未収条件2') || ('未収条件' in row)
+            if (hasMishuKeys) {
+              const misu1 = parseCellNum(row['未収条件'])
+              const misu2 = parseCellNum(row['未収条件2'])
+              if (misu1 == null) return <span>—</span>
+              const condNum = misu1 + (misu2 ?? 0)
+              return <span>{(shikiriNum - condNum).toLocaleString()}</span>
+            }
+
+            // 그 외 유형: 조건금액 후보(条件 / 対象数量又は金額 중 존재하는 키) 사용
+            const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
+            if (condNum == null) return <span>—</span>
             return <span>{(shikiriNum - condNum).toLocaleString()}</span>
           },
         })
@@ -431,9 +449,13 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
       }
     }
     const finalCols = scaledCols ?? adjustedCols
+    // 동결 컬럼은 헤더 DnD 비활성 (defaultColumnOptions.draggable=true일 때도 드래그 불가)
+    const finalColsWithDrag = finalCols.map((col) =>
+      col.frozen ? { ...col, draggable: false } : col
+    )
 
     const wrapColumnWidths: Record<string, number> = {}
-    finalCols.forEach((col) => {
+    finalColsWithDrag.forEach((col) => {
       if (!FIXED_ROW_HEIGHT_KEYS.has(col.key)) wrapColumnWidths[col.key] = getColWidth(col)
     })
     const getRowHeight = (row: GridRow): number => {
@@ -452,7 +474,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
       return Math.max(MIN_ROW_HEIGHT, CELL_PADDING_V + maxLines * LINE_HEIGHT_PX + ROW_HEIGHT_BUFFER)
     }
 
-    return { columns: finalCols, getRowHeight }
+    return { columns: finalColsWithDrag, getRowHeight }
   }, [
     items,
     itemDataKeysFromApi,
