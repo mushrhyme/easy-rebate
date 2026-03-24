@@ -320,6 +320,13 @@
   color: #c62828 !important;
 }
 
+/* 행에 PDF 첨부 있음: 左端インセット（보라 톤 #667eea·#764ba2 계열과 통일） */
+.items-grid-rdg .rdg-container .rdg .rdg-row.row-has-attachments .rdg-cell:first-child,
+.rdg-container .rdg .rdg-row.row-has-attachments .rdg-cell:first-child,
+.rdg-row.row-has-attachments .rdg-cell:first-child {
+  box-shadow: inset 4px 0 0 #6d28d9;
+}
+
 /* 編集モード進入時のセルスタイル（視覚的フィードバック） */
 .rdg-cell[role="gridcell"] {
   cursor: cell;
@@ -858,6 +865,16 @@
 }
 .unit-price-match-table button:hover {
   background: #3dbdb5;
+}
+
+/* 単価タブ: 候補一覧の横スクロール（仕切・本部長列まで） */
+.unit-price-pick-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  margin-bottom: 4px;
+}
+.unit-price-pick-table-scroll .unit-price-match-table {
+  min-width: 960px;
 }
 
 .retail-mapping-section {

@@ -42,6 +42,8 @@ export interface UseItemsGridColumnsParams {
   readOnly?: boolean
   /** detail일 때만 タイプ/受注先コード/小売先コード/商品コード/仕切/本部長/NET 컬럼 표시 */
   pageRole?: string | null
+  /** 양식 02: 最終金額 を 金額 の直後に表示 */
+  formType?: string | null
 }
 
 const CHAR_PX = 11
@@ -82,12 +84,14 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     onOpenAttachments,
     readOnly = false,
     pageRole = null,
+    formType = null,
   } = params
 
   const hasItems = items.length > 0
   const isDetailPage = pageRole === 'detail'
 
   return useMemo(() => {
+    const formTypeNorm = String(formType ?? '').trim().replace(/^0+/, '')
     let orderedKeys: string[] = []
     if (hasItems) {
       const firstItem = items[0]
@@ -120,6 +124,20 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         'second_review_reviewed_by',
       ])
       orderedKeys = [...orderedFromApi, ...extraKeys].filter((k) => !reviewHiddenKeys.has(k))
+      // 양식 02: 金額 → 金額2 → 最終金額（金額2 컬럼은 金額 があれば常に表示）
+      if (formTypeNorm === '2' && keysInDb.has('金額')) {
+        const A1 = '金額'
+        const A2 = '金額2'
+        const FN = '最終金額'
+        const rest = orderedKeys.filter((k) => k !== A1 && k !== A2 && k !== FN)
+        const oldIdx = orderedKeys.indexOf(A1)
+        if (oldIdx >= 0) {
+          const countBefore = orderedKeys.slice(0, oldIdx).filter((k) => k !== A1 && k !== A2 && k !== FN).length
+          orderedKeys = [...rest.slice(0, countBefore), A1, A2, FN, ...rest.slice(countBefore)]
+        } else {
+          orderedKeys = [...rest, A1, A2, FN]
+        }
+      }
     }
 
     const calculateColumnWidth = (key: string, name: string): number => {
@@ -395,6 +413,36 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))
         if (isComplexType) continue
+        if (key === '最終金額') {
+          const dataBasedWidth = calculateColumnWidth(key, key)
+          cols.push({
+            key,
+            name: '最終金額',
+            width: dataBasedWidth,
+            minWidth: Math.max(dataBasedWidth, 100),
+            resizable: true,
+            editable: false,
+            renderCell: ({ row }) => {
+              const v = row[key]
+              let n = parseCellNum(v)
+              if (n == null && formTypeNorm === '2') {
+                const r1 = row['金額']
+                const r2 = row['金額2']
+                const hasRaw =
+                  (r1 != null && String(r1).trim() !== '') || (r2 != null && String(r2).trim() !== '')
+                const a1 = parseCellNum(r1)
+                const a2 = parseCellNum(r2)
+                if (hasRaw || a1 != null || a2 != null) {
+                  n = (a1 ?? 0) + (a2 ?? 0)
+                }
+              }
+              if (n != null) return <span>{Number(n).toLocaleString()}</span>
+              const s = String(v ?? '').trim()
+              return <span>{s || '—'}</span>
+            },
+          })
+          continue
+        }
         const dataBasedWidth = calculateColumnWidth(key, key)
         const isKuCol = key === '区'
         cols.push({
@@ -508,5 +556,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     onOpenAttachments,
     readOnly,
     pageRole,
+    formType,
   ])
 }

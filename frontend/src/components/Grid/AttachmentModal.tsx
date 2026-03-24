@@ -14,6 +14,8 @@ interface AttachmentModalProps {
   itemId: number
   /** true: 旧ページ単位の残りをこの行に取り込める（通常は先頭行のみ） */
   canClaimLegacy: boolean
+  /** 업로드·삭제·레거시 이행 후 — 그리드 첨부 강조 갱신용 */
+  onAttachmentsChanged?: () => void
 }
 
 export function AttachmentModal({
@@ -22,6 +24,7 @@ export function AttachmentModal({
   pdfFilename,
   itemId,
   canClaimLegacy,
+  onAttachmentsChanged,
 }: AttachmentModalProps) {
   const [files, setFiles] = useState<Array<{ name: string; url: string }>>([])
   const [legacyFiles, setLegacyFiles] = useState<Array<{ name: string; url: string }>>([])
@@ -72,6 +75,7 @@ export function AttachmentModal({
     try {
       await attachmentsApi.upload(pdfFilename, itemId, file)
       await fetchList()
+      onAttachmentsChanged?.()
       e.target.value = ''
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -93,6 +97,7 @@ export function AttachmentModal({
     try {
       await attachmentsApi.delete(pdfFilename, itemId, fileName)
       await fetchList()
+      onAttachmentsChanged?.()
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)
@@ -109,6 +114,7 @@ export function AttachmentModal({
     try {
       await attachmentsApi.claimLegacy(pdfFilename, itemId)
       await fetchList()
+      onAttachmentsChanged?.()
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(msg)

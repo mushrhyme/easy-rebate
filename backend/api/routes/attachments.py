@@ -126,6 +126,32 @@ def _list_row_attachments_dict(pdf_filename: str, item_id: int) -> dict:
 
 
 
+def _parse_item_ids_csv(item_ids_csv: str) -> list[int]:
+
+    """쿼리 item_ids=1,2,3 → [1, 2, 3]"""
+
+    if not item_ids_csv or not str(item_ids_csv).strip():
+
+        return []
+
+    out: list[int] = []
+
+    for part in str(item_ids_csv).split(","):
+
+        p = part.strip()
+
+        if not p:
+
+            continue
+
+        out.append(int(p))
+
+    return out
+
+
+
+
+
 def _claim_legacy_dict(pdf_filename: str, item_id: int) -> dict:
 
     doc_base = _doc_base_dir(pdf_filename)
@@ -253,6 +279,38 @@ async def list_legacy_root_pdfs(
 
 
 # ----- 쿼리 item_id (구 /attachments/* 패턴) -----
+
+
+
+
+
+@router.get("/{pdf_filename}/attachments/flags")
+
+async def attachment_flags_by_items(
+
+    pdf_filename: str,
+
+    item_ids: str = Query(default="", description="comma-separated item_id list (e.g. 1,2,3)"),
+
+    _user_id: int = Depends(get_current_user_id),
+
+):
+
+    """페이지 그리드용: 행별 PDF 첨부 유무 일괄 조회."""
+
+    decoded = unquote(pdf_filename)
+
+    ids = _parse_item_ids_csv(item_ids)
+
+    flags: dict[str, bool] = {}
+
+    for iid in ids:
+
+        d = _list_row_attachments_dict(decoded, iid)
+
+        flags[str(iid)] = len(d.get("files") or []) > 0
+
+    return {"flags": flags}
 
 
 

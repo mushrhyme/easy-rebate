@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from database.registry import get_db
 from database.db_manager import _similarity_difflib
 from modules.utils.retail_resolve import resolve_retail_dist
+from modules.utils.form2_rebate_utils import apply_form2_final_amount_row
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
 from backend.unit_price_lookup import resolve_product_and_prices
@@ -749,6 +750,9 @@ async def get_page_items(
                 except Exception:
                     pass
 
+            # 양식 02: DB에 最終金額 없어도 조회 시 합산값 채움（그리드 · SAP）
+            apply_form2_final_amount_row(item_data, form_type)
+
             item_list.append(
                 ItemResponse(
                     item_id=item['item_id'],
@@ -820,6 +824,8 @@ async def create_item(
             payload_item_data["小売先コード"] = retail_code
         if dist_code:
             payload_item_data["受注先コード"] = dist_code
+
+        apply_form2_final_amount_row(payload_item_data, doc.get("form_type"))
 
         # 아이템 생성 — 스레드 풀에서 실행
         item_id = await db.run_sync(
@@ -1045,6 +1051,7 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
             _typ = idata.get("タイプ")
             if _typ is None or (isinstance(_typ, str) and not (_typ or "").strip()):
                 idata["タイプ"] = "条件"
+            apply_form2_final_amount_row(idata, form_type)
             params.append(_json_mod.dumps(idata, ensure_ascii=False))
         set_clauses.append("version = version + 1")
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")

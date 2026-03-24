@@ -1,6 +1,6 @@
 /**
  * マッピングモーダル: 単価 | 代表スーパー。
- * 単価: 最終候補 + sap_product 検索 → 確定でグリッド反映。
+ * 単価: ①商品（候補表に内容量・規格・参照・類似度・仕切・本部長、検索、確定）。
  * 代表スーパー: 様式01+得意先コード照合 → マスタ類似度と RAG（最大3件）を混在 → 販売ヒント・検索。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -24,6 +24,8 @@ export interface UnitPriceMatch {
   제품코드?: string | number
   제품명?: string
   제품용량?: number | string
+  /** unit_price.csv 규격 열 */
+  규격?: string | number
   시키리?: number
   본부장?: number
   JANコード?: string | number
@@ -205,6 +207,7 @@ export function UnitPriceMatchModal({
   }>({ matches: [], skippedReason: null, loading: false })
 
   const [finalForm, setFinalForm] = useState<RetailFinalForm>(EMPTY_FINAL_FORM)
+  /** 直近で販売ヒントを取得した小売コード（モーダル再オープン時はリセットして再取得する） */
   const lastHintRetailRef = useRef<string | null>(null)
   const [retailMasterSearchQuery, setRetailMasterSearchQuery] = useState('')
   const [retailMasterSearchMatches, setRetailMasterSearchMatches] = useState<
@@ -221,6 +224,7 @@ export function UnitPriceMatchModal({
 
   useEffect(() => {
     if (!open) {
+      lastHintRetailRef.current = null
       setFinalForm(EMPTY_FINAL_FORM)
       setUnitFinalForm(EMPTY_UNIT_FINAL_FORM)
       setUnitPriceAutoFill({ 仕切: null, 本部長: null })
@@ -239,7 +243,7 @@ export function UnitPriceMatchModal({
     }
   }, [open, customerName, row])
 
-  /** 商品コード変更時: unit_price と sap_product 名を取得 */
+  /** 商品コード変更時: unit_price で仕切・本部長のみ取得（検索語はユーザー入力専用 — 適用後に埋めない） */
   useEffect(() => {
     const raw = unitFinalForm.商品コード.trim()
     if (!raw || !open || activeTab !== 'unit_price') {
@@ -258,17 +262,14 @@ export function UnitPriceMatchModal({
     }
     const code = toHankakuNum(raw)
     setUnitPriceAutoLoading(true)
-    Promise.all([
-      searchApi.getUnitPriceByProductCode(code),
-      searchApi.getProductNameByCode(code),
-    ])
-      .then(([priceRes, nameRes]) => {
+    searchApi
+      .getUnitPriceByProductCode(code)
+      .then((priceRes) => {
         if (priceRes.row) {
           setUnitPriceAutoFill({ 仕切: priceRes.row.仕切, 本部長: priceRes.row.本部長 })
         } else {
           setUnitPriceAutoFill({ 仕切: null, 本部長: null })
         }
-        if (nameRes.제품명) setSapProductQuery(nameRes.제품명)
       })
       .catch(() => {
         setUnitPriceAutoFill({ 仕切: null, 本部長: null })
@@ -312,8 +313,8 @@ export function UnitPriceMatchModal({
     setUnitError(null)
     setUnitByRagAnswer((p) => ({ ...p, loading: true, error: null }))
     Promise.all([
-      searchApi.getUnitPriceByProduct(productName, { topK: 5 }),
-      searchApi.getProductCandidatesByRagAnswer(productName, { topK: 5, minSimilarity: 0 }),
+      searchApi.getUnitPriceByProduct(productName, { topK: 10, minSimilarity: 0 }),
+      searchApi.getProductCandidatesByRagAnswer(productName, { topK: 3, minSimilarity: 0 }),
     ])
       .then(([unitRes, ragRes]) => {
         setUnitMatches(unitRes.matches ?? [])
@@ -338,6 +339,7 @@ export function UnitPriceMatchModal({
 
   useEffect(() => {
     if (!open) {
+      lastHintRetailRef.current = null
       setByCode({ match: null, skippedReason: null, loading: false, error: null })
       setByRetailMaster({ matches: [], skippedReason: null, loading: false, error: null })
       setByRagAnswer({ matches: [], skippedReason: null, loading: false, error: null })
@@ -421,8 +423,8 @@ export function UnitPriceMatchModal({
         })
         .catch((err) => {
           const msg = err?.response?.data?.detail ?? err?.message ?? null
-          setByRetailMaster((p) => ({ ...p, loading: false, error: msg }))
-          setByRagAnswer((p) => ({ ...p, loading: false, error: msg }))
+          setByRetailMaster((p) => ({ ...p, loading: false, error: msg, matches: [] }))
+          setByRagAnswer((p) => ({ ...p, loading: false, error: msg, matches: [] }))
         })
     } else {
       setByRetailMaster({ matches: [], skippedReason: null, loading: false, error: null })
@@ -439,7 +441,12 @@ export function UnitPriceMatchModal({
       setVendorHints({ matches: [], skippedReason: null, loading: false })
       return
     }
-    if (lastHintRetailRef.current === rc) return
+    const prevRc = lastHintRetailRef.current
+    if (prevRc === rc) return
+    // 小売コードが変わったら（前回取得済みの別コードからの遷移）販売欄をクリアしてから再取得
+    if (prevRc !== null && prevRc !== rc) {
+      setFinalForm((prev) => ({ ...prev, 受注先コード: '', 受注先: '' }))
+    }
     lastHintRetailRef.current = rc
     setVendorHints((p) => ({ ...p, loading: true }))
     searchApi
@@ -461,19 +468,20 @@ export function UnitPriceMatchModal({
     setFinalForm((prev) => ({ ...prev, 受注先コード: '', 受注先: '' }))
   }, [open, activeTab, finalForm.小売先コード])
 
-  /** 販売ヒント先頭を販売欄に自動入力 */
+  /** 販売ヒント先頭を自動入力（受注先コードが空のときのみ。行からの初期値や手動入力は上書きしない） */
   useEffect(() => {
     if (!open || activeTab !== 'retail') return
     if (vendorHints.loading) return
     const rc = finalForm.小売先コード.trim()
     if (!rc || vendorHints.matches.length === 0) return
+    if (finalForm.受注先コード.trim()) return
     const first = vendorHints.matches[0]
     setFinalForm((prev) => ({
       ...prev,
       受注先コード: first.판매처코드,
       受注先: first.판매처명,
     }))
-  }, [open, activeTab, vendorHints.loading, vendorHints.matches, finalForm.小売先コード])
+  }, [open, activeTab, vendorHints.loading, vendorHints.matches, finalForm.小売先コード, finalForm.受注先コード])
 
   /** 小売マスタの手入力検索 */
   useEffect(() => {
@@ -597,68 +605,166 @@ export function UnitPriceMatchModal({
     setDistMasterMatches([])
   }, [])
 
-  /** ①小売候補: コード照合 → RAG 類似度上位3件まで → 残りは retail_master（CSV）順で最大10行 */
+  /** ①小売候補: domae / RAG(max3) / retail_master を類似度で混ぜ、同一소매코드は高い方のみ、上位10件。domaeは類似度なし→0.99 */
   const retailPickList = useMemo(() => {
     type PickRow = {
       소매처코드: string
       소매처명: string
-      similarity?: number
+      similarity: number
       source: 'domae' | 'retail_master' | 'rag'
-      /** rag のとき適用で販売欄も更新 */
       ragMatch?: RetailMatch
     }
-    const out: PickRow[] = []
+    const domaeSortSim = (nm: RetailMatch): number => {
+      const s = nm.similarity
+      if (typeof s === 'number' && !Number.isNaN(s) && s > 0) {
+        return s > 1 ? s / 100 : s
+      }
+      return 0.99
+    }
+    const pool: PickRow[] = []
     if (byCode.match) {
       const nm = normalizeByCodeMatch(byCode.match, customerCode)
       const c = (nm.소매처코드 ?? '').trim()
       if (c) {
-        out.push({
+        pool.push({
           소매처코드: c,
           소매처명: (nm.소매처명 ?? '').trim(),
-          similarity: nm.similarity,
+          similarity: domaeSortSim(nm),
           source: 'domae',
         })
       }
     }
-    let slots = 10 - out.length
-    if (slots <= 0) return out
-
-    const ragRows: PickRow[] = []
     for (const m of byRagAnswer.matches) {
       const c = (m.소매처코드 ?? '').trim()
       if (!c) continue
-      ragRows.push({
+      pool.push({
         소매처코드: c,
         소매처명: (m.소매처명 ?? '').trim(),
-        similarity: m.similarity ?? 0,
+        similarity: typeof m.similarity === 'number' ? m.similarity : 0,
         source: 'rag',
         ragMatch: m,
       })
     }
-    ragRows.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
-    const ragCap = Math.min(3, slots)
-    for (const row of ragRows.slice(0, ragCap)) {
-      out.push(row)
-    }
-
-    slots = 10 - out.length
-    if (slots <= 0) return out
-
     for (const m of byRetailMaster.matches) {
-      if (out.length >= 10) break
       const c = (m.소매처코드 ?? '').trim()
       if (!c) continue
-      out.push({
+      pool.push({
         소매처코드: c,
         소매처명: m.소매처명,
-        similarity: m.similarity ?? 0,
+        similarity: typeof m.similarity === 'number' ? m.similarity : 0,
         source: 'retail_master',
       })
     }
-    return out
+    pool.sort((a, b) => b.similarity - a.similarity)
+    const bestByCode = new Map<string, PickRow>()
+    for (const row of pool) {
+      const prev = bestByCode.get(row.소매처코드)
+      if (!prev || row.similarity > prev.similarity) {
+        bestByCode.set(row.소매처코드, row)
+      }
+    }
+    return [...bestByCode.values()].sort((a, b) => b.similarity - a.similarity).slice(0, 10)
   }, [byCode.match, byRetailMaster.matches, byRagAnswer.matches, customerCode])
 
   const vendorPickList = useMemo(() => vendorHints.matches.slice(0, 10), [vendorHints.matches])
+
+  /** ①候補APIのいずれかのエラー（ロード完了後のみ表示用） */
+  const retailPickApiError = useMemo(() => {
+    if (byCode.loading || byRetailMaster.loading || byRagAnswer.loading) return null
+    const parts = [byCode.error, byRetailMaster.error, byRagAnswer.error].filter(
+      (x): x is string => Boolean(x && String(x).trim()),
+    )
+    if (parts.length === 0) return null
+    return [...new Set(parts)].join(' ')
+  }, [
+    byCode.loading,
+    byCode.error,
+    byRetailMaster.loading,
+    byRetailMaster.error,
+    byRagAnswer.loading,
+    byRagAnswer.error,
+  ])
+
+  /** ①商品候補: RAG(max3 API) + unit_price を類似度で混ぜ、同一商品コードは高い方のみ、上位10件 */
+  const unitPickList = useMemo(() => {
+    type UnitPickRow = {
+      商品コード: string
+      商品名: string
+      内容量: string
+      規格: string
+      similarity: number
+      source: 'rag' | 'unit_price'
+      仕切: number | string | null
+      本部長: number | string | null
+      ragMatch?: ProductRagMatch
+      unitMatch?: UnitPriceMatch
+    }
+    const dash = '—'
+    const fmtCap = (v: unknown) => (v != null && String(v).trim() !== '' ? String(v) : dash)
+    const unitSim = (m: UnitPriceMatch): number => {
+      const s = m._avg_similarity ?? m.similarity
+      if (typeof s === 'number' && !Number.isNaN(s) && s > 0) {
+        return s > 1 ? s / 100 : s
+      }
+      return 0
+    }
+    const pool: UnitPickRow[] = []
+    for (const m of unitByRagAnswer.matches) {
+      const code = (m.商品コード ?? '').trim()
+      if (!code) continue
+      pool.push({
+        商品コード: code,
+        商品名: (m.商品名 ?? '').trim(),
+        内容量: dash,
+        規格: dash,
+        similarity: typeof m.similarity === 'number' ? m.similarity : 0,
+        source: 'rag',
+        仕切: m.仕切 ?? null,
+        本部長: m.本部長 ?? null,
+        ragMatch: m,
+      })
+    }
+    for (const m of unitMatches) {
+      const code = m.제품코드 != null ? String(m.제품코드).trim() : ''
+      if (!code) continue
+      pool.push({
+        商品コード: code,
+        商品名: String(m.제품명 ?? ''),
+        内容量: fmtCap(m.제품용량),
+        規格: fmtCap(m.규격),
+        similarity: unitSim(m),
+        source: 'unit_price',
+        仕切: m.시키리 ?? null,
+        本部長: m.본부장 ?? null,
+        unitMatch: m,
+      })
+    }
+    pool.sort((a, b) => b.similarity - a.similarity)
+    const bestByCode = new Map<string, UnitPickRow>()
+    for (const row of pool) {
+      const prev = bestByCode.get(row.商品コード)
+      if (!prev || row.similarity > prev.similarity) {
+        bestByCode.set(row.商品コード, row)
+      }
+    }
+    return [...bestByCode.values()].sort((a, b) => b.similarity - a.similarity).slice(0, 10)
+  }, [unitByRagAnswer.matches, unitMatches])
+
+  const unitPickApiError = useMemo(() => {
+    if (unitLoading || unitByRagAnswer.loading) return null
+    const parts = [unitError, unitByRagAnswer.error].filter(
+      (x): x is string => Boolean(x && String(x).trim()),
+    )
+    if (parts.length === 0) return null
+    return [...new Set(parts)].join(' ')
+  }, [unitLoading, unitError, unitByRagAnswer.loading, unitByRagAnswer.error])
+
+  /** 候補テーブル: 仕切・本部長表示用 */
+  const fmtShikiriHonbu = (v: unknown) => {
+    if (v == null || v === '') return '—'
+    const n = Number(v)
+    return Number.isFinite(n) ? n.toLocaleString() : String(v)
+  }
 
   if (!open) return null
 
@@ -706,148 +812,171 @@ export function UnitPriceMatchModal({
                   )
                 })()}
               </p>
+              <p className="unit-price-match-modal-hint retail-map-spec-intro">
+                候補一覧の <strong>適用</strong> で商品コードを反映します。数字のみの商品コードを入力すると unit_price から仕切・本部長を自動表示します。確定でグリッドに保存します。
+              </p>
 
-              <section className="retail-final-section">
-                <h4 className="retail-mapping-section-title">最終候補</h4>
-                <div className="retail-final-box">
-                  <p className="unit-price-match-modal-hint">この「商品コード」欄に商品名(文字)または商品コード(数字)を入力すると sap_product から候補を探します。仕切・本部長は unit_price で自動表示。</p>
-                  <div className="retail-final-form">
-                    <label className="retail-final-label">
-                      <span>商品コード</span>
-                      <input
-                        type="text"
-                        className="retail-final-input"
-                        value={unitFinalForm.商品コード}
-                        onChange={(e) => {
-                          const nextRaw = e.target.value
-                          const nextTrim = (nextRaw ?? '').trim()
-                          const normalized = isProductCodeLike(nextTrim) ? toHankakuNum(nextTrim) : nextRaw
-                          setUnitFinalForm({ 商品コード: normalized })
-
-                          if (!nextTrim) {
-                            setSapProductQuery('')
-                            setSapProductMatches([])
-                            return
-                          }
-                          if (isProductCodeLike(nextTrim)) {
-                            setSapProductQuery('')
-                            setSapProductMatches([])
-                          } else {
-                            setSapProductQuery(nextTrim)
-                          }
-                        }}
-                        placeholder="商品コード"
-                      />
-                    </label>
-                    {(unitPriceAutoFill.仕切 != null || unitPriceAutoFill.本部長 != null) && (
-                      <p className="unit-price-match-modal-hint" style={{ marginTop: 4 }}>
-                        仕切: {unitPriceAutoFill.仕切 != null ? Number(unitPriceAutoFill.仕切).toLocaleString() : '—'} / 本部長: {unitPriceAutoFill.本部長 != null ? Number(unitPriceAutoFill.本部長).toLocaleString() : '—'}
-                      </p>
-                    )}
-                    {sapProductLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
-                    {!sapProductLoading && sapProductMatches.length > 0 && (
-                      <ul className="retail-final-sap-list">
-                        {sapProductMatches.map((m, i) => (
-                          <li key={i}>
-                            <button type="button" className="retail-final-sap-item" onClick={() => applySapProductMatchToForm(m)}>
-                              {m.제품코드} / {m.제품명}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+              <section className="retail-map-spec-block retail-map-spec-block--retail">
+                <h4 className="retail-map-spec-block-title">① 商品</h4>
+                <div className="retail-map-spec-row">
+                  <span className="retail-map-spec-label">商品名</span>
+                  <div className="retail-map-spec-value">
+                    <span className="retail-map-spec-eq">＝ 行の商品名</span>
+                    <input
+                      type="text"
+                      className="retail-final-input retail-map-readonly"
+                      readOnly
+                      value={productName}
+                      title="請求書・グリッドの商品名"
+                    />
+                  </div>
+                </div>
+                <div className="retail-map-spec-row">
+                  <span className="retail-map-spec-label">商品コード</span>
+                  <div className="retail-map-spec-field">
+                    <input
+                      type="text"
+                      className="retail-final-input"
+                      value={unitFinalForm.商品コード}
+                      onChange={(e) => {
+                        const nextRaw = e.target.value
+                        const nextTrim = (nextRaw ?? '').trim()
+                        const normalized = isProductCodeLike(nextTrim) ? toHankakuNum(nextTrim) : nextRaw
+                        setUnitFinalForm({ 商品コード: normalized })
+                        if (!nextTrim) {
+                          setSapProductQuery('')
+                          setSapProductMatches([])
+                          return
+                        }
+                        if (isProductCodeLike(nextTrim)) {
+                          setSapProductQuery('')
+                          setSapProductMatches([])
+                        }
+                      }}
+                      placeholder="商品コード"
+                      aria-label="商品コード"
+                    />
+                    {unitPickList[0] && (
+                      <span className="retail-map-rank1-hint">1位候補: {unitPickList[0].商品コード}</span>
                     )}
                   </div>
+                </div>
+                {(unitPriceAutoFill.仕切 != null || unitPriceAutoFill.本部長 != null) && (
+                  <p className="unit-price-match-modal-hint" style={{ marginTop: 4 }}>
+                    入力コードの単価: 仕切 {unitPriceAutoFill.仕切 != null ? Number(unitPriceAutoFill.仕切).toLocaleString() : '—'}{' '}
+                    / 本部長 {unitPriceAutoFill.本部長 != null ? Number(unitPriceAutoFill.本部長).toLocaleString() : '—'}
+                  </p>
+                )}
+
+                <p className="retail-map-spec-subhead">候補一覧</p>
+                {(unitLoading || unitByRagAnswer.loading) && (
+                  <p className="unit-price-match-modal-loading">候補を検索中…</p>
+                )}
+                {unitByRagAnswer.skippedReason && !unitByRagAnswer.loading && (
+                  <p className="unit-price-match-modal-empty">{unitByRagAnswer.skippedReason}</p>
+                )}
+                {unitPickApiError && (
+                  <p className="unit-price-match-modal-error" role="alert">
+                    {unitPickApiError}
+                  </p>
+                )}
+                {!unitLoading &&
+                  !unitByRagAnswer.loading &&
+                  !unitPickApiError &&
+                  unitPickList.length === 0 &&
+                  !unitByRagAnswer.skippedReason && (
+                    <p className="unit-price-match-modal-empty">候補がありません。下の検索を使うか、手入力してください。</p>
+                  )}
+                {unitPickList.length > 0 && (
+                  <div className="unit-price-pick-table-scroll">
+                    <table className="unit-price-match-table retail-map-pick-table">
+                      <thead>
+                        <tr>
+                          <th className="retail-map-col-n">#</th>
+                          <th>商品コード</th>
+                          <th>商品名</th>
+                          <th>内容量</th>
+                          <th>規格</th>
+                          <th>参照</th>
+                          <th>類似度</th>
+                          <th>仕切</th>
+                          <th>本部長</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unitPickList.map((row, i) => (
+                          <tr key={`${row.source}-${row.商品コード}-${i}`}>
+                            <td className="retail-map-col-n">{i + 1}</td>
+                            <td>{row.商品コード}</td>
+                            <td>{row.商品名}</td>
+                            <td>{row.内容量}</td>
+                            <td>{row.規格}</td>
+                            <td>{row.source === 'rag' ? '学習' : 'エクセル'}</td>
+                            <td>
+                              {row.similarity != null
+                                ? row.similarity <= 1 && row.similarity >= 0
+                                  ? `${(row.similarity * 100).toFixed(0)}%`
+                                  : String(row.similarity)
+                                : '—'}
+                            </td>
+                            <td>{fmtShikiriHonbu(row.仕切)}</td>
+                            <td>{fmtShikiriHonbu(row.本部長)}</td>
+                            <td>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  row.source === 'rag' && row.ragMatch
+                                    ? handleSelectProductRagToFinal(row.ragMatch)
+                                    : row.unitMatch
+                                      ? handleSelectUnitToFinal(row.unitMatch)
+                                      : undefined
+                                }
+                              >
+                                適用
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p className="retail-map-spec-subhead">検索</p>
+                <label className="retail-final-label retail-map-search-label">
+                  <span>検索語</span>
+                  <input
+                    type="text"
+                    className="retail-final-input"
+                    value={sapProductQuery}
+                    onChange={(e) => setSapProductQuery(e.target.value)}
+                    placeholder="商品名で検索 → 結果から適用"
+                  />
+                </label>
+                {sapProductLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
+                {!sapProductLoading && sapProductMatches.length > 0 && (
+                  <ul className="retail-final-sap-list">
+                    {sapProductMatches.map((m, i) => (
+                      <li key={i}>
+                        <button type="button" className="retail-final-sap-item" onClick={() => applySapProductMatchToForm(m)}>
+                          {m.제품코드} / {m.제품명}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="retail-map-confirm-wrap">
                   <button
                     type="button"
-                    className="retail-confirm-btn"
+                    className="retail-confirm-btn retail-map-confirm-btn"
                     disabled={!isProductCodeLike(unitFinalForm.商品コード.trim()) || unitPriceAutoLoading}
                     onClick={handleConfirmUnitPrice}
                   >
                     確定
                   </button>
                 </div>
-              </section>
-
-              <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">1) 商品名（ベクトル参照）</h4>
-                {unitByRagAnswer.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
-                {unitByRagAnswer.skippedReason && !unitByRagAnswer.loading && (
-                  <p className="unit-price-match-modal-empty">{unitByRagAnswer.skippedReason}</p>
-                )}
-                {unitByRagAnswer.error && (
-                  <p className="unit-price-match-modal-error">{unitByRagAnswer.error}</p>
-                )}
-                {!unitByRagAnswer.loading &&
-                  !unitByRagAnswer.error &&
-                  unitByRagAnswer.matches.length === 0 &&
-                  !unitByRagAnswer.skippedReason && (
-                    <p className="unit-price-match-modal-empty">該当する候補がありません。</p>
-                  )}
-                {!unitByRagAnswer.loading && unitByRagAnswer.matches.length > 0 && (
-                  <table className="unit-price-match-table">
-                    <thead>
-                      <tr>
-                        <th>商品名</th>
-                        <th>商品コード</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {unitByRagAnswer.matches.map((m, i) => (
-                        <tr key={i}>
-                          <td>{m.商品名 || '—'}</td>
-                          <td>{m.商品コード || '—'}</td>
-                          <td>
-                            <button type="button" onClick={() => handleSelectProductRagToFinal(m)}>
-                              適用
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </section>
-
-              <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">2) 候補（商品名類似度・unit_price）</h4>
-                {unitLoading && <p className="unit-price-match-modal-loading">検索中…</p>}
-                {unitError && <p className="unit-price-match-modal-error">{unitError}</p>}
-                {!unitLoading && !unitError && unitMatches.length === 0 && (
-                  <p className="unit-price-match-modal-empty">該当する候補がありません。</p>
-                )}
-                {!unitLoading && !unitError && unitMatches.length > 0 && (
-                  <table className="unit-price-match-table">
-                    <thead>
-                      <tr>
-                        <th>商品コード</th>
-                        <th>商品名</th>
-                        <th>内容量</th>
-                        <th>類似度</th>
-                        <th>仕切</th>
-                        <th>本部長</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {unitMatches.map((m, i) => (
-                        <tr key={i}>
-                          <td>{m.제품코드 != null ? String(m.제품코드) : '—'}</td>
-                          <td>{String(m.제품명 ?? '')}</td>
-                          <td>{String(m.제품용량 ?? '')}</td>
-                          <td>{m._avg_similarity != null ? m._avg_similarity.toFixed(2) : (m.similarity != null ? m.similarity.toFixed(2) : '—')}</td>
-                          <td>{m.시키리 != null ? Number(m.시키리).toLocaleString() : '—'}</td>
-                          <td>{m.본부장 != null ? Number(m.본부장).toLocaleString() : '—'}</td>
-                          <td>
-                            <button type="button" onClick={() => handleSelectUnitToFinal(m)}>
-                              適用
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
               </section>
             </>
           )}
@@ -897,6 +1026,11 @@ export function UnitPriceMatchModal({
                 {(byCode.loading || byRetailMaster.loading || byRagAnswer.loading) && (
                   <p className="unit-price-match-modal-loading">候補を検索中…</p>
                 )}
+                {retailPickApiError && (
+                  <p className="unit-price-match-modal-error" role="alert">
+                    {retailPickApiError}
+                  </p>
+                )}
                 {!byCode.loading && !byRetailMaster.loading && !byRagAnswer.loading && retailPickList.length === 0 && (
                   <p className="unit-price-match-modal-empty">候補がありません。下の検索を使うか、手入力してください。</p>
                 )}
@@ -907,6 +1041,7 @@ export function UnitPriceMatchModal({
                         <th className="retail-map-col-n">#</th>
                         <th>小売先コード</th>
                         <th>小売先名（マスタ）</th>
+                        <th>参照</th>
                         <th>類似度</th>
                         <th></th>
                       </tr>
@@ -918,9 +1053,10 @@ export function UnitPriceMatchModal({
                           <td>{row.소매처코드}</td>
                           <td>{row.소매처명}</td>
                           <td>
-                            {row.similarity != null && row.source !== 'domae'
-                              ? `${(row.similarity * 100).toFixed(0)}%`
-                              : '—'}
+                            {row.source === 'rag' ? '学習' : row.source === 'domae' ? 'コード照合' : 'エクセル'}
+                          </td>
+                          <td>
+                            {row.similarity != null ? `${(row.similarity * 100).toFixed(0)}%` : '—'}
                           </td>
                           <td>
                             <button

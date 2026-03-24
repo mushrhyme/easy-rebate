@@ -2,8 +2,8 @@
 양식지 2번 전용 후처리 유틸
 
 - 対象: 양식지 2번 (form_type == "02")
-- 条件: 計算条件（適用人数） == "納価条件" 인 행
-- 処理: 金額 + 金額2 를 金額에 합산, 金額2 키 삭제 (DB 저장·검토 탭에서 동일 데이터 사용)
+- 全行: 最終金額 = 金額 + 金額2（金額2 が null/空/欠損は 0。金額・金額2は上書きしない）
+- 旧パイプラインで 金額 に合算されていたデータは、元の分割は復元できない（再取込・手修正が必要）
 
 page_results 구조: RAG 파서와 동일, 각 페이지 {"items": [...]} 형태.
 """
@@ -11,32 +11,9 @@ page_results 구조: RAG 파서와 동일, 각 페이지 {"items": [...]} 형태
 import unicodedata
 from typing import Any, Dict, List, Optional
 
-
-# 計算条件 필드명 후보 (納価条件 체크용)
-CONDITION_FIELD_NAMES = [
-    "計算条件（適用人数）",
-    "計算条件(適用人数)",
-    "リベート計算条件（適用人数）",
-    "リベート計算条件(適用人数)",
-]
-
-# 金額 필드명
 AMOUNT_KEY = "金額"
 AMOUNT2_KEY = "金額2"
-
-
-def _get_str_value(item: Dict[str, Any], key: str) -> Optional[str]:
-    """item[key] 를 문자열로 안전하게 가져오기."""
-    if key not in item:
-        return None
-    value = item.get(key)
-    if value is None:
-        return None
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-    text = str(value).strip()
-    return text or None
+FINAL_AMOUNT_KEY = "最終金額"
 
 
 def _parse_amount(value: Any) -> int:
@@ -52,12 +29,22 @@ def _parse_amount(value: Any) -> int:
         return 0
 
 
-def _get_first_existing_key(item: Dict[str, Any], candidates: List[str]) -> Optional[str]:
-    """item 에서 존재하는 첫 번째 키를 반환."""
-    for key in candidates:
-        if key in item:
-            return key
-    return None
+def apply_form2_final_amount_row(item: Dict[str, Any], form_type: Optional[str]) -> None:
+    """
+    양식 2번 1행: 最終金額 = 金額 + 金額2（金額2 欠損は 0）。
+
+    DB 조회 응답·저장·파싱 후처리에서 공통 사용.
+    """
+    if form_type is None:
+        return
+    if str(form_type).lstrip("0") != "2":
+        return
+    if not isinstance(item, dict):
+        return
+
+    a1 = _parse_amount(item.get(AMOUNT_KEY))
+    a2 = _parse_amount(item.get(AMOUNT2_KEY))
+    item[FINAL_AMOUNT_KEY] = str(a1 + a2)
 
 
 def normalize_form2_rebate_conditions(
@@ -65,11 +52,7 @@ def normalize_form2_rebate_conditions(
     form_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    양식지 2번 전용 후처리.
-
-    - 対象: form_type 이 "02" / "2" / 2 인 경우만 처리
-    - ロ직: 計算条件（適用人数） 가 "納価条件" 인 행은
-      金額 = 金額 + 金額2 로 합산하고, 金額2 키를 삭제한다.
+    양식지 2번 전용 후처리（ページ単位 items に apply_form2_final_amount_row を適用）。
 
     Args:
         page_results: 페이지별 결과 리스트 (각 요소는 {"items": [...]} 형태)
@@ -96,22 +79,6 @@ def normalize_form2_rebate_conditions(
         for item in items:
             if not isinstance(item, dict):
                 continue
-
-            condition_key = _get_first_existing_key(item, CONDITION_FIELD_NAMES)
-            if not condition_key:
-                continue
-
-            condition_value = _get_str_value(item, condition_key)
-            if condition_value != "納価条件":
-                continue
-
-            # 金額 + 金額2 합산 후 金額에 저장
-            amount1 = _parse_amount(item.get(AMOUNT_KEY))
-            amount2 = _parse_amount(item.get(AMOUNT2_KEY))
-            item[AMOUNT_KEY] = str(amount1 + amount2)
-
-            # 金額2 키 삭제 (검토 탭/DB에서 사용하지 않음)
-            if AMOUNT2_KEY in item:
-                del item[AMOUNT2_KEY]
+            apply_form2_final_amount_row(item, form_type)
 
     return page_results

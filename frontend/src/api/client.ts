@@ -453,6 +453,19 @@ export const attachmentsApi = {
     )
     return response.data
   },
+  /** 페이지 행(item_id)들에 PDF 첨부가 있는지 일괄 조회 — 그리드 왼쪽 강조선용 */
+  flags: async (
+    pdfFilename: string,
+    itemIds: number[]
+  ): Promise<{ flags: Record<string, boolean> }> => {
+    if (itemIds.length === 0) return { flags: {} }
+    const encoded = encodeURIComponent(pdfFilename)
+    const response = await client.get<{ flags: Record<string, boolean> }>(
+      `/api/documents/${encoded}/attachments/flags`,
+      { params: { item_ids: itemIds.join(',') } }
+    )
+    return response.data
+  },
   list: async (
     pdfFilename: string,
     itemId: number

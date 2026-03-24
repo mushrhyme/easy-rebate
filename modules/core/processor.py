@@ -153,8 +153,7 @@ class PdfProcessor:
             except Exception:
                 pass
 
-            # 3.6. 양식지 2번 전용 후처리: 計算条件（適用人数）가 納価条件인 행은
-            # 金額 + 金額2 → 金額에 합산, 金額2 키 삭제 (DB 저장·검토 탭 동일)
+            # 3.6. 양식지 2번: 最終金額 = 金額+金額2（金額2 空は 0、金額·金額2は上書きしない）
             try:
                 from modules.utils.form2_rebate_utils import normalize_form2_rebate_conditions
                 page_results = normalize_form2_rebate_conditions(page_results, form_type=form_type)

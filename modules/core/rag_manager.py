@@ -1568,7 +1568,8 @@ class RAGManager:
 
     def build_retail_rag_answer_index(self) -> int:
         """
-        정답지 문서(created_by_user_id IS NOT NULL) item에서 得意先당 updated_at 최신 1건만 사용해
+        학습リクエスト 등으로 page_data_current.is_rag_candidate=TRUE 인 페이지의 item만 사용.
+        정답지 문서(created_by_user_id IS NOT NULL)에서 得意先당 updated_at 최신 1건만 사용해
         得意先/受注先コード/小売先コード를 추출한 뒤, 得意先 텍스트만 임베딩해 retail_rag_answer FAISS 인덱스 구축 후 DB 저장.
         반환: 저장된 벡터 수.
         """
@@ -1586,7 +1587,9 @@ class RAGManager:
                         i.item_data->>'小売先コード' AS "小売先コード"
                     FROM items_current i
                     INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                    INNER JOIN page_data_current p ON p.pdf_filename = i.pdf_filename AND p.page_number = i.page_number
                     WHERE d.created_by_user_id IS NOT NULL
+                      AND p.is_rag_candidate = TRUE
                       AND TRIM(COALESCE(i.item_data->>'得意先', '')) != ''
                     ORDER BY TRIM(COALESCE(i.item_data->>'得意先', '')), i.updated_at DESC NULLS LAST
                 """)
@@ -1753,7 +1756,8 @@ class RAGManager:
 
     def build_product_rag_answer_index(self) -> int:
         """
-        정답지 문서(created_by_user_id IS NOT NULL) item에서 商品名당 updated_at 최신 1건만 사용해
+        학습リクエスト 등으로 page_data_current.is_rag_candidate=TRUE 인 페이지의 item만 사용.
+        정답지 문서(created_by_user_id IS NOT NULL)에서 商品名당 updated_at 최신 1건만 사용해
         商品名/商品コード/仕切/本部長를 추출한 뒤, 商品名 텍스트만 임베딩해 product_rag_answer FAISS 인덱스 구축 후 DB 저장.
         (동일 제품명에 여러 商品コード가 있으면 가장 최근에 추가/수정된 행의 정보로 통일)
         반환: 저장된 벡터 수.
@@ -1773,7 +1777,9 @@ class RAGManager:
                         i.item_data->>'本部長' AS "本部長"
                     FROM items_current i
                     INNER JOIN documents_current d ON d.pdf_filename = i.pdf_filename
+                    INNER JOIN page_data_current p ON p.pdf_filename = i.pdf_filename AND p.page_number = i.page_number
                     WHERE d.created_by_user_id IS NOT NULL
+                      AND p.is_rag_candidate = TRUE
                       AND (i.item_data->>'商品名') IS NOT NULL AND (i.item_data->>'商品名') != ''
                       AND (i.item_data->>'商品コード') IS NOT NULL AND (i.item_data->>'商品コード') != ''
                     ORDER BY TRIM(COALESCE(i.item_data->>'商品名', '')), i.updated_at DESC NULLS LAST

@@ -9,7 +9,7 @@ import 'react-data-grid/lib/styles.css'
 import { useQueryClient, useQuery, useMutation } from '@tanstack/react-query'
 import { useItems, useUpdateItem, useCreateItem, useDeleteItem, useAcquireLock, useReleaseLock, usePageMeta } from '@/hooks/useItems'
 import { useItemLocks } from '@/hooks/useItemLocks'
-import { itemsApi, userSettingsApi } from '@/api/client'
+import { attachmentsApi, itemsApi, userSettingsApi } from '@/api/client'
 import { useAuth } from '@/contexts/AuthContext'
 import type { ReviewStatus } from '@/types'
 import {
@@ -158,6 +158,22 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     const sorted = [...items].sort((a, b) => a.item_order - b.item_order)
     return sorted[0]?.item_id ?? null
   }, [items])
+
+  /** 행별 PDF 첨부 유무 — 그리드 왼쪽 세로 강조(글자색과 무관) */
+  const itemIdsForAttachmentFlags = useMemo(() => items.map((i) => i.item_id), [items])
+  const { data: attachmentFlagsData } = useQuery({
+    queryKey: ['attachment-flags', pdfFilename, pageNumber, itemIdsForAttachmentFlags.join(',')],
+    queryFn: () => attachmentsApi.flags(pdfFilename, itemIdsForAttachmentFlags),
+    enabled: Boolean(pdfFilename && itemIdsForAttachmentFlags.length > 0),
+  })
+  const attachmentItemIdSet = useMemo(() => {
+    const f = attachmentFlagsData?.flags ?? {}
+    const s = new Set<number>()
+    for (const [k, v] of Object.entries(f)) {
+      if (v) s.add(Number(k))
+    }
+    return s
+  }, [attachmentFlagsData])
 
   // 행 데이터 변환 (초기 데이터, 증빙용 reviewed_at/reviewed_by 포함)
   const initialRows = useMemo<GridRow[]>(() => {
@@ -711,6 +727,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     onOpenAttachments: (itemId: number) => setAttachmentModalItemId(itemId),
     readOnly,
     pageRole: pageMetaData?.page_role ?? null,
+    formType: data?.form_type ?? _formType ?? null,
   })
 
   /** 비로그인 시 드래그 후 즉시 반영용 (localStorage와 동기) */
@@ -1357,6 +1374,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           pdfFilename={pdfFilename}
           itemId={attachmentModalItemId}
           canClaimLegacy={attachmentModalItemId === firstRowItemId}
+          onAttachmentsChanged={() => {
+            void queryClient.invalidateQueries({ queryKey: ['attachment-flags', pdfFilename] })
+          }}
         />
       )}
       {/* 복잡한 구조 필드 배지 영역 (좌측) */}
@@ -1457,6 +1477,9 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
                 if (net < honbuchoNum) {
                   classes = classes ? `${classes} row-net-warning` : 'row-net-warning'
                 }
+              }
+              if (attachmentItemIdSet.has(row.item_id)) {
+                classes = classes ? `${classes} row-has-attachments` : 'row-has-attachments'
               }
               return classes.trim()
             }}

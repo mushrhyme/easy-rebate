@@ -153,7 +153,7 @@ def _get_unit_price_by_商品コード(code: str) -> tuple:
 
 
 # ---------- 설정 기반 규칙 해석 (rule → 값) ----------
-_FIELD_FALLBACK = {"得意先名": "得意先", "ケース入数": "入数"}
+_FIELD_FALLBACK = {"得意先名": "得意先", "ケース入数": "入数", "最終金額": "金額"}
 
 
 def _safe_eval_expr(expr: str, item_data: Dict[str, Any]) -> Any:
@@ -850,7 +850,7 @@ def _default_formulas() -> Dict[str, Any]:
                 },
             },
             {"column": "W", "byForm": {"01": "", "02": "", "03": "", "04": "", "05": ""}},  # 연월 메타
-            {"column": "AL", "byForm": {"01": {"field": "金額"}, "02": {"field": "金額"}, "03": {"field": "請求金額"}, "04": {"expr": "金額+金額2"}, "05": {"field": "請求合計額"}}},
+            {"column": "AL", "byForm": {"01": {"field": "金額"}, "02": {"expr": "最終金額"}, "03": {"field": "請求金額"}, "04": {"expr": "金額+金額2"}, "05": {"field": "請求合計額"}}},
         ],
         "excelFormulaColumns": [
             {"column": "U", "formula": "=P3*N3 + R3*O3 + T3", "description": "P×N + R×O + T"},
