@@ -1260,9 +1260,14 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     return `name:${name}`
   }, [])
 
-  /** 代表スーパー 확정: 그룹 행마다 受注先コード/小売先コード를 서버에 저장 후 모달 닫기 */
+  /** 代表スーパー 확정: 그룹 행마다 受注先/小売先 코드·명을 서버에 저장 후 모달 닫기 */
   const handleRetailSelect = useCallback(
-    async (match: { 판매처코드: string; 소매처코드: string }) => {
+    async (match: {
+      판매처코드: string
+      소매처코드: string
+      판매처명?: string
+      소매처명?: string
+    }) => {
       if (!unitPriceModalRow || !sessionId) {
         if (!sessionId) alert('セッションIDがありません。ページを再読み込みしてください。')
         return
@@ -1285,6 +1290,12 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
             })
             itemData['受注先コード'] = match.판매처코드
             itemData['小売先コード'] = match.소매처코드
+            if (match.판매처명 != null && match.판매처명 !== '') {
+              itemData['受注先'] = match.판매처명
+            }
+            if (match.소매처명 != null && match.소매처명 !== '') {
+              itemData['小売先'] = match.소매처명
+            }
 
             await updateItem.mutateAsync({
               itemId: row.item_id,
@@ -1334,6 +1345,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         open={!!unitPriceModalRow}
         onClose={() => setUnitPriceModalRow(null)}
         row={unitPriceModalRow}
+        formType={data?.form_type ?? null}
         onSelectUnitPrice={handleUnitPriceSelect}
         onSelectRetail={handleRetailSelect}
         retailSaving={retailSaving}

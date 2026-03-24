@@ -976,6 +976,60 @@ export const searchApi = {
     return response.data
   },
 
+  /**
+   * retail_master.csv — 得意先名 vs 소매처명 유사도 상위 (소매처코드당 1건)
+   */
+  getRetailCandidatesByRetailMaster: async (
+    customerName: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    customer_name_input: string
+    matches: Array<{ 소매처코드: string; 소매처명: string; similarity: number }>
+    skipped_reason?: string | null
+  }> => {
+    const params: Record<string, unknown> = { customer_name: customerName }
+    if (options?.topK != null) params.top_k = options.topK
+    if (options?.minSimilarity != null) params.min_similarity = options.minSimilarity
+    const response = await client.get('/api/search/retail/candidates-by-retail-master', { params })
+    return response.data
+  },
+
+  /**
+   * dist_master.csv — 판매처명·코드 검색 (조합 테이블 미사용)
+   */
+  getDistCandidatesByDistMaster: async (
+    query: string,
+    options?: { topK?: number; minSimilarity?: number }
+  ): Promise<{
+    query: string
+    matches: Array<{ 판매처코드: string; 판매처명: string; similarity: number }>
+    skipped_reason?: string | null
+  }> => {
+    const topK = options?.topK ?? 10
+    const minSim = options?.minSimilarity ?? 0
+    const response = await client.get('/api/search/dist/candidates-by-dist-master', {
+      params: { query, top_k: topK, min_similarity: minSim },
+    })
+    return response.data
+  },
+
+  /**
+   * dist_retail_master + dist_master — 소매처코드에 대한 판매처 힌트 (참고용)
+   */
+  getVendorHintsByRetailCode: async (
+    retailCode: string,
+    options?: { topK?: number }
+  ): Promise<{
+    retail_code: string
+    matches: Array<{ 판매처코드: string; 판매처명: string }>
+    skipped_reason?: string | null
+  }> => {
+    const params: Record<string, unknown> = { retail_code: retailCode }
+    if (options?.topK != null) params.top_k = options.topK
+    const response = await client.get('/api/search/retail/vendor-hints-by-retail-code', { params })
+    return response.data
+  },
+
   /** 得意先으로 판매처-소매처 RAG 정답지 벡터 검색 후보 */
   getRetailCandidatesByRagAnswer: async (
     customerName: string,

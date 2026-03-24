@@ -31,6 +31,9 @@ _RETAIL_USER_CSV = _PROJECT_ROOT / "database" / "csv" / "retail_user.csv"
 _DIST_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
 _DOMAE_RETAIL_1_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_1.csv"
 _DOMAE_RETAIL_2_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_2.csv"
+_RETAIL_MASTER_CSV = _PROJECT_ROOT / "database" / "csv" / "retail_master.csv"
+_DIST_MASTER_CSV = _PROJECT_ROOT / "database" / "csv" / "dist_master.csv"
+_DIST_RETAIL_MASTER_CSV = _PROJECT_ROOT / "database" / "csv" / "dist_retail_master.csv"
 _SAP_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "sap_retail.csv"
 _SAP_PRODUCT_CSV = _PROJECT_ROOT / "database" / "csv" / "sap_product.csv"
 
@@ -180,6 +183,142 @@ async def get_sap_row_by_vendor_code(
                 "판매처명": (r.get("판매처명") or "").strip(),
             },
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/retail/candidates-by-retail-master")
+async def get_retail_candidates_by_retail_master(
+    customer_name: str = Query(..., description="得意先名（retail_master 소매처명과 유사도）"),
+    top_k: int = Query(10, ge=1, le=20, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+):
+    """
+    retail_master.csv: 소매처명 vs 得意先명 유사도, 소매처코드당 최고 점수 1건만 유지 후 상위 top_k.
+    """
+    customer_name = (customer_name or "").strip()
+    if not customer_name:
+        return {"customer_name_input": "", "matches": []}
+    if not _RETAIL_MASTER_CSV.exists():
+        return {"customer_name_input": customer_name, "matches": [], "skipped_reason": "retail_master.csv not found"}
+    try:
+        df = pd.read_csv(_RETAIL_MASTER_CSV, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
+        best_by_code: dict = {}
+        for _, r in df.iterrows():
+            name = (r.get("소매처명") or "").strip()
+            code = (r.get("소매처코드") or "").strip()
+            if not name or not code:
+                continue
+            score = _similarity_difflib(customer_name, name)
+            if score < min_similarity:
+                continue
+            prev = best_by_code.get(code)
+            if prev is None or score > prev[0]:
+                best_by_code[code] = (score, name, code)
+        ranked = sorted(best_by_code.values(), key=lambda x: -x[0])[:top_k]
+        matches = [
+            {"소매처코드": code, "소매처명": nm, "similarity": round(sc, 4)}
+            for sc, nm, code in ranked
+        ]
+        return {"customer_name_input": customer_name, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dist/candidates-by-dist-master")
+async def get_dist_candidates_by_dist_master(
+    query: str = Query("", description="판매처명 또는 판매처코드"),
+    top_k: int = Query(10, ge=1, le=30, description="반환 건수"),
+    min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
+):
+    """dist_master.csv만 사용 (조합 테이블 없음). 판매처 검색용."""
+    q = (query or "").strip()
+    if not q:
+        return {"query": "", "matches": []}
+    if not _DIST_MASTER_CSV.exists():
+        return {"query": q, "matches": [], "skipped_reason": "dist_master.csv not found"}
+    try:
+        df = pd.read_csv(_DIST_MASTER_CSV, dtype=str, encoding="utf-8-sig")
+        df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
+        scored = []
+        q_upper = q.upper()
+        for _, r in df.iterrows():
+            dist_name = (r.get("판매처명") or "").strip()
+            dist_code = (r.get("판매처코드") or "").strip()
+            if not dist_code:
+                continue
+            s1 = _similarity_difflib(q, dist_name) if dist_name else 0.0
+            part = 0.0
+            if dist_name and (q in dist_name or (q_upper and q_upper in dist_name.upper())):
+                part = 0.95 if q in dist_name else 0.9
+            code_score = 0.0
+            if q == dist_code:
+                code_score = 1.0
+            elif dist_code.startswith(q):
+                code_score = 0.95
+            elif q in dist_code:
+                code_score = 0.9
+            score = max(s1, part, code_score)
+            if score >= min_similarity:
+                scored.append((score, dist_code, dist_name))
+        scored.sort(key=lambda x: -x[0])
+        seen = set()
+        matches = []
+        for sc, dc, dn in scored:
+            if dc in seen:
+                continue
+            seen.add(dc)
+            matches.append({"판매처코드": dc, "판매처명": dn, "similarity": round(sc, 4)})
+            if len(matches) >= top_k:
+                break
+        return {"query": q, "matches": matches}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/retail/vendor-hints-by-retail-code")
+async def get_vendor_hints_by_retail_code(
+    retail_code: str = Query(..., description="確定した소매처코드"),
+    top_k: int = Query(10, ge=1, le=20, description="반환 건수"),
+):
+    """
+    dist_retail_master에서 소매처코드에 연결된 판매처코드 목록 → dist_master로 판매처명 표시.
+    조합이 틀릴 수 있으므로 참고용 힌트.
+    """
+    code = (retail_code or "").strip()
+    if not code:
+        return {"retail_code": "", "matches": []}
+    if not _DIST_RETAIL_MASTER_CSV.exists():
+        return {"retail_code": code, "matches": [], "skipped_reason": "dist_retail_master.csv not found"}
+    try:
+        df_dr = pd.read_csv(_DIST_RETAIL_MASTER_CSV, dtype=str, encoding="utf-8-sig")
+        df_dr.columns = [c.strip().lstrip("\ufeff") for c in df_dr.columns]
+        dist_codes = []
+        seen = set()
+        for _, r in df_dr.iterrows():
+            rc = (r.get("소매처코드") or "").strip()
+            dc = (r.get("판매처코드") or "").strip()
+            if rc != code or not dc or dc in seen:
+                continue
+            seen.add(dc)
+            dist_codes.append(dc)
+            if len(dist_codes) >= top_k:
+                break
+        name_by_code: dict = {}
+        if _DIST_MASTER_CSV.exists():
+            df_dm = pd.read_csv(_DIST_MASTER_CSV, dtype=str, encoding="utf-8-sig")
+            df_dm.columns = [c.strip().lstrip("\ufeff") for c in df_dm.columns]
+            for _, r in df_dm.iterrows():
+                c = (r.get("판매처코드") or "").strip()
+                n = (r.get("판매처명") or "").strip()
+                if c and c not in name_by_code:
+                    name_by_code[c] = n
+        matches = [
+            {"판매처코드": dc, "판매처명": name_by_code.get(dc) or dc}
+            for dc in dist_codes
+        ]
+        return {"retail_code": code, "matches": matches}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -849,7 +988,7 @@ def _retail_code_to_names() -> dict:
 @router.get("/retail/candidates-by-rag-answer")
 async def get_retail_candidates_by_rag_answer(
     customer_name: str = Query(..., description="거래처명(得意先)"),
-    top_k: int = Query(5, ge=1, le=20, description="반환 건수"),
+    top_k: int = Query(10, ge=1, le=20, description="반환 건수"),
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
 ):
     """

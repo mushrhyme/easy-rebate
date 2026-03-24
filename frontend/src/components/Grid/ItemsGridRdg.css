@@ -986,6 +986,131 @@
   cursor: not-allowed;
 }
 
+/* 代表スーパー to_do 型: ①小売 → ②販売 → 確定 */
+.retail-map-spec-intro {
+  margin: 0 0 14px;
+  line-height: 1.5;
+}
+.retail-map-spec-block {
+  margin-bottom: 16px;
+  padding: 14px 14px 16px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+}
+.retail-map-spec-block--retail {
+  border-color: #7dd3fc;
+  background: linear-gradient(180deg, #f0f9ff 0%, #ffffff 48%);
+}
+.retail-map-spec-block--vendor {
+  border-color: #fcd34d;
+  background: linear-gradient(180deg, #fffbeb 0%, #ffffff 48%);
+}
+.retail-map-spec-block-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  letter-spacing: 0.02em;
+}
+.retail-map-spec-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.retail-map-spec-label {
+  flex: 0 0 7.5em;
+  font-weight: 600;
+  color: #374151;
+  padding-top: 7px;
+}
+.retail-map-spec-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.retail-map-spec-eq {
+  font-size: 11px;
+  color: #6b7280;
+}
+.retail-map-readonly {
+  background: #f3f4f6;
+  color: #111827;
+}
+.retail-map-spec-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.retail-map-rank1-hint {
+  font-size: 11px;
+  color: #0369a1;
+  font-weight: 500;
+}
+.retail-map-spec-block--vendor .retail-map-rank1-hint {
+  color: #b45309;
+}
+.retail-map-spec-subhead {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+}
+.retail-map-pick-table {
+  margin-bottom: 12px;
+}
+.retail-map-col-n {
+  width: 2.25em;
+  text-align: center;
+  color: #6b7280;
+  font-weight: 600;
+}
+.retail-map-sim {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+.retail-map-search-label {
+  margin-top: 4px;
+}
+.retail-map-search-label > span {
+  flex: 0 0 4.5em;
+}
+.retail-map-confirm-wrap {
+  margin: 8px 0 18px;
+  padding-top: 4px;
+  border-top: 1px dashed #e5e7eb;
+}
+.retail-map-confirm-btn {
+  width: 100%;
+  max-width: 320px;
+  padding: 10px 18px;
+  font-size: 14px;
+}
+.retail-map-details {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+.retail-map-details-summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  user-select: none;
+}
+.retail-map-details[open] .retail-map-details-summary {
+  margin-bottom: 10px;
+}
+
 /* 添付ファイル 모달 */
 .attachment-modal-overlay {
   position: fixed;
