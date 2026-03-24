@@ -9,7 +9,7 @@ TARGET_OCR (actual OCR text to process):
 
 MISSION
 
-Your task is to fully restructure the TARGET_OCR document into a JSON object.
+Your task is to extract TARGET_OCR table rows faithfully into one JSON object.
 
 The output JSON must strictly follow the same structure and semantic system as REFERENCE_JSON.
 
@@ -104,20 +104,16 @@ Follow strictly:
 6. Infer タイプ using REFERENCE_JSON patterns
 
 
-REFERENCE ALIGNMENT RULE (HIGHEST PRIORITY)
+ROW FIDELITY RULE (HIGHEST PRIORITY)
 
-If TARGET_OCR is structurally equivalent to REFERENCE_OCR,
-then the number of items and row structure MUST match REFERENCE_JSON exactly.
+Use TARGET_OCR as the ground truth for row count and row boundaries.
 
-In this case:
-- Ignore OCR noise, broken lines, or extra lines
-- Do NOT create additional items beyond REFERENCE_JSON
-- Do NOT infer additional rows from OCR 
-
-REFERENCE_JSON becomes the ground truth for:
-- number of items 
-- row segmentation
-- row boundaries
+Rules:
+- Keep each table row as one item.
+- Do NOT merge rows.
+- Do NOT split one row into multiple items unless the OCR clearly contains separate rows.
+- Do NOT drop rows just because they differ from REFERENCE_JSON.
+- REFERENCE_JSON is for key naming/format guidance, not for forcing item count.
 
 
 PAGE ROLE RULES
