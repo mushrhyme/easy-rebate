@@ -1,7 +1,7 @@
 /**
  * 매핑 모달: 単価(제품) | 代表スーパー(소매처) 탭.
  * 単価: 最終候補 폼(適用 후 수정 가능) + sap_product 검색 → 確定 시 그리드 반영.
- * 代表スーパー: 様式01+得意先コード→domae → retail_master → dist 힌트 → RAG. 검색: retail_master / dist_master.
+ * 代表スーパー: 様式01+得意先コード→domae → retail_master+RAG(類似度で混在・最大10) → dist 힌트. 검색: retail_master / dist_master.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { searchApi } from '@/api/client'
@@ -138,73 +138,6 @@ function normalizeByCodeMatch(m: RetailMatch, customerCode: string): RetailMatch
     ...m,
     도매소매처코드: m.도매소매처코드 ?? customerCode,
   }
-}
-
-/** 1번=得意先만(RAG), 2번=도매소매처코드만, 3번=도매 컬럼 없음, 4번=도매소매처명만 */
-type DomaeColumn = 'code' | 'name' | null
-type RetailKeyHeader = 'domae_code' | 'retail_name' | 'domae_name' | 'tokuisaki' | null
-
-function RetailTable({
-  matches,
-  onSelectToFinal,
-  domaeColumn = null,
-  keyHeader = null,
-  showSimilarity = true,
-}: {
-  matches: RetailMatch[]
-  onSelectToFinal: (m: RetailMatch) => void
-  /** 1번: keyHeader='tokuisaki' 得意先, 2번: 'code'만, 4번: 'name'만 */
-  domaeColumn?: DomaeColumn
-  keyHeader?: RetailKeyHeader
-  /** 1번은 코드 정확 매칭이라 유사도 없음 → false 시 類似度 열 숨김 */
-  showSimilarity?: boolean
-}) {
-  if (matches.length === 0) return null
-  const showTokuisaki = keyHeader === 'tokuisaki'
-  return (
-    <table className="unit-price-match-table">
-      <thead>
-        <tr>
-          {showTokuisaki && (
-            <th className="key-column">得意先</th>
-          )}
-          {domaeColumn === 'code' && (
-            <th className={keyHeader === 'domae_code' ? 'key-column' : undefined}>得意先コード</th>
-          )}
-          {domaeColumn === 'name' && (
-            <th className={keyHeader === 'domae_name' ? 'key-column' : undefined}>卸小売先名</th>
-          )}
-          <th>小売先コード</th>
-          <th className={keyHeader === 'retail_name' ? 'key-column' : undefined}>小売先名</th>
-          <th>受注先コード</th>
-          <th>受注先名</th>
-          {showSimilarity && <th>類似度</th>}
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {matches.map((m, i) => (
-          <tr key={i}>
-            {showTokuisaki && (
-              <td>{(m as { 得意先?: string }).得意先 ?? m.도매소매처명 ?? ''}</td>
-            )}
-            {domaeColumn === 'code' && <td>{m.도매소매처코드 ?? ''}</td>}
-            {domaeColumn === 'name' && <td>{m.도매소매처명 ?? ''}</td>}
-            <td>{m.소매처코드}</td>
-            <td>{m.소매처명}</td>
-            <td>{m.판매처코드}</td>
-            <td>{m.판매처명}</td>
-            {showSimilarity && <td>{(m.similarity * 100).toFixed(1)}%</td>}
-            <td>
-              <button type="button" onClick={() => onSelectToFinal(m)}>
-                適用
-              </button>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
 }
 
 export function UnitPriceMatchModal({
@@ -668,14 +601,17 @@ export function UnitPriceMatchModal({
     setDistMasterMatches([])
   }, [])
 
-  /** to_do 매핑 화면: domae 1건 우선 → retail_master 순（소매처코드 중복 제거しない, 最大10行） */
+  /** ①小売: domae 1건固定上位 → retail_master と RAG を類似度で混ぜて最大10行（RAG行は適用で販売欄も反映） */
   const retailPickList = useMemo(() => {
-    const out: Array<{
+    type PickRow = {
       소매처코드: string
       소매처명: string
       similarity?: number
-      source: 'domae' | 'retail_master'
-    }> = []
+      source: 'domae' | 'retail_master' | 'rag'
+      /** source===rag のとき 適用で 판매처까지 반영 */
+      ragMatch?: RetailMatch
+    }
+    const out: PickRow[] = []
     if (byCode.match) {
       const nm = normalizeByCodeMatch(byCode.match, customerCode)
       const c = (nm.소매처코드 ?? '').trim()
@@ -688,19 +624,38 @@ export function UnitPriceMatchModal({
         })
       }
     }
+    const slotsLeft = 10 - out.length
+    if (slotsLeft <= 0) return out
+
+    const tail: PickRow[] = []
     for (const m of byRetailMaster.matches) {
-      if (out.length >= 10) break
       const c = (m.소매처코드 ?? '').trim()
       if (!c) continue
-      out.push({
+      tail.push({
         소매처코드: c,
         소매처명: m.소매처명,
-        similarity: m.similarity,
+        similarity: m.similarity ?? 0,
         source: 'retail_master',
       })
     }
+    for (const m of byRagAnswer.matches) {
+      const c = (m.소매처코드 ?? '').trim()
+      if (!c) continue
+      tail.push({
+        소매처코드: c,
+        소매처명: (m.소매처명 ?? '').trim(),
+        similarity: m.similarity ?? 0,
+        source: 'rag',
+        ragMatch: m,
+      })
+    }
+    tail.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))
+    for (const row of tail) {
+      if (out.length >= 10) break
+      out.push(row)
+    }
     return out
-  }, [byCode.match, byRetailMaster.matches, customerCode])
+  }, [byCode.match, byRetailMaster.matches, byRagAnswer.matches, customerCode])
 
   const vendorPickList = useMemo(() => vendorHints.matches.slice(0, 10), [vendorHints.matches])
 
@@ -938,14 +893,20 @@ export function UnitPriceMatchModal({
                     {retailPickList[0] && (
                       <span className="retail-map-rank1-hint">
                         1位候補: {retailPickList[0].소매처코드}
-                        {retailPickList[0].source === 'domae' ? '（domae）' : '（retail_master）'}
+                        {retailPickList[0].source === 'domae'
+                          ? '（domae）'
+                          : retailPickList[0].source === 'rag'
+                            ? '（RAG）'
+                            : '（retail_master）'}
                       </span>
                     )}
                   </div>
                 </div>
-                <p className="retail-map-spec-subhead">候補一覧（小売先コード · 小売先名）</p>
-                {(byCode.loading || byRetailMaster.loading) && <p className="unit-price-match-modal-loading">候補を検索中…</p>}
-                {!byCode.loading && !byRetailMaster.loading && retailPickList.length === 0 && (
+                <p className="retail-map-spec-subhead">候補一覧（小売先コード · 小売先名 · retail_master+RAG·類似度順）</p>
+                {(byCode.loading || byRetailMaster.loading || byRagAnswer.loading) && (
+                  <p className="unit-price-match-modal-loading">候補を検索中…</p>
+                )}
+                {!byCode.loading && !byRetailMaster.loading && !byRagAnswer.loading && retailPickList.length === 0 && (
                   <p className="unit-price-match-modal-empty">候補がありません。下の検索を使うか、手入力してください。</p>
                 )}
                 {retailPickList.length > 0 && (
@@ -955,24 +916,39 @@ export function UnitPriceMatchModal({
                         <th className="retail-map-col-n">#</th>
                         <th>小売先コード</th>
                         <th>小売先名（マスタ）</th>
+                        <th>出所</th>
+                        <th>類似度</th>
                         <th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {retailPickList.map((row, i) => (
-                        <tr key={`${row.소매처코드}-${i}`}>
+                        <tr key={`${row.source}-${row.소매처코드}-${i}`}>
                           <td className="retail-map-col-n">{i + 1}</td>
                           <td>{row.소매처코드}</td>
+                          <td>{row.소매처명}</td>
                           <td>
-                            {row.소매처명}
-                            {row.similarity != null && row.source === 'retail_master' && (
-                              <span className="retail-map-sim">（{(row.similarity * 100).toFixed(0)}%）</span>
-                            )}
+                            {row.source === 'domae'
+                              ? 'domae'
+                              : row.source === 'retail_master'
+                                ? 'retail_master'
+                                : 'RAG'}
+                          </td>
+                          <td>
+                            {row.similarity != null && row.source !== 'domae'
+                              ? `${(row.similarity * 100).toFixed(0)}%`
+                              : row.source === 'domae'
+                                ? '—'
+                                : '—'}
                           </td>
                           <td>
                             <button
                               type="button"
-                              onClick={() => applyRetailMasterRowToForm({ 소매처코드: row.소매처코드, 소매처명: row.소매처명 })}
+                              onClick={() =>
+                                row.source === 'rag' && row.ragMatch
+                                  ? handleSelectRagToFinal(row.ragMatch)
+                                  : applyRetailMasterRowToForm({ 소매처코드: row.소매처코드, 소매처명: row.소매처명 })
+                              }
                             >
                               適用
                             </button>
@@ -1115,25 +1091,6 @@ export function UnitPriceMatchModal({
                   {retailSaving ? '保存中…' : '確定'}
                 </button>
               </div>
-
-              <details className="retail-map-details">
-                <summary className="retail-map-details-summary">その他の候補ソース（RAG）</summary>
-
-              <section className="retail-mapping-section">
-                <h4 className="retail-mapping-section-title">得意先 RAG（벡터 DB・参考）</h4>
-                {byRagAnswer.loading && <p className="unit-price-match-modal-loading">検索中…</p>}
-                {byRagAnswer.skippedReason && (
-                  <p className="unit-price-match-modal-empty">{byRagAnswer.skippedReason}</p>
-                )}
-                {byRagAnswer.error && <p className="unit-price-match-modal-error">{byRagAnswer.error}</p>}
-                {!byRagAnswer.loading && !byRagAnswer.error && !byRagAnswer.skippedReason && byRagAnswer.matches.length === 0 && (
-                  <p className="unit-price-match-modal-empty">該当する候補がありません。</p>
-                )}
-                {!byRagAnswer.loading && !byRagAnswer.error && byRagAnswer.matches.length > 0 && (
-                  <RetailTable matches={byRagAnswer.matches} onSelectToFinal={handleSelectRagToFinal} keyHeader="tokuisaki" />
-                )}
-              </section>
-              </details>
             </>
           )}
         </div>
