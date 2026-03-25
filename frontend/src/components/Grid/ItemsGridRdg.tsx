@@ -1443,6 +1443,18 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
               const shikiriNum = parseCellNum(row['仕切'])
               const honbuchoNum = parseCellNum(row['本部長'])
               let condNum = CONDITION_AMOUNT_KEYS.map((k) => parseCellNum(row[k])).find((n) => n != null) ?? null
+              const parseYenValue = (v: unknown): number | null => {
+                const normalized = typeof v === 'string' ? v.replace(/[円¥￥]/g, '').trim() : v // string; 예: "3,700円" -> "3,700"
+                return parseCellNum(normalized)
+              }
+              const rowFormTypeNorm = String(data?.form_type ?? _formType ?? '').trim().replace(/^0+/, '')
+
+              // 02/03: NET = 仕切 - (条件 + 条件2)
+              if (rowFormTypeNorm === '2' || rowFormTypeNorm === '3') {
+                const cond1 = parseYenValue(row['条件'])
+                const cond2 = parseYenValue(row['条件2'])
+                condNum = cond1 != null ? cond1 + (cond2 ?? 0) : null // number|null; 예: 126 + 29
+              }
               
               // FINET 01 + 数量単位=CS:
               // 仕切・本部長은 unit_price.csv 원본(단가리스트) 그대로 유지.

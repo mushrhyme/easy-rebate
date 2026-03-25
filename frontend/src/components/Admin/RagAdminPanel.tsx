@@ -4,6 +4,8 @@ import { ragAdminApi, authApi, type CreateUserPayload, type UpdateUserPayload } 
 import { useAuth } from '@/contexts/AuthContext'
 import './RagAdminPanel.css'
 
+const ALLOWED_MASTER_TABS = ['dist_master', 'retail_master', 'retail_user', 'sap_product', 'unit_price'] as const
+
 /** users テーブル全項目（UIでは login_count は非表示） */
 type UserRow = {
   user_id: number
@@ -34,7 +36,10 @@ export const RagAdminPanel = () => {
     queryFn: () => ragAdminApi.getCsvList(),
     enabled: isAdmin,
   })
-  const csvFiles = (csvListData?.files ?? []).filter((f) => f !== 'users_import')
+  const csvFiles = useMemo(
+    () => ALLOWED_MASTER_TABS.filter((name) => (csvListData?.files ?? []).includes(name)),
+    [csvListData?.files]
+  )
   const [adminSubTab, setAdminSubTab] = useState<string>('')
   useEffect(() => {
     if (adminSubTab === '' && csvFiles.length > 0) setAdminSubTab(csvFiles[0])
@@ -64,49 +69,6 @@ export const RagAdminPanel = () => {
     queryKey: ['admin', 'users'],
     queryFn: () => authApi.getUsers(),
     enabled: isAdmin,
-  })
-
-  const { data: retailRagAnswerData, isLoading: retailRagAnswerLoading } = useQuery({
-    queryKey: ['rag-admin', 'retail-rag-answer-items'],
-    queryFn: () => ragAdminApi.getRetailRagAnswerItems(),
-    enabled: isAdmin,
-  })
-  const retailRagAnswerItems = (retailRagAnswerData?.items ?? []) as Array<{
-    得意先: string
-    受注先コード: string
-    小売先コード: string
-  }>
-
-  const rebuildRetailRagIndexMutation = useMutation({
-    mutationFn: () => ragAdminApi.rebuildRetailRagAnswerIndex(),
-    onSuccess: (data) => {
-      alert(`벡터 인덱스 구축 완료: ${data.vector_count}건`)
-    },
-    onError: (err: any) => {
-      alert(err?.response?.data?.detail ?? err?.message ?? '인덱스 구축 실패')
-    },
-  })
-
-  const { data: productRagAnswerData, isLoading: productRagAnswerLoading } = useQuery({
-    queryKey: ['rag-admin', 'product-rag-answer-items'],
-    queryFn: () => ragAdminApi.getProductRagAnswerItems(),
-    enabled: isAdmin,
-  })
-  const productRagAnswerItems = (productRagAnswerData?.items ?? []) as Array<{
-    商品名: string
-    商品コード: string
-    仕切: string
-    本部長: string
-  }>
-
-  const rebuildProductRagIndexMutation = useMutation({
-    mutationFn: () => ragAdminApi.rebuildProductRagAnswerIndex(),
-    onSuccess: (data) => {
-      alert(`벡터 인덱스 구축 완료: ${data.vector_count}건`)
-    },
-    onError: (err: any) => {
-      alert(err?.response?.data?.detail ?? err?.message ?? '인덱스 구축 실패')
-    },
   })
 
   const deleteUserMutation = useMutation({
@@ -264,102 +226,6 @@ export const RagAdminPanel = () => {
       </div>
 
       <div className="rag-admin-content">
-        <section className="rag-admin-card rag-admin-card-wide">
-          <h3 className="rag-admin-section-title">판매처-소매처 RAG 정답지</h3>
-          <p className="rag-admin-helper">
-            created_by_user_id가 null이 아닌 문서에 속한 item의 得意先 / 受注先コード / 小売先コード 목록입니다. 아래 목록으로 벡터 인덱스를 구축하면 매핑 모달 1번(得意先 RAG 정답지 類似度)에서 검색됩니다.
-          </p>
-          <p className="rag-admin-helper">
-            <button
-              type="button"
-              className="rag-admin-button primary"
-              disabled={rebuildRetailRagIndexMutation.isPending || retailRagAnswerItems.length === 0}
-              onClick={() => rebuildRetailRagIndexMutation.mutate()}
-            >
-              {rebuildRetailRagIndexMutation.isPending ? '구축 중…' : '벡터 인덱스 재구축'}
-            </button>
-          </p>
-          {retailRagAnswerLoading ? (
-            <p>読み込み中...</p>
-          ) : (
-            <div className="rag-admin-master-grid-wrap">
-              <table className="rag-admin-master-table">
-                <thead>
-                  <tr>
-                    <th>得意先</th>
-                    <th>受注先コード</th>
-                    <th>小売先コード</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {retailRagAnswerItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={3}>該当データがありません。</td>
-                    </tr>
-                  ) : (
-                    retailRagAnswerItems.map((row, idx) => (
-                      <tr key={idx}>
-                        <td>{row.得意先 || '—'}</td>
-                        <td>{row.受注先コード || '—'}</td>
-                        <td>{row.小売先コード || '—'}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        <section className="rag-admin-card rag-admin-card-wide">
-          <h3 className="rag-admin-section-title">제품 RAG 정답지</h3>
-          <p className="rag-admin-helper">
-            created_by_user_id가 null이 아닌 문서에 속한 item의 商品名 / 商品コード / 仕切 / 本部長 목록입니다. 아래 목록으로 벡터 인덱스를 구축하면 商品名→商品コード 매핑 시 RAG 검색이 우선 적용됩니다.
-          </p>
-          <p className="rag-admin-helper">
-            <button
-              type="button"
-              className="rag-admin-button primary"
-              disabled={rebuildProductRagIndexMutation.isPending || productRagAnswerItems.length === 0}
-              onClick={() => rebuildProductRagIndexMutation.mutate()}
-            >
-              {rebuildProductRagIndexMutation.isPending ? '구축 중…' : '벡터 인덱스 재구축'}
-            </button>
-          </p>
-          {productRagAnswerLoading ? (
-            <p>読み込み中...</p>
-          ) : (
-            <div className="rag-admin-master-grid-wrap">
-              <table className="rag-admin-master-table">
-                <thead>
-                  <tr>
-                    <th>商品名</th>
-                    <th>商品コード</th>
-                    <th>仕切</th>
-                    <th>本部長</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {productRagAnswerItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={4}>該当データがありません。</td>
-                    </tr>
-                  ) : (
-                    productRagAnswerItems.map((row, idx) => (
-                      <tr key={idx}>
-                        <td>{row.商品名 || '—'}</td>
-                        <td>{row.商品コード || '—'}</td>
-                        <td>{row.仕切 || '—'}</td>
-                        <td>{row.本部長 || '—'}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
         <section className="rag-admin-card rag-admin-card-wide">
           <h3 className="rag-admin-section-title">管理マスタ</h3>
           {csvListError && (

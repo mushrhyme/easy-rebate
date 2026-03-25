@@ -116,6 +116,19 @@ Rules:
 - REFERENCE_JSON is for key naming/format guidance, not for forcing item count.
 
 
+ROW VALIDITY RULE (OVERRIDES GENERIC ROW EXTRACTION)
+
+A new item may be created only when the OCR row contains at least one primary row identifier
+for this document type, such as JANコード, 商品コード, or another stable key field shown as a true row key.
+
+If a line contains only 商品名 or other descriptive text, while all key identifier columns are empty,
+it must NOT be treated as a separate item.
+
+If such a line is clearly a wrapped continuation of the previous row, append it to the previous row's 商品名.
+Otherwise, ignore it.
+
+A trailing orphan line with blank JANコード must never create a new item by itself.
+
 PAGE ROLE RULES
 
 page_role must be one of:

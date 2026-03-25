@@ -374,6 +374,19 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           renderCell: ({ row }) => {
             const shikiriNum = parseCellNum(row['仕切'])
             if (shikiriNum == null) return <span>—</span>
+            const parseYenValue = (v: unknown): number | null => {
+              const normalized = typeof v === 'string' ? v.replace(/[円¥￥]/g, '').trim() : v // string; 예: "1,280円" -> "1,280"
+              return parseCellNum(normalized)
+            }
+
+            // 02/03: NET = 仕切 - (条件 + 条件2)
+            if (formTypeNorm === '2' || formTypeNorm === '3') {
+              const cond1 = parseYenValue(row['条件'])
+              const cond2 = parseYenValue(row['条件2'])
+              if (cond1 == null) return <span>—</span>
+              const condSum = cond1 + (cond2 ?? 0) // number; 예: 126 + 29 = 155
+              return <span>{(shikiriNum - condSum).toLocaleString()}</span>
+            }
 
             // 4번 유형(form_type=04): NET 비교는 반드시 未収条件 + 未収条件2(없으면 0)
             // 이 타입에는 '条件'이 없고, '対象数量又は金額'(예: "60個")은 parseCellNum 실패 가능.

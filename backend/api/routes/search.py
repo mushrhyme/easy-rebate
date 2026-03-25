@@ -280,7 +280,6 @@ async def get_dist_candidates_by_dist_master(
 @router.get("/retail/vendor-hints-by-retail-code")
 async def get_vendor_hints_by_retail_code(
     retail_code: str = Query(..., description="確定した소매처코드"),
-    top_k: int = Query(10, ge=1, le=20, description="반환 건수"),
 ):
     """
     dist_retail_master에서 소매처코드에 연결된 판매처코드 목록 → dist_master로 판매처명 표시.
@@ -294,17 +293,13 @@ async def get_vendor_hints_by_retail_code(
     try:
         df_dr = pd.read_csv(_DIST_RETAIL_MASTER_CSV, dtype=str, encoding="utf-8-sig")
         df_dr.columns = [c.strip().lstrip("\ufeff") for c in df_dr.columns]
-        dist_codes = []
-        seen = set()
+        dist_codes = []  # list[str]; 예: ["000123", "000987", ...] (원본 행 순서 유지, 중복 허용)
         for _, r in df_dr.iterrows():
             rc = (r.get("소매처코드") or "").strip()
             dc = (r.get("판매처코드") or "").strip()
-            if rc != code or not dc or dc in seen:
+            if rc != code or not dc:
                 continue
-            seen.add(dc)
             dist_codes.append(dc)
-            if len(dist_codes) >= top_k:
-                break
         name_by_code: dict = {}
         if _DIST_MASTER_CSV.exists():
             df_dm = pd.read_csv(_DIST_MASTER_CSV, dtype=str, encoding="utf-8-sig")
@@ -314,7 +309,7 @@ async def get_vendor_hints_by_retail_code(
                 n = (r.get("판매처명") or "").strip()
                 if c and c not in name_by_code:
                     name_by_code[c] = n
-        matches = [
+        matches = [  # list[dict]; 예: [{"판매처코드":"000123","판매처명":"ABC商事"}, ...]
             {"판매처코드": dc, "판매처명": name_by_code.get(dc) or dc}
             for dc in dist_codes
         ]

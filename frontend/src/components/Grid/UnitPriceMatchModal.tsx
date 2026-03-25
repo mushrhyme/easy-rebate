@@ -450,7 +450,7 @@ export function UnitPriceMatchModal({
     lastHintRetailRef.current = rc
     setVendorHints((p) => ({ ...p, loading: true }))
     searchApi
-      .getVendorHintsByRetailCode(rc, { topK: 10 })
+      .getVendorHintsByRetailCode(rc)
       .then((res) => {
         setVendorHints({
           matches: res.matches ?? [],
@@ -468,20 +468,7 @@ export function UnitPriceMatchModal({
     setFinalForm((prev) => ({ ...prev, 受注先コード: '', 受注先: '' }))
   }, [open, activeTab, finalForm.小売先コード])
 
-  /** 販売ヒント先頭を自動入力（受注先コードが空のときのみ。行からの初期値や手動入力は上書きしない） */
-  useEffect(() => {
-    if (!open || activeTab !== 'retail') return
-    if (vendorHints.loading) return
-    const rc = finalForm.小売先コード.trim()
-    if (!rc || vendorHints.matches.length === 0) return
-    if (finalForm.受注先コード.trim()) return
-    const first = vendorHints.matches[0]
-    setFinalForm((prev) => ({
-      ...prev,
-      受注先コード: first.판매처코드,
-      受注先: first.판매처명,
-    }))
-  }, [open, activeTab, vendorHints.loading, vendorHints.matches, finalForm.小売先コード, finalForm.受注先コード])
+  // 販売候補の自動入力はしない（誤適用防止のため、必ずユーザーが選択/入力）
 
   /** 小売マスタの手入力検索 */
   useEffect(() => {
@@ -605,7 +592,7 @@ export function UnitPriceMatchModal({
     setDistMasterMatches([])
   }, [])
 
-  /** ①小売候補: domae / RAG(max3) / retail_master を類似度で混ぜ、同一소매코드は高い方のみ、上位10件。domaeは類似度なし→0.99 */
+  /** ①小売候補: domae / RAG(max3) / retail_master を類似度で混ぜ、ソート上位10件（コード重複は保持） */
   const retailPickList = useMemo(() => {
     type PickRow = {
       소매처코드: string
@@ -614,13 +601,7 @@ export function UnitPriceMatchModal({
       source: 'domae' | 'retail_master' | 'rag'
       ragMatch?: RetailMatch
     }
-    const domaeSortSim = (nm: RetailMatch): number => {
-      const s = nm.similarity
-      if (typeof s === 'number' && !Number.isNaN(s) && s > 0) {
-        return s > 1 ? s / 100 : s
-      }
-      return 0.99
-    }
+    const domaeSortSim = (_nm: RetailMatch): number => 0.99 // number; コード照合は常に 99% 扱い(0.99)
     const pool: PickRow[] = []
     if (byCode.match) {
       const nm = normalizeByCodeMatch(byCode.match, customerCode)
@@ -655,18 +636,10 @@ export function UnitPriceMatchModal({
         source: 'retail_master',
       })
     }
-    pool.sort((a, b) => b.similarity - a.similarity)
-    const bestByCode = new Map<string, PickRow>()
-    for (const row of pool) {
-      const prev = bestByCode.get(row.소매처코드)
-      if (!prev || row.similarity > prev.similarity) {
-        bestByCode.set(row.소매처코드, row)
-      }
-    }
-    return [...bestByCode.values()].sort((a, b) => b.similarity - a.similarity).slice(0, 10)
+    return pool.sort((a, b) => b.similarity - a.similarity).slice(0, 10) // PickRow[]; 동일 소매처코드라도 source별 행 유지
   }, [byCode.match, byRetailMaster.matches, byRagAnswer.matches, customerCode])
 
-  const vendorPickList = useMemo(() => vendorHints.matches.slice(0, 10), [vendorHints.matches])
+  const vendorPickList = useMemo(() => vendorHints.matches, [vendorHints.matches]) // Array<{판매처코드:string;판매처명:string}>; 선택된 소매코드의 전체 판매처 후보
 
   /** ①候補APIのいずれかのエラー（ロード完了後のみ表示用） */
   const retailPickApiError = useMemo(() => {
@@ -1017,9 +990,6 @@ export function UnitPriceMatchModal({
                       placeholder="小売先コード"
                       aria-label="小売先コード"
                     />
-                    {retailPickList[0] && (
-                      <span className="retail-map-rank1-hint">1位候補: {retailPickList[0].소매처코드}</span>
-                    )}
                   </div>
                 </div>
                 <p className="retail-map-spec-subhead">候補一覧</p>
@@ -1121,9 +1091,6 @@ export function UnitPriceMatchModal({
                       placeholder="受注先コード"
                       aria-label="受注先コード"
                     />
-                    {vendorPickList[0] && (
-                      <span className="retail-map-rank1-hint">1位候補: {vendorPickList[0].판매처코드}</span>
-                    )}
                   </div>
                 </div>
                 <div className="retail-map-spec-row">
