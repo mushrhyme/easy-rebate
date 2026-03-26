@@ -726,8 +726,8 @@ async def get_unit_price_by_product_code(
     product_code: str = Query(..., description="商品コード（제품코드）"),
 ):
     """
-    unit_price.csv에서 商品コード로 1건 조회. 仕切・本部長 자동완성용.
-    반환: { 商品コード, 仕切, 本部長 } or null
+    unit_price.csv에서 商品コード로 1건 조회. 仕切・本部長・マスタ商品名(제품명) 자동완성·確定用.
+    반환: { 商品コード, 仕切, 本部長, マスタ商品名 } or null
     """
     code = (product_code or "").strip()
     if not code:
@@ -746,11 +746,13 @@ async def get_unit_price_by_product_code(
                 본부장 = float(r.get("본부장") or 0) if pd.notna(r.get("본부장")) else None
             except (TypeError, ValueError):
                 시키리, 본부장 = None, None
+            master_name = (r.get("제품명") or "").strip() or None
             return {
                 "row": {
                     "商品コード": code,
                     "仕切": 시키리,
                     "本部長": 본부장,
+                    "マスタ商品名": master_name,
                 },
             }
         return {"row": None}

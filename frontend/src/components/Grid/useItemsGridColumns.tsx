@@ -250,13 +250,13 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         ),
       })
 
-      // detail 페이지 한정: タイプ, 受注先コード, 小売先コード, 商品コード, 仕切, 本部長, NET (summary/cover 등에서는 매핑 불필요·혼선 방지)
+      // detail 페이지 한정: タイプ, 受注先/小売 코드·マスタ名, 商品コード·マスタ商品名, 仕切, 本部長, NET
       if (isDetailPage) {
         cols.push({
           key: 'タイプ',
           name: 'タイプ',
-          width: 100,
-          minWidth: 100,
+          width: 88,
+          minWidth: 80,
           frozen: true,
           resizable: false,
           editable: false,
@@ -299,8 +299,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         cols.push({
           key: '受注先コード',
           name: '受注先コード',
-          width: 100,
-          minWidth: 80,
+          width: 82,
+          minWidth: 72,
           frozen: true,
           resizable: true,
           editable: false,
@@ -310,10 +310,24 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
         cols.push({
+          key: '受注先',
+          name: '受注先',
+          width: 128,
+          minWidth: 96,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          cellClass: 'rdg-cell-wrap',
+          renderCell: ({ row }) => {
+            const v = row['受注先']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+          },
+        })
+        cols.push({
           key: '小売先コード',
           name: '小売先コード',
-          width: 100,
-          minWidth: 80,
+          width: 82,
+          minWidth: 72,
           frozen: true,
           resizable: true,
           editable: false,
@@ -323,10 +337,24 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
         cols.push({
+          key: '小売先',
+          name: '小売先',
+          width: 128,
+          minWidth: 96,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          cellClass: 'rdg-cell-wrap',
+          renderCell: ({ row }) => {
+            const v = row['小売先']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+          },
+        })
+        cols.push({
           key: '商品コード',
           name: '商品コード',
-          width: 100,
-          minWidth: 80,
+          width: 88,
+          minWidth: 76,
           frozen: true,
           resizable: true,
           editable: false,
@@ -336,10 +364,24 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
         cols.push({
+          key: 'マスタ商品名',
+          name: 'マスタ商品名',
+          width: 128,
+          minWidth: 96,
+          frozen: true,
+          resizable: true,
+          editable: false,
+          cellClass: 'rdg-cell-wrap',
+          renderCell: ({ row }) => {
+            const v = row['マスタ商品名']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
+          },
+        })
+        cols.push({
           key: '仕切',
           name: '仕切',
-          width: 90,
-          minWidth: 80,
+          width: 78,
+          minWidth: 68,
           frozen: true,
           resizable: true,
           editable: false,
@@ -352,8 +394,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         cols.push({
           key: '本部長',
           name: '本部長',
-          width: 90,
-          minWidth: 80,
+          width: 78,
+          minWidth: 68,
           frozen: true,
           resizable: true,
           editable: false,
@@ -366,8 +408,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         cols.push({
           key: 'net',
           name: 'NET',
-          width: 90,
-          minWidth: 90,
+          width: 82,
+          minWidth: 72,
           frozen: true,
           resizable: true,
           editable: false,
@@ -421,7 +463,19 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
 
     if (hasItems) {
       for (const key of orderedKeys) {
-        if (key === 'customer' || key === 'タイプ' || key === '受注先コード' || key === '小売先コード' || key === '商品コード' || key === '仕切' || key === '本部長') continue
+        if (
+          key === 'customer' ||
+          key === 'タイプ' ||
+          key === '受注先コード' ||
+          key === '受注先' ||
+          key === '小売先コード' ||
+          key === '小売先' ||
+          key === '商品コード' ||
+          key === 'マスタ商品名' ||
+          key === '仕切' ||
+          key === '本部長'
+        )
+          continue
         const firstValue = items[0]?.item_data?.[key]
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))

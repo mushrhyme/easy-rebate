@@ -145,6 +145,28 @@ def _parse_float(val: Any) -> Optional[float]:
         return None
 
 
+def lookup_product_name_by_code(product_code: str, csv_path: Path) -> Optional[str]:
+    """
+    unit_price.csv에서 제품코드로 마스터 표시명(제품명) 조회.
+    반환: 제품명 문자열 또는 None.
+    """
+    code = (product_code or "").strip()
+    if not code or not csv_path.exists():
+        return None
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8")
+        match = df[df["제품코드"].astype(str).str.strip() == code]
+        if match.empty:
+            return None
+        name = match.iloc[0].get("제품명")
+        if name is None or (isinstance(name, float) and pd.isna(name)):
+            return None
+        s = str(name).strip()
+        return s if s else None
+    except Exception:
+        return None
+
+
 def _lookup_prices_by_code(code: str, csv_path: Path) -> Optional[Tuple[Optional[float], Optional[float]]]:
     """
     unit_price.csv에서 제품코드로 시키리/본부장 조회.

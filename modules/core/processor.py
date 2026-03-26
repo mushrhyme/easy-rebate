@@ -189,6 +189,7 @@ class PdfProcessor:
 
                 # 분석 직후·DB 저장 전: 1(RAG)→2→3→4 매핑 선적용 (受注先コード/小売先コード/商品コード를 page_results에 넣어서 저장)
                 try:
+                    from modules.utils.master_display_enrich import enrich_master_fields_from_codes
                     from modules.utils.retail_resolve import resolve_retail_dist
                     from modules.utils.config import get_project_root
                     from backend.unit_price_lookup import resolve_product_and_prices
@@ -220,6 +221,7 @@ class PdfProcessor:
                                     item_dict["仕切"] = shikiri
                                 if honbu is not None:
                                     item_dict["本部長"] = honbu
+                            enrich_master_fields_from_codes(item_dict, _unit_price_csv)
                             from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
                             apply_finet01_cs_irisu(item_dict, form_type, upload_channel)  # FINET 01 + 数量単位=CS → 仕切・本部長 *= 入数
                 except Exception:

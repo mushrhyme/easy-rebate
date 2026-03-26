@@ -194,7 +194,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
-      // 검토 탭 frozen: 受注先コード/小売先コード/商品コード → item_data 원천만 사용 (타입과 동일)
+      // 검토 탭 frozen: 코드·マスタ名(受注先/小売先/マスタ商品名) → item_data 원천만 사용 (타입과 동일)
 
       return row
     })
@@ -1207,14 +1207,22 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   }), [saveAllEditingRows, bulkUpdateReviewStatus])
 
   const handleUnitPriceSelect = useCallback(
-    async (match: { 제품코드?: string | number; 시키리?: number; 본부장?: number }) => {
+    async (match: {
+      제품코드?: string | number
+      시키리?: number | null
+      본부장?: number | null
+      マスタ商品名?: string | null
+    }) => {
       if (!unitPriceModalRow || !sessionId || !pdfFilename || pageNumber == null) return
       const itemId = unitPriceModalRow.item_id
       let updatedRow: GridRow = {
         ...unitPriceModalRow,
-        仕切: match.시키리 ?? unitPriceModalRow['仕切'],
-        本部長: match.본부장 ?? unitPriceModalRow['本部長'],
+        仕切: match.시키리 !== undefined ? match.시키리 : unitPriceModalRow['仕切'],
+        本部長: match.본부장 !== undefined ? match.본부장 : unitPriceModalRow['本部長'],
         商品コード: match.제품코드 != null ? String(match.제품코드) : unitPriceModalRow['商品コード'],
+      }
+      if (match.マスタ商品名 !== undefined) {
+        updatedRow['マスタ商品名'] = match.マスタ商品名
       }
       // FINET 01 + 数量単位=CS 일 때도 仕切・本部長은 unit_price.csv 원본(단가리스트 값) 그대로 유지.
       // NET 계산에서만 条件 / 入数로 단가 기준 처리를 수행한다.
@@ -1429,6 +1437,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
             columns={displayColumns}
             rows={rows}
             rowHeight={getRowHeight}
+            headerRowHeight={56}
             onRowsChange={onRowsChange}
             onCellDoubleClick={handleCellDoubleClick}
             rowKeyGetter={(row: GridRow) => row.item_id} // 행 고유 키 지정

@@ -10,6 +10,7 @@ from psycopg2.extras import RealDictCursor, Json
 from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
 from modules.utils.config import get_project_root
+from modules.utils.master_display_enrich import enrich_master_fields_from_codes
 from modules.utils.retail_resolve import resolve_retail_dist
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
@@ -247,6 +248,7 @@ class ItemsMixin:
                                 item_dict["仕切"] = shikiri
                             if honbu is not None:
                                 item_dict["本部長"] = honbu
+                        enrich_master_fields_from_codes(item_dict, _unit_price_csv)
                         apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                         apply_form04_mishu_decimal(item_dict, form_type)
                         # 최초 분석: LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
@@ -475,6 +477,7 @@ class ItemsMixin:
                             item_dict["仕切"] = shikiri
                         if honbu is not None:
                             item_dict["本部長"] = honbu
+                    enrich_master_fields_from_codes(item_dict, _unit_price_csv)
                     apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                     apply_form04_mishu_decimal(item_dict, form_type)
                     # 최초 분석: LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
@@ -1229,4 +1232,63 @@ class ItemsMixin:
                 return cursor.rowcount > 0
         except Exception as e:
             print(f"⚠️ [update_item_retail_codes] 실패: item_id={item_id}, e={e}")
+            return False
+
+    def update_item_data_patch(self, item_id: int, patch: Dict[str, Any]) -> bool:
+        """
+        item_data에 임의 키 병합 저장 (마스터 명칭 등). 키 순서는 update_item_retail_codes와 동일.
+        """
+        if not patch:
+            return False
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT pdf_filename, item_data FROM items_current WHERE item_id = %s",
+                    (item_id,),
+                )
+                row = cursor.fetchone()
+                table_suffix = "current"
+                if not row:
+                    cursor.execute(
+                        "SELECT pdf_filename, item_data FROM items_archive WHERE item_id = %s",
+                        (item_id,),
+                    )
+                    row = cursor.fetchone()
+                    table_suffix = "archive"
+                if not row:
+                    return False
+                pdf_filename, item_data_raw = row[0], row[1]
+                if isinstance(item_data_raw, dict):
+                    item_data = dict(item_data_raw)
+                elif isinstance(item_data_raw, str):
+                    try:
+                        item_data = json.loads(item_data_raw)
+                    except (TypeError, ValueError):
+                        item_data = {}
+                else:
+                    item_data = {}
+                doc_table = "documents_current" if table_suffix == "current" else "documents_archive"
+                cursor.execute(
+                    f"SELECT document_metadata FROM {doc_table} WHERE pdf_filename = %s LIMIT 1",
+                    (pdf_filename,),
+                )
+                doc_row = cursor.fetchone()
+                doc_meta = (doc_row[0] or {}) if doc_row and doc_row[0] else {}
+                item_data_keys = doc_meta.get("item_data_keys") if isinstance(doc_meta, dict) else None
+                if not item_data_keys or not isinstance(item_data_keys, list):
+                    item_data_keys = list(item_data.keys())
+                item_data.update(patch)
+                ordered = {k: item_data[k] for k in item_data_keys if k in item_data}
+                ordered.update({k: item_data[k] for k in item_data if k not in item_data_keys})
+                full_json = json.dumps(ordered, ensure_ascii=False)
+                items_table = f"items_{table_suffix}"
+                cursor.execute(
+                    f"UPDATE {items_table} SET item_data = %s::json WHERE item_id = %s",
+                    (full_json, item_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"⚠️ [update_item_data_patch] 실패: item_id={item_id}, e={e}")
             return False

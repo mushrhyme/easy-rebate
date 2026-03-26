@@ -77,7 +77,13 @@ interface UnitPriceMatchModalProps {
   row: GridRow | null
   /** 文書様式（01=様式01・得意先コード照合あり） */
   formType?: string | null
-  onSelectUnitPrice: (match: { 제품코드?: string | number; 시키리?: number; 본부장?: number }) => void
+  onSelectUnitPrice: (match: {
+    제품코드?: string | number
+    /** undefined = 変更なし / null = クリア */
+    시키리?: number | null
+    본부장?: number | null
+    マスタ商品名?: string | null
+  }) => void | Promise<void>
   onSelectRetail: (match: RetailSelectPayload) => void | Promise<void>
   /** 代表スーパー確定保存中 */
   retailSaving?: boolean
@@ -175,6 +181,8 @@ export function UnitPriceMatchModal({
   const [unitPriceAutoFill, setUnitPriceAutoFill] = useState<{ 仕切: number | null; 本部長: number | null }>({ 仕切: null, 本部長: null })
   /** unit_price 自動取得中 */
   const [unitPriceAutoLoading, setUnitPriceAutoLoading] = useState(false)
+  /** 確定時 unit_price 再取得中（検索直後の確定でも単価が空にならないようにする） */
+  const [unitConfirmLoading, setUnitConfirmLoading] = useState(false)
   const [sapProductQuery, setSapProductQuery] = useState('')
   const [sapProductMatches, setSapProductMatches] = useState<Array<{ 제품코드: string; 제품명: string }>>([])
   const [sapProductLoading, setSapProductLoading] = useState(false)
@@ -229,6 +237,7 @@ export function UnitPriceMatchModal({
       setUnitFinalForm(EMPTY_UNIT_FINAL_FORM)
       setUnitPriceAutoFill({ 仕切: null, 本部長: null })
       setUnitPriceAutoLoading(false)
+      setUnitConfirmLoading(false)
     } else if (row) {
       const dc = row['受注先コード'] != null ? String(row['受注先コード']).trim() : ''
       const rc = row['小売先コード'] != null ? String(row['小売先コード']).trim() : ''
@@ -529,16 +538,49 @@ export function UnitPriceMatchModal({
     setUnitPriceAutoFill({ 仕切: null, 本部長: null })
   }
 
-  /** 単価確定でグリッド反映しモーダルを閉じる */
-  const handleConfirmUnitPrice = () => {
-    const code = unitFinalForm.商品コード.trim()
-    if (!code) return
-    onSelectUnitPrice({
-      제품코드: code,
-      시키리: unitPriceAutoFill.仕切 ?? undefined,
-      본부장: unitPriceAutoFill.本部長 ?? undefined,
-    })
-    onClose()
+  /** 単価確定: 必ず unit_price の API でコード照合してから保存（自動入力のレースを避ける） */
+  const handleConfirmUnitPrice = async () => {
+    const raw = unitFinalForm.商品コード.trim()
+    if (!raw || unitConfirmLoading) return
+    if (!isProductCodeLike(raw)) {
+      window.alert('商品コードは数字のみ入力してください。')
+      return
+    }
+    const code = toHankakuNum(raw)
+    setUnitConfirmLoading(true)
+    try {
+      let 시키리: number | null | undefined = undefined
+      let 본부장: number | null | undefined = undefined
+      let masterProductName: string | undefined
+      try {
+        const res = await searchApi.getUnitPriceByProductCode(code)
+        if (res.row) {
+          시키리 = res.row.仕切
+          본부장 = res.row.本部長
+          const mn = res.row.マスタ商品名
+          if (mn != null && String(mn).trim() !== '') {
+            masterProductName = String(mn).trim()
+          }
+        } else {
+          시키리 = unitPriceAutoFill.仕切 ?? undefined
+          본부장 = unitPriceAutoFill.本部長 ?? undefined
+        }
+      } catch {
+        시키리 = unitPriceAutoFill.仕切 ?? undefined
+        본부장 = unitPriceAutoFill.本部長 ?? undefined
+      }
+      await Promise.resolve(
+        onSelectUnitPrice({
+          제품코드: code,
+          시키리,
+          본부장,
+          マスタ商品名: masterProductName,
+        })
+      )
+      onClose()
+    } finally {
+      setUnitConfirmLoading(false)
+    }
   }
 
   /** sap 検索から選択: 商品コード反映し一覧を閉じる */
@@ -944,10 +986,12 @@ export function UnitPriceMatchModal({
                   <button
                     type="button"
                     className="retail-confirm-btn retail-map-confirm-btn"
-                    disabled={!isProductCodeLike(unitFinalForm.商品コード.trim()) || unitPriceAutoLoading}
-                    onClick={handleConfirmUnitPrice}
+                    disabled={
+                      !isProductCodeLike(unitFinalForm.商品コード.trim()) || unitConfirmLoading
+                    }
+                    onClick={() => void handleConfirmUnitPrice()}
                   >
-                    確定
+                    {unitConfirmLoading ? '保存中…' : '確定'}
                   </button>
                 </div>
               </section>

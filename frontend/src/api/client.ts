@@ -882,7 +882,12 @@ export const searchApi = {
   getUnitPriceByProductCode: async (
     productCode: string
   ): Promise<{
-    row: { 商品コード: string; 仕切: number | null; 本部長: number | null } | null
+    row: {
+      商品コード: string
+      仕切: number | null
+      本部長: number | null
+      マスタ商品名?: string | null
+    } | null
   }> => {
     const response = await client.get('/api/search/unit-price-by-product-code', {
       params: { product_code: productCode },

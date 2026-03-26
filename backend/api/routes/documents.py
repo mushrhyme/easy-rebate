@@ -22,6 +22,7 @@ from database.registry import get_db
 from database.table_selector import get_table_name, get_table_suffix
 from modules.core.processor import PdfProcessor
 from modules.utils.config import rag_config, get_project_root
+from modules.utils.master_display_enrich import enrich_master_fields_from_codes
 from modules.utils.retail_resolve import resolve_retail_dist
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
@@ -1914,6 +1915,7 @@ async def save_document_answer_json(
                             item_dict["仕切"] = shikiri
                         if honbu is not None:
                             item_dict["本部長"] = honbu
+                    enrich_master_fields_from_codes(item_dict, _unit_price_csv)
                     upload_channel = doc.get("upload_channel")
                     apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
                     apply_form04_mishu_decimal(item_dict, form_type)
@@ -2369,6 +2371,7 @@ def _create_items_from_answer_sync(
                     item_dict["仕切"] = shikiri
                 if honbu is not None:
                     item_dict["本部長"] = honbu
+            enrich_master_fields_from_codes(item_dict, _unit_price_csv)
             apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
             apply_form04_mishu_decimal(item_dict, form_type)
             # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장
@@ -2463,6 +2466,7 @@ def _create_items_from_template_sync(database, pdf_filename: str, page_number: i
                     item_dict["仕切"] = shikiri
                 if honbu is not None:
                     item_dict["本部長"] = honbu
+            enrich_master_fields_from_codes(item_dict, _unit_price_csv)
             apply_finet01_cs_irisu(item_dict, form_type, upload_channel)
             apply_form04_mishu_decimal(item_dict, form_type)
             # LLM이 タイプ를 null로 뱉어도 무조건 条件으로 DB 저장

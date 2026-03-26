@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from database.registry import get_db
 from database.db_manager import _similarity_difflib
+from modules.utils.master_display_enrich import enrich_master_fields_from_codes
 from modules.utils.retail_resolve import resolve_retail_dist
 from modules.utils.form2_rebate_utils import apply_form2_final_amount_row
 from backend.api.routes.websocket import manager
@@ -749,6 +750,35 @@ async def get_page_items(
                     )
                 except Exception:
                     pass
+            if frozen_retail_code:
+                item_data["小売先コード"] = frozen_retail_code
+            if frozen_dist_code:
+                item_data["受注先コード"] = frozen_dist_code
+
+            # 마스터 명칭(受注先·小売先·マスタ商品名): 빈 칸일 때만 채움 + 변경 시 DB 반영
+            _before_master = (
+                str(item_data.get("受注先") or "").strip(),
+                str(item_data.get("小売先") or "").strip(),
+                str(item_data.get("マスタ商品名") or "").strip(),
+            )
+            enrich_master_fields_from_codes(item_data, _UNIT_PRICE_CSV)
+            _after_master = (
+                str(item_data.get("受注先") or "").strip(),
+                str(item_data.get("小売先") or "").strip(),
+                str(item_data.get("マスタ商品名") or "").strip(),
+            )
+            if _after_master != _before_master:
+                try:
+                    db.update_item_data_patch(
+                        item["item_id"],
+                        {
+                            "受注先": item_data.get("受注先"),
+                            "小売先": item_data.get("小売先"),
+                            "マスタ商品名": item_data.get("マスタ商品名"),
+                        },
+                    )
+                except Exception:
+                    pass
 
             # 양식 02: DB에 最終金額 없어도 조회 시 합산값 채움（그리드 · SAP）
             apply_form2_final_amount_row(item_data, form_type)
@@ -824,6 +854,7 @@ async def create_item(
             payload_item_data["小売先コード"] = retail_code
         if dist_code:
             payload_item_data["受注先コード"] = dist_code
+        enrich_master_fields_from_codes(payload_item_data, _UNIT_PRICE_CSV)
 
         apply_form2_final_amount_row(payload_item_data, doc.get("form_type"))
 
@@ -1023,6 +1054,7 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
                 payload_item_data["小売先コード"] = retail_code
             if not stored_dc and dist_code:
                 payload_item_data["受注先コード"] = dist_code
+        enrich_master_fields_from_codes(payload_item_data, _UNIT_PRICE_CSV)
         separated = db._separate_item_fields(payload_item_data, form_type=form_type)
         set_clauses, params = [], []
         if update_data.review_status:

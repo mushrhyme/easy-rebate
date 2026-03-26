@@ -2,45 +2,23 @@
 판매처·소매처 매핑 해소: 1) RAG(벡터 DB) 정답지 유사도, 2) 得意先コード→domae_retail_1, 3) retail_user 유사도, 4) domae_retail_2 유사도.
 거래처명 있으면 1(RAG) 시도 → 실패 시 2→3→4. 得意先コード 있으면 2 시도 후 실패 시 3·4 중 유사도 높은 쪽.
 """
-from pathlib import Path
 from typing import Optional, Tuple
+
 import pandas as pd
 
 from modules.utils.config import get_project_root
-from database.db_manager import _similarity_difflib
+from modules.utils.master_display_enrich import first_sap_dist_row as _first_sap_dist_row
 
 _PROJECT_ROOT = get_project_root()
 _RETAIL_USER_CSV = _PROJECT_ROOT / "database" / "csv" / "retail_user.csv"
-_DIST_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "dist_retail.csv"
-_SAP_RETAIL_CSV = _PROJECT_ROOT / "database" / "csv" / "sap_retail.csv"
 _DOMAE_RETAIL_1_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_1.csv"
 _DOMAE_RETAIL_2_CSV = _PROJECT_ROOT / "database" / "csv" / "domae_retail_2.csv"
 
 
 def _dist_for_retail(retail_code: str) -> Tuple[str, str]:
     """소매처코드 → (판매처코드, 판매처명). sap_retail 우선."""
-    code = (retail_code or "").strip()
-    if not code:
-        return ("", "")
-    if _SAP_RETAIL_CSV.exists():
-        try:
-            df = pd.read_csv(_SAP_RETAIL_CSV, dtype=str)
-            for _, r in df.iterrows():
-                retail = (r.get("소매처코드") or "").strip()
-                if retail == code:
-                    return ((r.get("판매처코드") or "").strip(), (r.get("판매처명") or "").strip())
-        except Exception:
-            pass
-    if _DIST_RETAIL_CSV.exists():
-        try:
-            df = pd.read_csv(_DIST_RETAIL_CSV, dtype=str)
-            for _, r in df.iterrows():
-                retail = (r.get("소매처코드") or "").strip()
-                if retail == code:
-                    return ((r.get("판매처코드") or "").strip(), (r.get("판매처명") or "").strip())
-        except Exception:
-            pass
-    return ("", "")
+    _rn, dist_c, dist_n = _first_sap_dist_row(retail_code)
+    return (dist_c, dist_n)
 
 
 def _match_by_customer_code(customer_code: str) -> Optional[Tuple[str, str]]:
@@ -65,6 +43,8 @@ def _match_by_customer_code(customer_code: str) -> Optional[Tuple[str, str]]:
 
 def _best_by_retail_user(customer_name: str) -> Tuple[Optional[str], Optional[str], float]:
     """3) retail_user 소매처명 유사도 1위. (소매처코드, 판매처코드, score)."""
+    from database.db_manager import _similarity_difflib  # 순환 import 방지(지연)
+
     name = (customer_name or "").strip()
     if not name or not _RETAIL_USER_CSV.exists():
         return (None, None, 0.0)
@@ -91,6 +71,8 @@ def _best_by_retail_user(customer_name: str) -> Tuple[Optional[str], Optional[st
 
 def _best_by_domae_retail_2(customer_name: str) -> Tuple[Optional[str], Optional[str], float]:
     """4) domae_retail_2 도매소매처명/소매처명 유사도 1위. (소매처코드, 판매처코드, score)."""
+    from database.db_manager import _similarity_difflib  # 순환 import 방지(지연)
+
     name = (customer_name or "").strip()
     if not name or not _DOMAE_RETAIL_2_CSV.exists():
         return (None, None, 0.0)
