@@ -189,12 +189,16 @@ async def get_sap_row_by_vendor_code(
 
 @router.get("/retail/candidates-by-retail-master")
 async def get_retail_candidates_by_retail_master(
-    customer_name: str = Query(..., description="得意先名（retail_master 소매처명과 유사도）"),
+    customer_name: str = Query(
+        ...,
+        description="検索語（소매처명 유사도·소매처코드 일치·부분일치）",
+    ),
     top_k: int = Query(10, ge=1, le=20, description="반환 건수"),
     min_similarity: float = Query(0.0, ge=0.0, le=1.0, description="최소 유사도"),
 ):
     """
-    retail_master.csv: 소매처명 vs 得意先명 유사도, 소매처코드당 최고 점수 1건만 유지 후 상위 top_k.
+    retail_master.csv: 소매처명 유사도와 소매처코드 매칭(완전·접두·부분) 중 높은 점수,
+    소매처코드당 최고 점수 1건만 유지 후 상위 top_k.
     """
     customer_name = (customer_name or "").strip()
     if not customer_name:
@@ -205,12 +209,21 @@ async def get_retail_candidates_by_retail_master(
         df = pd.read_csv(_RETAIL_MASTER_CSV, dtype=str, encoding="utf-8-sig")
         df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
         best_by_code: dict = {}
+        q = customer_name
         for _, r in df.iterrows():
             name = (r.get("소매처명") or "").strip()
             code = (r.get("소매처코드") or "").strip()
             if not name or not code:
                 continue
-            score = _similarity_difflib(customer_name, name)
+            name_sim = _similarity_difflib(q, name)  # float; 예: 0.72
+            code_score = 0.0
+            if q == code:
+                code_score = max(code_score, 1.0)  # 완전 일치
+            elif code.startswith(q):
+                code_score = max(code_score, 0.95)  # 접두(예: "601" → 6019570)
+            elif q in code:
+                code_score = max(code_score, 0.9)  # 부분(예: "9570" in 코드)
+            score = max(name_sim, code_score)  # 이름·코드 중 유리한 쪽
             if score < min_similarity:
                 continue
             prev = best_by_code.get(code)

@@ -25,6 +25,7 @@ from modules.utils.config import rag_config, get_project_root
 from modules.utils.retail_resolve import resolve_retail_dist
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
+from modules.utils.openai_chat_completion import chat_completions_create_safe
 from backend.unit_price_lookup import resolve_product_and_prices
 from backend.core.session import SessionManager
 
@@ -2219,7 +2220,9 @@ async def generate_answer_with_gpt(
 
         def _gpt_create():
             return call_with_retry(
-                lambda: client.chat.completions.create(
+                lambda: chat_completions_create_safe(
+                    client,
+                    context=f"generate_answer_with_gpt {pdf_filename} p{page_number}",
                     model=model,
                     messages=[
                         {
@@ -2542,7 +2545,9 @@ Use the same key names as the template. Fill values from the document for each r
 
         def _gpt_create():
             return call_with_retry(
-                lambda: client.chat.completions.create(
+                lambda: chat_completions_create_safe(
+                    client,
+                    context=f"generate_items_from_template {pdf_filename} p{page_number}",
                     model=gpt_model,
                     messages=[
                         {

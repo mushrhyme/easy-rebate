@@ -1053,7 +1053,7 @@ export function UnitPriceMatchModal({
                     className="retail-final-input"
                     value={retailMasterSearchQuery}
                     onChange={(e) => setRetailMasterSearchQuery(e.target.value)}
-                    placeholder="小売先名で検索 → 結果から適用"
+                    placeholder="小売先名・コードで検索 → 結果から適用"
                   />
                 </label>
                 {retailMasterSearchLoading && <p className="unit-price-match-modal-loading">検索中…</p>}

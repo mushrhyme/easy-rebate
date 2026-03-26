@@ -18,6 +18,7 @@ import numpy as np
 from modules.core.rag_manager import get_rag_manager
 from modules.utils.config import get_project_root, load_rag_prompt, get_rag_prompt_path
 from modules.utils.llm_retry import call_with_retry
+from modules.utils.openai_chat_completion import chat_completions_create_safe
 
 
 def _normalize_amount_colon(value: Any) -> Any:
@@ -597,7 +598,11 @@ WORD_INDEX RULES (좌표 부여용, 반드시 준수):
         else:
             api_params["response_format"] = {"type": "json_object"}
 
-        response = call_with_retry(lambda: client.chat.completions.create(**api_params))
+        _ctx = f"extract_json_with_rag page={page_num}"  # 로그용 컨텍스트 문자열
+        # api_params: model, messages, timeout, max_completion_tokens, temperature, response_format 등
+        response = call_with_retry(
+            lambda: chat_completions_create_safe(client, context=_ctx, **api_params)
+        )
         llm_end_time = time.time()
         llm_duration = llm_end_time - llm_start_time
         result_text = response.choices[0].message.content or ""

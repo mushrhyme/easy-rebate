@@ -990,7 +990,7 @@ export const searchApi = {
   },
 
   /**
-   * retail_master.csv — 得意先名 vs 소매처명 유사도 상위 (소매처코드당 1건)
+   * retail_master.csv — 소매처명 유사도 + 소매처코드(완전·접두·부분) 상위 (코드당 1건)
    */
   getRetailCandidatesByRetailMaster: async (
     customerName: string,
