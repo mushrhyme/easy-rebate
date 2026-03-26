@@ -190,10 +190,11 @@ class PdfProcessor:
                 # 분석 직후·DB 저장 전: 1(RAG)→2→3→4 매핑 선적용 (受注先コード/小売先コード/商品コード를 page_results에 넣어서 저장)
                 try:
                     from modules.utils.master_display_enrich import enrich_master_fields_from_codes
-                    from modules.utils.retail_resolve import resolve_retail_dist
+                    from modules.utils.retail_resolve import resolve_retail_dist, extract_cover_issuer_office_name
                     from modules.utils.config import get_project_root
                     from backend.unit_price_lookup import resolve_product_and_prices
                     _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+                    issuer_office_name = extract_cover_issuer_office_name(page_results)  # str | None (예: "岡山支店")
                     for page_json in page_results:
                         if not isinstance(page_json, dict):
                             continue
@@ -207,7 +208,12 @@ class PdfProcessor:
                                 or item_dict.get("取引先")
                             )
                             customer_code = item_dict.get("得意先コード")
-                            retail_code, dist_code = resolve_retail_dist(customer_name, customer_code)
+                            retail_code, dist_code = resolve_retail_dist(
+                                customer_name,
+                                customer_code,
+                                form_type=form_type,
+                                issuer_office_name=issuer_office_name,
+                            )
                             if retail_code:
                                 item_dict["小売先コード"] = retail_code
                             if dist_code:

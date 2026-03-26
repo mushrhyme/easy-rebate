@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from database.registry import get_db
 from database.db_manager import _similarity_difflib
 from modules.utils.master_display_enrich import enrich_master_fields_from_codes
-from modules.utils.retail_resolve import resolve_retail_dist
+from modules.utils.retail_resolve import resolve_retail_dist, extract_office_name_from_issuer
 from modules.utils.form2_rebate_utils import apply_form2_final_amount_row
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
@@ -22,6 +22,48 @@ router = APIRouter()
 # 프로젝트 루트 (items.py: backend/api/routes/items.py -> parent*4 = project_root)
 _ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
+
+
+def _get_cover_issuer_office_name(db, pdf_filename: str) -> Optional[str]:
+    """문서 1페이지(cover)의 issuer.office_name 조회."""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT page_meta
+                FROM page_data_current
+                WHERE pdf_filename = %s AND page_number = 1
+                LIMIT 1
+                """,
+                (pdf_filename,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute(
+                    """
+                    SELECT page_meta
+                    FROM page_data_archive
+                    WHERE pdf_filename = %s AND page_number = 1
+                    LIMIT 1
+                    """,
+                    (pdf_filename,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                return None
+            page_meta = row[0]
+            if isinstance(page_meta, str):
+                import json
+                try:
+                    page_meta = json.loads(page_meta)
+                except Exception:
+                    page_meta = {}
+            if isinstance(page_meta, dict):
+                return extract_office_name_from_issuer(page_meta.get("issuer"))
+    except Exception:
+        return None
+    return None
 
 
 def _resolved_frozen_codes(item_data: Dict[str, Any], customer_fallback: Optional[str] = None) -> tuple:
@@ -846,9 +888,12 @@ async def create_item(
 
         # 1(RAG)→2→3→4 매핑 확정값을 item_data에 넣어 DB 저장
         payload_item_data = dict(item_data.item_data or {})
+        issuer_office_name = await db.run_sync(_get_cover_issuer_office_name, db, item_data.pdf_filename)
         retail_code, dist_code = resolve_retail_dist(
             payload_item_data.get("得意先"),
             payload_item_data.get("得意先コード"),
+            form_type=doc.get("form_type"),
+            issuer_office_name=issuer_office_name,
         )
         if retail_code:
             payload_item_data["小売先コード"] = retail_code
@@ -1047,8 +1092,12 @@ def _update_item_sync(db, item_id, update_data, current_user_id, user_info):
         stored_rc = (payload_item_data.get("小売先コード") or payload_item_data.get("小売先CD") or "").strip()
         stored_dc = (payload_item_data.get("受注先コード") or payload_item_data.get("受注先CD") or "").strip()
         if not stored_rc or not stored_dc:
+            issuer_office_name = _get_cover_issuer_office_name(db, pdf_filename)
             retail_code, dist_code = resolve_retail_dist(
-                payload_item_data.get("得意先"), payload_item_data.get("得意先コード"),
+                payload_item_data.get("得意先"),
+                payload_item_data.get("得意先コード"),
+                form_type=form_type,
+                issuer_office_name=issuer_office_name,
             )
             if not stored_rc and retail_code:
                 payload_item_data["小売先コード"] = retail_code

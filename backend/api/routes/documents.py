@@ -23,7 +23,7 @@ from database.table_selector import get_table_name, get_table_suffix
 from modules.core.processor import PdfProcessor
 from modules.utils.config import rag_config, get_project_root
 from modules.utils.master_display_enrich import enrich_master_fields_from_codes
-from modules.utils.retail_resolve import resolve_retail_dist
+from modules.utils.retail_resolve import resolve_retail_dist, extract_office_name_from_issuer
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
 from modules.utils.openai_chat_completion import chat_completions_create_safe
@@ -1571,6 +1571,45 @@ def _to_item_data_only(it: dict) -> dict:
     return {k: v for k, v in it.items() if k not in _ITEM_SYSTEM_KEYS}
 
 
+def _get_cover_issuer_office_name_sync(database, pdf_filename: str) -> Optional[str]:
+    """page 1/cover의 issuer.office_name 조회 (current 우선)."""
+    try:
+        with database.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT page_meta
+                FROM page_data_current
+                WHERE pdf_filename = %s AND page_number = 1
+                LIMIT 1
+                """,
+                (pdf_filename,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute(
+                    """
+                    SELECT page_meta
+                    FROM page_data_archive
+                    WHERE pdf_filename = %s AND page_number = 1
+                    LIMIT 1
+                    """,
+                    (pdf_filename,),
+                )
+                row = cursor.fetchone()
+            page_meta = row[0] if row else None
+            if isinstance(page_meta, str):
+                try:
+                    page_meta = json.loads(page_meta)
+                except Exception:
+                    page_meta = {}
+            if isinstance(page_meta, dict):
+                return extract_office_name_from_issuer(page_meta.get("issuer"))
+    except Exception:
+        return None
+    return None
+
+
 def _get_answer_pages_from_db(pdf_filename: str):
     """DB에서 문서의 페이지별 정답지(items는 item_data만) 반환. 문서 없으면 None."""
     db = get_db()
@@ -1858,6 +1897,19 @@ async def save_document_answer_json(
         raise HTTPException(status_code=404, detail="Document not found")
     form_type = doc.get("form_type")
     pages = body.pages if isinstance(body.pages, list) else []
+    issuer_office_name = None
+    for _p in pages:
+        if not isinstance(_p, dict):
+            continue
+        if int(_p.get("page_number") or 0) != 1 and (_p.get("page_role") or "").strip() != "cover":
+            continue
+        issuer_office_name = extract_office_name_from_issuer(_p.get("issuer"))
+        if not issuer_office_name and isinstance(_p.get("page_meta"), dict):
+            issuer_office_name = extract_office_name_from_issuer(_p.get("page_meta", {}).get("issuer"))
+        if issuer_office_name:
+            break
+    if not issuer_office_name:
+        issuer_office_name = _get_cover_issuer_office_name_sync(db, pdf_filename)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -1900,7 +1952,10 @@ async def save_document_answer_json(
                     if not isinstance(item_dict, dict):
                         continue
                     retail_code, dist_code = resolve_retail_dist(
-                        item_dict.get("得意先"), item_dict.get("得意先コード")
+                        item_dict.get("得意先"),
+                        item_dict.get("得意先コード"),
+                        form_type=form_type,
+                        issuer_office_name=issuer_office_name,
                     )
                     if retail_code:
                         item_dict["小売先コード"] = retail_code
@@ -2352,11 +2407,15 @@ def _create_items_from_answer_sync(
         form_type = row[0] if row and row[0] else None
         upload_channel = row[1] if row and len(row) > 1 else None
         _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+        issuer_office_name = _get_cover_issuer_office_name_sync(database, pdf_filename)
         for item_order, item_dict in enumerate(items, 1):
             if not isinstance(item_dict, dict):
                 continue
             retail_code, dist_code = resolve_retail_dist(
-                item_dict.get("得意先"), item_dict.get("得意先コード")
+                item_dict.get("得意先"),
+                item_dict.get("得意先コード"),
+                form_type=form_type,
+                issuer_office_name=issuer_office_name,
             )
             if retail_code:
                 item_dict["小売先コード"] = retail_code
@@ -2447,11 +2506,15 @@ def _create_items_from_template_sync(database, pdf_filename: str, page_number: i
         form_type = row[0] if row and row[0] else None
         upload_channel = row[1] if row and len(row) > 1 else None
         _unit_price_csv = get_project_root() / "database" / "csv" / "unit_price.csv"
+        issuer_office_name = _get_cover_issuer_office_name_sync(database, pdf_filename)
         for item_order, item_dict in enumerate(items, 1):
             if not isinstance(item_dict, dict):
                 continue
             retail_code, dist_code = resolve_retail_dist(
-                item_dict.get("得意先"), item_dict.get("得意先コード")
+                item_dict.get("得意先"),
+                item_dict.get("得意先コード"),
+                form_type=form_type,
+                issuer_office_name=issuer_office_name,
             )
             if retail_code:
                 item_dict["小売先コード"] = retail_code
@@ -2772,6 +2835,38 @@ async def purge_old_documents(
         result = await db.run_sync(purge_old_documents_impl, db, years)
         activity_log(current_user.get("username"), f"구 문서 정리: {result.get('deleted_count', 0)}건")
         return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/backfill-retail-mapping", response_model=dict)
+async def backfill_retail_mapping(
+    pdf_filename: Optional[str] = None,
+    include_archive: bool = False,
+    current_user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """
+    기존 item_data의 소매처/판매처 코드를 최신 규칙으로 재계산(백필).
+    - pdf_filename 미지정: 현재 테이블 전체 대상
+    - include_archive=True: archive 테이블까지 포함
+    """
+    try:
+        result = await db.run_sync(
+            db.backfill_retail_mapping_with_cover_issuer,
+            pdf_filename,
+            include_archive,
+        )
+        if isinstance(result, dict) and result.get("error"):
+            raise HTTPException(status_code=500, detail=result.get("error"))
+        activity_log(current_user.get("username"), f"판매처 매핑 백필: {result.get('items_updated', 0)}건 갱신")
+        return {
+            "success": True,
+            "message": "판매처/소매처 코드 백필이 완료되었습니다.",
+            "result": result,
+        }
     except HTTPException:
         raise
     except Exception as e:

@@ -397,16 +397,50 @@ def extract_pages_with_rag(
         max_workers = min(rag_llm_workers, len(valid_ocr_indices))
         parallel_start_time = time.time()
         print(f"🚀 2단계: RAG+LLM 병렬 처리 시작 (최대 {max_workers}개 스레드, {len(valid_ocr_indices)}개 페이지)")
-        
+        # cover(1페이지) 선행 처리: 진행 중 페이지 저장(on_page_complete)도 cover 기준 정보를 먼저 갖도록 보장
+        cover_tuple = None
+        for t in valid_ocr_indices:
+            idx, _txt, _words = t
+            page_num = actual_page_numbers[idx] if idx < len(actual_page_numbers) else idx + 1
+            if page_num == 1:
+                cover_tuple = t
+                break
+
+        completed_count = 0
+        remaining_indices = list(valid_ocr_indices)
+        if cover_tuple is not None:
+            idx, ocr_text, ocr_words_data = cover_tuple
+            idx, page_json, error = process_rag_llm(idx, ocr_text, ocr_words_data)
+            page_results[idx] = page_json
+            completed_count = 1
+            remaining_indices = [t for t in valid_ocr_indices if t[0] != idx]
+            if on_page_complete:
+                page_num = actual_page_numbers[idx] if idx < len(actual_page_numbers) else idx + 1
+                pj = dict(page_json)
+                pj["page_number"] = page_num
+                if idx < len(ocr_texts) and ocr_texts[idx] and str(ocr_texts[idx]).strip():
+                    pj["ocr_text"] = (ocr_texts[idx] or "").strip()
+                try:
+                    on_page_complete(page_num, pj)
+                except Exception as cb_err:
+                    print(f"⚠️ on_page_complete 콜백 실패 (페이지 {page_num}): {cb_err}")
+            elapsed = time.time() - parallel_start_time
+            if error:
+                print(f"❌ 페이지 {idx+1}/{len(images)} RAG+LLM 처리 실패: {error}")
+            else:
+                items_count = len(page_json.get("items", []))
+                print(f"✅ 페이지 {idx+1}/{len(images)} 완료 ({items_count}개 items) - 전체 진행: {completed_count}/{len(valid_ocr_indices)}개, 경과 시간: {elapsed:.1f}초")
+            if progress_callback:
+                progress_callback(completed_count, len(valid_ocr_indices), f"진행 중... ({completed_count}/{len(valid_ocr_indices)}개 페이지 완료, {elapsed:.1f}초 경과)")
+
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 유효한 OCR 텍스트에 대해 Future 제출
+            # 유효한 OCR 텍스트에 대해 Future 제출 (cover는 선행 처리 후 제외)
             future_to_idx = {
                 executor.submit(process_rag_llm, idx, ocr_text, ocr_words_data): idx
-                for idx, ocr_text, ocr_words_data in valid_ocr_indices
+                for idx, ocr_text, ocr_words_data in remaining_indices
             }
-            
+
             # 완료된 작업부터 처리
-            completed_count = 0
             page_times = {}  # 각 페이지별 시작 시간 추적
             
             for future in as_completed(future_to_idx):

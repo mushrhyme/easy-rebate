@@ -11,7 +11,11 @@ from pathlib import Path
 from database.table_selector import get_table_name, get_table_suffix
 from modules.utils.config import get_project_root
 from modules.utils.master_display_enrich import enrich_master_fields_from_codes
-from modules.utils.retail_resolve import resolve_retail_dist
+from modules.utils.retail_resolve import (
+    resolve_retail_dist,
+    extract_cover_issuer_office_name,
+    extract_office_name_from_issuer,
+)
 from modules.utils.finet01_cs_utils import apply_finet01_cs_irisu
 from modules.utils.form04_mishu_utils import apply_form04_mishu_decimal
 from backend.unit_price_lookup import resolve_product_and_prices
@@ -19,6 +23,40 @@ from backend.unit_price_lookup import resolve_product_and_prices
 
 class ItemsMixin:
     """항목 데이터 저장/조회 Mixin"""
+
+    def _try_parse_json_string(self, value: Any) -> Any:
+        """JSON 문자열로 보이는 값만 안전하게 파싱."""
+        if not isinstance(value, str):
+            return value
+        s = value.strip()
+        if not s:
+            return value
+        if not ((s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]"))):
+            return value
+        try:
+            return json.loads(s)  # 예: '{"company_name":"A"}' -> {"company_name":"A"}
+        except Exception:
+            return value
+
+    def _normalize_nested_json_strings(self, value: Any) -> Any:
+        """
+        dict/list 내부에 문자열로 들어온 JSON을 재귀적으로 객체/배열로 복원.
+        - 입력 예: {"recipient":"{\"company_name\":\"A\"}"}
+        - 출력 예: {"recipient":{"company_name":"A"}}
+        """
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            for k, v in value.items():
+                parsed = self._try_parse_json_string(v)  # parsed: Any (dict/list/원본 문자열)
+                out[k] = self._normalize_nested_json_strings(parsed)
+            return out
+        if isinstance(value, list):
+            out_list: List[Any] = []
+            for item in value:
+                parsed = self._try_parse_json_string(item)  # parsed: Any
+                out_list.append(self._normalize_nested_json_strings(parsed))
+            return out_list
+        return value
     
     def _separate_item_fields(self, item_dict: dict, form_type: Optional[str] = None) -> dict:
         """
@@ -117,6 +155,7 @@ class ItemsMixin:
                 document_metadata["item_data_keys"] = item_data_keys
         
         try:
+            issuer_office_name = extract_cover_issuer_office_name(page_results)  # str | None (예: "岡山支店")
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 doc_meta_json = json.dumps(document_metadata, ensure_ascii=False) if document_metadata else None
@@ -191,6 +230,7 @@ class ItemsMixin:
                     for key, value in page_json.items():
                         if key not in ["items", "page_role", "page_number", "_rag_reference", "ocr_text"]:
                             page_meta[key] = value
+                    page_meta = self._normalize_nested_json_strings(page_meta)  # dict; recipient/issuer 문자열 JSON 복원
                     
                     page_role = page_json.get("page_role")
                     page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
@@ -234,6 +274,8 @@ class ItemsMixin:
                         retail_code, dist_code = resolve_retail_dist(
                             customer_name,
                             item_dict.get("得意先コード"),
+                            form_type=form_type,
+                            issuer_office_name=issuer_office_name,
                         )
                         if retail_code:
                             item_dict["小売先コード"] = retail_code
@@ -393,6 +435,7 @@ class ItemsMixin:
         if not items and page_role == "detail":
             page_role = "cover" if page_number == 1 else "summary"
         page_meta = {k: v for k, v in page_json.items() if k not in ("items", "page_role", "page_number", "_rag_reference", "ocr_text", "analyzed_vector_version", "last_analyzed_at")}
+        page_meta = self._normalize_nested_json_strings(page_meta)  # dict; 기존 이중 직렬화 입력 방어
         page_meta_json = json.dumps(page_meta, ensure_ascii=False) if page_meta else None
         ocr_text_val = page_json.get("ocr_text") or (page_meta.get("_ocr_text") if isinstance(page_meta.get("_ocr_text"), str) else None)
         if ocr_text_val and not str(ocr_text_val).strip():
@@ -401,6 +444,35 @@ class ItemsMixin:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                # 진행 중 페이지 저장과 최종 저장(save_document_data) 규칙 일치:
+                # page1(cover)의 issuer.office_name을 우선 사용, 없으면 DB cover 메타에서 조회.
+                issuer_office_name = None
+                try:
+                    issuer_office_name = extract_office_name_from_issuer(page_json.get("issuer"))
+                except Exception:
+                    issuer_office_name = None
+                if not issuer_office_name:
+                    try:
+                        cursor.execute(
+                            """
+                            SELECT page_meta
+                            FROM page_data_current
+                            WHERE pdf_filename = %s AND page_number = 1
+                            LIMIT 1
+                            """,
+                            (pdf_filename,),
+                        )
+                        row_cover = cursor.fetchone()
+                        page_meta_cover = row_cover[0] if row_cover else None
+                        if isinstance(page_meta_cover, str):
+                            try:
+                                page_meta_cover = json.loads(page_meta_cover)
+                            except Exception:
+                                page_meta_cover = {}
+                        if isinstance(page_meta_cover, dict):
+                            issuer_office_name = extract_office_name_from_issuer(page_meta_cover.get("issuer"))
+                    except Exception:
+                        issuer_office_name = None
                 # 재분석 시 기존 검토 상태 보존: DELETE 전에 item_order별 1차/2차 검토 상태 조회
                 # current에 없으면 archive에서 조회 (과거 연월 문서는 archive에 있을 수 있음)
                 review_by_order: Dict[int, Dict[str, Any]] = {}
@@ -462,7 +534,10 @@ class ItemsMixin:
                     if not isinstance(item_dict, dict):
                         continue
                     retail_code, dist_code = resolve_retail_dist(
-                        item_dict.get("得意先"), item_dict.get("得意先コード")
+                        item_dict.get("得意先"),
+                        item_dict.get("得意先コード"),
+                        form_type=form_type,
+                        issuer_office_name=issuer_office_name,
                     )
                     if retail_code:
                         item_dict["小売先コード"] = retail_code
@@ -886,6 +961,7 @@ class ItemsMixin:
                         page_meta = json.loads(str(page_meta_data)) if page_meta_data else {}
                     except Exception:
                         page_meta = {}
+            page_meta = self._normalize_nested_json_strings(page_meta)  # dict; DB에 남아있는 문자열 JSON도 조회 시 복원
             
             # 8. 페이지별 JSON 구조 생성 (page_data + items 병합). Phase 3: 히스토리 표시용. Phase 1: ocr_text는 컬럼 우선, 없으면 page_meta._ocr_text
             ocr_text = (page_row or {}).get('ocr_text') if page_row else None
@@ -1292,3 +1368,123 @@ class ItemsMixin:
         except Exception as e:
             print(f"⚠️ [update_item_data_patch] 실패: item_id={item_id}, e={e}")
             return False
+
+    def backfill_retail_mapping_with_cover_issuer(
+        self,
+        pdf_filename: Optional[str] = None,
+        include_archive: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        기존 데이터 백필:
+        - item_data의 得意先/得意先コード를 기준으로 소매처·판매처 코드를 재매핑
+        - 양식지 01/03 + 다중 후보에서는 cover issuer.office_name 기반 판매처 선택
+        """
+        result = {
+            "documents": 0,
+            "items_scanned": 0,
+            "items_updated": 0,
+            "tables": [],
+        }
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                doc_cache: Dict[tuple, Dict[str, Optional[str]]] = {}
+
+                def _doc_context(table_suffix: str, pdf_fn: str) -> Dict[str, Optional[str]]:
+                    key = (table_suffix, pdf_fn)
+                    if key in doc_cache:
+                        return doc_cache[key]
+                    doc_table = "documents_current" if table_suffix == "current" else "documents_archive"
+                    page_table = "page_data_current" if table_suffix == "current" else "page_data_archive"
+                    form_type = None
+                    issuer_office_name = None
+                    try:
+                        cursor.execute(
+                            f"SELECT form_type FROM {doc_table} WHERE pdf_filename = %s LIMIT 1",
+                            (pdf_fn,),
+                        )
+                        row_doc = cursor.fetchone()
+                        form_type = (row_doc[0] or "").strip() if row_doc and row_doc[0] is not None else None
+                    except Exception:
+                        form_type = None
+                    try:
+                        cursor.execute(
+                            f"SELECT page_meta FROM {page_table} WHERE pdf_filename = %s AND page_number = 1 LIMIT 1",
+                            (pdf_fn,),
+                        )
+                        row_page = cursor.fetchone()
+                        page_meta = row_page[0] if row_page else None
+                        if isinstance(page_meta, str):
+                            try:
+                                page_meta = json.loads(page_meta)
+                            except Exception:
+                                page_meta = {}
+                        if isinstance(page_meta, dict):
+                            issuer_office_name = extract_office_name_from_issuer(page_meta.get("issuer"))
+                    except Exception:
+                        issuer_office_name = None
+                    ctx = {"form_type": form_type, "issuer_office_name": issuer_office_name}
+                    doc_cache[key] = ctx
+                    return ctx
+
+                target_tables = ["items_current"] + (["items_archive"] if include_archive else [])
+                for items_table in target_tables:
+                    table_suffix = "archive" if items_table.endswith("_archive") else "current"
+                    if pdf_filename:
+                        cursor.execute(
+                            f"SELECT item_id, pdf_filename, item_data FROM {items_table} WHERE pdf_filename = %s ORDER BY item_id",
+                            (pdf_filename,),
+                        )
+                    else:
+                        cursor.execute(
+                            f"SELECT item_id, pdf_filename, item_data FROM {items_table} ORDER BY pdf_filename, item_id"
+                        )
+                    rows = cursor.fetchall()
+                    for item_id, pdf_fn, item_data_raw in rows:
+                        result["items_scanned"] += 1
+                        if isinstance(item_data_raw, dict):
+                            item_data = dict(item_data_raw)
+                        elif isinstance(item_data_raw, str):
+                            try:
+                                item_data = json.loads(item_data_raw)
+                            except Exception:
+                                item_data = {}
+                        else:
+                            item_data = {}
+                        if not isinstance(item_data, dict):
+                            item_data = {}
+                        customer_name = (
+                            item_data.get("得意先")
+                            or item_data.get("得意先名")
+                            or item_data.get("得意先様")
+                            or item_data.get("取引先")
+                        )
+                        customer_code = item_data.get("得意先コード")
+                        ctx = _doc_context(table_suffix, pdf_fn)
+                        retail_code, dist_code = resolve_retail_dist(
+                            customer_name,
+                            customer_code,
+                            form_type=ctx.get("form_type"),
+                            issuer_office_name=ctx.get("issuer_office_name"),
+                        )
+                        changed = False
+                        if retail_code and str(item_data.get("小売先コード") or "").strip() != str(retail_code).strip():
+                            item_data["小売先コード"] = str(retail_code).strip()  # str (예: "6003675")
+                            changed = True
+                        if dist_code and str(item_data.get("受注先コード") or "").strip() != str(dist_code).strip():
+                            item_data["受注先コード"] = str(dist_code).strip()  # str (예: "N3000011")
+                            changed = True
+                        if changed:
+                            cursor.execute(
+                                f"UPDATE {items_table} SET item_data = %s::json WHERE item_id = %s",
+                                (json.dumps(item_data, ensure_ascii=False), item_id),
+                            )
+                            result["items_updated"] += 1
+                    result["tables"].append({"table": items_table, "rows": len(rows)})
+
+                result["documents"] = len(doc_cache)
+                conn.commit()
+                return result
+        except Exception as e:
+            return {**result, "error": str(e)}

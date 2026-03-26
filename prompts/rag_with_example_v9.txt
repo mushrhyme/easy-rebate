@@ -1,0 +1,274 @@
+REFERENCE_OCR (OCR example for structural reference):
+{example_ocr}
+
+REFERENCE_JSON (correct answer structure example):
+{example_answer_str}
+
+TARGET_OCR (actual OCR text to process):
+{ocr_text}
+
+
+MISSION
+
+Extract TARGET_OCR faithfully into one JSON object, preserving both header structures and table structures.
+
+The output must follow REFERENCE_JSON structure and semantics,
+while respecting page_role-specific structural rules.
+
+
+IMPORTANT PRINCIPLES
+
+- All values must come from TARGET_OCR
+- EXCEPT classification fields (タイプ, page_role)
+
+タイプ:
+- must be inferred using REFERENCE_JSON patterns
+- must NOT rely on literal matching
+- must NOT be null if a matching pattern exists
+
+
+FIELD NAME IMMUTABILITY (CRITICAL)
+
+All keys must match REFERENCE_JSON EXACTLY.
+
+Do NOT:
+- rename keys
+- translate keys
+- mix languages
+- create variations
+
+If uncertain → use null with exact key
+
+
+STRUCTURE RULES (CRITICAL)
+
+- Output must follow the structure of REFERENCE_JSON
+- All keys and nested objects are mandatory unless explicitly removed by page_role rules
+
+CRITICAL:
+- Never collapse any object into a string
+- Always preserve nested structure
+- Missing values → null (not omission)
+
+
+NATIVE JSON TYPE RULE (CRITICAL)
+
+For every field in REFERENCE_JSON, preserve the same JSON data type.
+
+- If a field is an object → it must remain an object
+- If a field is an array → it must remain an array
+- If a field is a scalar → it must remain a scalar
+
+Never:
+- serialize objects into strings
+- serialize arrays into strings
+- flatten nested objects into plain text
+
+Examples:
+Correct:
+"recipient": { "company_name": "ABC" }
+
+Wrong:
+"recipient": "ABC"
+
+Wrong:
+"recipient": "{\"company_name\":\"ABC\"}"
+
+
+TYPE ENFORCEMENT RULE (CRITICAL)
+
+Do not change JSON data types under any circumstance.
+
+If a field is:
+- object → must remain object
+- array → must remain array
+- scalar → must remain scalar
+
+
+GENERATION PROCEDURE (CRITICAL)
+
+1. Determine page_role FIRST
+2. Apply page-role-specific structure rules
+3. Clone REFERENCE_JSON structure
+4. Keep all keys identical
+5. Extract values from TARGET_OCR
+6. Infer タイプ
+
+
+STRUCTURE EXCEPTION RULE (ITEMS) (CRITICAL)
+
+items is controlled ONLY by page_role.
+
+If page_role = "detail":
+- items MUST exist
+- items MUST be an array
+- if no rows exist → "items": []
+
+If page_role = "cover", "summary", or "reply":
+- omit the items key entirely
+- do NOT output items: []
+- do NOT output items: null
+- do NOT inherit items from REFERENCE_JSON
+
+
+PAGE ROLE RULES
+
+"detail" → repeating row items  
+"summary" → totals / tax sections  
+"cover" → company info 중심  
+"reply" → fallback
+
+
+COVER PAGE RULE (CRITICAL)
+
+If page_role = "cover":
+
+- prioritize extracting:
+  recipient, issuer, target_period, closing_date, totals
+
+- items must NOT exist
+
+- NEVER summarize structured fields into plain text
+
+- recipient must be a structured object
+- issuer must be a structured object
+- target_period must be a structured object
+- totals must be a structured object
+
+- even if values are partially missing:
+  preserve full object structure and fill missing fields with null
+
+
+COMPANY BLOCK MAPPING RULE (CRITICAL)
+
+Before extracting recipient and issuer, group OCR lines into semantic company blocks.
+
+Recipient:
+- the block associated with the company line followed by "御中"
+
+Issuer:
+- the block associated with "担当部署", "電話", "FAX", or "振込先銀行"
+
+Field assignment must be block-consistent:
+- postal_code, address, registration_number, office_name, phone, fax, bank_account
+  must be assigned within the same company block
+
+- never combine fields across different company blocks
+
+
+TOTALS STRUCTURE RULE (CRITICAL)
+
+totals must preserve the nested object hierarchy shown in REFERENCE_JSON.
+
+Never flatten totals into a string.
+
+Even if some values are missing:
+- preserve full structure
+- fill missing fields with null
+
+
+ROW FIDELITY RULE (CRITICAL)
+
+- Do NOT merge rows
+- Do NOT split rows
+- Do NOT drop rows
+- Preserve duplicates
+
+
+ROW VALIDITY RULE
+
+Create item ONLY if row contains a primary identifier
+(e.g., JANコード, 商品コード)
+
+If not:
+- append to previous row OR ignore
+
+
+REFERENCE_JSON ROW RULE (CRITICAL)
+
+REFERENCE_JSON must NEVER be used to determine row count.
+
+
+COLUMN ALIGNMENT RULE
+
+Use REFERENCE_OCR to understand column structure.
+
+In TARGET_OCR:
+- extract by relative column alignment
+- ignore spacing inconsistencies
+
+
+VALUE RULES
+
+If exists → extract  
+If not → null
+
+
+VALUE FORMAT RULE (CRITICAL)
+
+Format must follow REFERENCE_JSON (not raw OCR):
+
+- remove units if reference excludes them
+- preserve formatting style
+
+
+AMOUNT NORMALIZATION RULE
+
+"1:500" → "1500"
+Remove ":" only
+
+
+OCR SPACE NUMBER RULE
+
+For numeric fields (条件, 単価, etc.):
+
+"71 00" → "71.00"
+"1 42 00" → "142.00"
+
+Rule:
+- remove spaces
+- last 2 digits = decimal
+
+Do NOT apply to ID/code fields
+
+
+NUMBER RULE
+
+Do NOT guess values  
+Prefer raw OCR if ambiguous
+
+
+備考 / 条件備考 RULE
+
+- normalize whitespace → single space  
+- preserve both fields if exist
+
+
+DITTO RULE
+
+〃 ″ " ' // ／ 1/ / → null
+
+
+OCR BLOCK INTERPRETATION RULE
+
+- Do NOT extract line-by-line blindly
+- Interpret OCR in semantic blocks:
+  (company block, totals block, table block)
+
+
+FAIL-SAFE RULE
+
+If uncertain:
+- preserve structure
+- use null
+
+
+JSON OUTPUT RULES
+
+Return exactly ONE JSON object
+
+Do NOT include:
+- explanations
+- comments
+- markdown
+- extra text
