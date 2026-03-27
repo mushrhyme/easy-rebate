@@ -44,6 +44,10 @@ export interface UseItemsGridColumnsParams {
   pageRole?: string | null
   /** 양식 02: 最終金額 を 金額 の直後に表示 */
   formType?: string | null
+  /** detail: true면 仕切・本部長・NET 열 비표시(접기) */
+  reviewHidePriceStrip?: boolean
+  /** detail: true면 코드 3열 비표시(접기) — 첫 추출 열에 스크롤 경계 스타일 */
+  reviewHideCodeStrip?: boolean
 }
 
 const CHAR_PX = 11
@@ -85,10 +89,14 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     readOnly = false,
     pageRole = null,
     formType = null,
+    reviewHidePriceStrip = false,
+    reviewHideCodeStrip = false,
   } = params
 
   const hasItems = items.length > 0
   const isDetailPage = pageRole === 'detail'
+  /** detail 고정·코드 열 폭 항상 축소 — 추출 열 가로 확보 */
+  const fz = (w: number, compactDelta = 6): number => Math.max(52, w - compactDelta)
 
   return useMemo(() => {
     const formTypeNorm = String(formType ?? '').trim().replace(/^0+/, '')
@@ -250,13 +258,14 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         ),
       })
 
-      // detail 페이지 한정: タイプ, 受注先/小売 코드·マスタ名, 商品コード·マスタ商品名, 仕切, 本部長, NET
+      // detail: 고정=タイプ·판매/소매/마스터명(사용자 비교)·仕切·本部長·NET / 스크롤=코드3+청구추출(코드는 숨김 수준으로 좁게 가능)
       if (isDetailPage) {
+        const masterNameW = 112 // px; 受注先·小売先·マスタ商品名（常にコンパクト幅）
         cols.push({
           key: 'タイプ',
           name: 'タイプ',
-          width: 88,
-          minWidth: 80,
+          width: fz(88),
+          minWidth: fz(80, 8),
           frozen: true,
           resizable: false,
           editable: false,
@@ -295,25 +304,12 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
 
-        const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null
-        cols.push({
-          key: '受注先コード',
-          name: '受注先コード',
-          width: 82,
-          minWidth: 72,
-          frozen: true,
-          resizable: true,
-          editable: false,
-          renderCell: ({ row }) => {
-            const v = row['受注先コード']
-            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
-          },
-        })
+        const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null // NET 셀 계산에 사용; 열 생략 시에도 row 데이터는 유지
         cols.push({
           key: '受注先',
           name: '受注先',
-          width: 128,
-          minWidth: 96,
+          width: masterNameW,
+          minWidth: 88,
           frozen: true,
           resizable: true,
           editable: false,
@@ -324,23 +320,10 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
         cols.push({
-          key: '小売先コード',
-          name: '小売先コード',
-          width: 82,
-          minWidth: 72,
-          frozen: true,
-          resizable: true,
-          editable: false,
-          renderCell: ({ row }) => {
-            const v = row['小売先コード']
-            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
-          },
-        })
-        cols.push({
           key: '小売先',
           name: '小売先',
-          width: 128,
-          minWidth: 96,
+          width: masterNameW,
+          minWidth: 88,
           frozen: true,
           resizable: true,
           editable: false,
@@ -351,23 +334,10 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
         cols.push({
-          key: '商品コード',
-          name: '商品コード',
-          width: 88,
-          minWidth: 76,
-          frozen: true,
-          resizable: true,
-          editable: false,
-          renderCell: ({ row }) => {
-            const v = row['商品コード']
-            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
-          },
-        })
-        cols.push({
           key: 'マスタ商品名',
           name: 'マスタ商品名',
-          width: 128,
-          minWidth: 96,
+          width: masterNameW,
+          minWidth: 88,
           frozen: true,
           resizable: true,
           editable: false,
@@ -377,89 +347,133 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
-        cols.push({
-          key: '仕切',
-          name: '仕切',
-          width: 78,
-          minWidth: 68,
-          frozen: true,
+        if (!reviewHidePriceStrip) {
+          cols.push({
+            key: '仕切',
+            name: '仕切',
+            width: fz(78),
+            minWidth: fz(68, 8),
+            frozen: true,
+            resizable: true,
+            editable: false,
+            renderCell: ({ row }) => {
+              const v = row['仕切']
+              const n = parseCellNum(v)
+              return <span>{n != null ? Number(n).toLocaleString() : '—'}</span>
+            },
+          })
+          cols.push({
+            key: '本部長',
+            name: '本部長',
+            width: fz(78),
+            minWidth: fz(68, 8),
+            frozen: true,
+            resizable: true,
+            editable: false,
+            renderCell: ({ row }) => {
+              const v = row['本部長']
+              const n = parseCellNum(v)
+              return <span>{n != null ? Number(n).toLocaleString() : '—'}</span>
+            },
+          })
+          cols.push({
+            key: 'net',
+            name: 'NET',
+            width: fz(82),
+            minWidth: fz(72, 8),
+            frozen: true,
+            resizable: true,
+            editable: false,
+            renderCell: ({ row }) => {
+              const shikiriNum = parseCellNum(row['仕切'])
+              if (shikiriNum == null) return <span>—</span>
+              const parseYenValue = (v: unknown): number | null => {
+                const normalized = typeof v === 'string' ? v.replace(/[円¥￥]/g, '').trim() : v // string; 예: "1,280円" -> "1,280"
+                return parseCellNum(normalized)
+              }
+
+              // 02/03: NET = 仕切 - (条件 + 条件2)
+              if (formTypeNorm === '2' || formTypeNorm === '3') {
+                const cond1 = parseYenValue(row['条件'])
+                const cond2 = parseYenValue(row['条件2'])
+                if (cond1 == null) return <span>—</span>
+                const condSum = cond1 + (cond2 ?? 0) // number; 예: 126 + 29 = 155
+                return <span>{(shikiriNum - condSum).toLocaleString()}</span>
+              }
+
+              // 4번 유형(form_type=04): NET 비교는 반드시 未収条件 + 未収条件2(없으면 0)
+              const hasMishuKeys = orderedKeys.includes('未収条件') || orderedKeys.includes('未収条件2') || ('未収条件' in row)
+              if (hasMishuKeys) {
+                const misu1 = parseCellNum(row['未収条件'])
+                const misu2 = parseCellNum(row['未収条件2'])
+                if (misu1 == null) return <span>—</span>
+                const condNum = misu1 + (misu2 ?? 0)
+                return <span>{(shikiriNum - condNum).toLocaleString()}</span>
+              }
+
+              const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
+              if (condNum == null) return <span>—</span>
+
+              const unitRaw = String(row['数量単位'] ?? '').trim()
+              const unitNorm = unitRaw.replace('\uFF23', 'C').replace('\uFF33', 'S').toUpperCase() // 全角ＣＳ→CS
+              const irisuNum = parseCellNum(row['入数'])
+              const condForNet =
+                unitNorm === 'CS' && conditionAmountKey === '条件' && irisuNum != null && irisuNum > 0 ? condNum / irisuNum : condNum
+
+              return <span>{(shikiriNum - condForNet).toLocaleString()}</span>
+            },
+          })
+        }
+
+        const codeColW = 68 // px; 스크롤 선두=コード列（常に細め）
+        if (!reviewHideCodeStrip) {
+          cols.push({
+            key: '受注先コード',
+            name: '受注先コード',
+            width: codeColW,
+          minWidth: 56,
+          frozen: false,
           resizable: true,
           editable: false,
+          headerCellClass: 'rdg-scroll-zone-start',
+          cellClass: 'rdg-scroll-zone-cell-start',
           renderCell: ({ row }) => {
-            const v = row['仕切']
-            const n = parseCellNum(v)
-            return <span>{n != null ? Number(n).toLocaleString() : '—'}</span>
+            const v = row['受注先コード']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
         cols.push({
-          key: '本部長',
-          name: '本部長',
-          width: 78,
-          minWidth: 68,
-          frozen: true,
+          key: '小売先コード',
+          name: '小売先コード',
+          width: codeColW,
+          minWidth: 56,
+          frozen: false,
           resizable: true,
           editable: false,
           renderCell: ({ row }) => {
-            const v = row['本部長']
-            const n = parseCellNum(v)
-            return <span>{n != null ? Number(n).toLocaleString() : '—'}</span>
+            const v = row['小売先コード']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
         cols.push({
-          key: 'net',
-          name: 'NET',
-          width: 82,
-          minWidth: 72,
-          frozen: true,
+          key: '商品コード',
+          name: '商品コード',
+          width: 72,
+          minWidth: 60,
+          frozen: false,
           resizable: true,
           editable: false,
           renderCell: ({ row }) => {
-            const shikiriNum = parseCellNum(row['仕切'])
-            if (shikiriNum == null) return <span>—</span>
-            const parseYenValue = (v: unknown): number | null => {
-              const normalized = typeof v === 'string' ? v.replace(/[円¥￥]/g, '').trim() : v // string; 예: "1,280円" -> "1,280"
-              return parseCellNum(normalized)
-            }
-
-            // 02/03: NET = 仕切 - (条件 + 条件2)
-            if (formTypeNorm === '2' || formTypeNorm === '3') {
-              const cond1 = parseYenValue(row['条件'])
-              const cond2 = parseYenValue(row['条件2'])
-              if (cond1 == null) return <span>—</span>
-              const condSum = cond1 + (cond2 ?? 0) // number; 예: 126 + 29 = 155
-              return <span>{(shikiriNum - condSum).toLocaleString()}</span>
-            }
-
-            // 4번 유형(form_type=04): NET 비교는 반드시 未収条件 + 未収条件2(없으면 0)
-            // 이 타입에는 '条件'이 없고, '対象数量又は金額'(예: "60個")은 parseCellNum 실패 가능.
-            // 따라서 미수 키가 존재하면 그것을 우선 사용한다.
-            const hasMishuKeys = orderedKeys.includes('未収条件') || orderedKeys.includes('未収条件2') || ('未収条件' in row)
-            if (hasMishuKeys) {
-              const misu1 = parseCellNum(row['未収条件'])
-              const misu2 = parseCellNum(row['未収条件2'])
-              if (misu1 == null) return <span>—</span>
-              const condNum = misu1 + (misu2 ?? 0)
-              return <span>{(shikiriNum - condNum).toLocaleString()}</span>
-            }
-
-            // 그 외 유형: 조건금액 후보(条件 / 対象数量又は金額 중 존재하는 키) 사용
-            const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
-            if (condNum == null) return <span>—</span>
-            
-            // FINET 01 + 数量単位=CS:
-            // 仕切・本部長은 단가리스트 원본 그대로 유지.
-            // NET 비교/표시는 条件을 入数로 나눈 단가 기준으로 계산.
-            const unitRaw = String(row['数量単位'] ?? '').trim()
-            const unitNorm = unitRaw.replace('\uFF23', 'C').replace('\uFF33', 'S').toUpperCase() // 全角ＣＳ→CS
-            const irisuNum = parseCellNum(row['入数'])
-            const condForNet =
-              unitNorm === 'CS' && conditionAmountKey === '条件' && irisuNum != null && irisuNum > 0 ? condNum / irisuNum : condNum
-            
-            return <span>{(shikiriNum - condForNet).toLocaleString()}</span>
+            const v = row['商品コード']
+            return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
           },
         })
+        }
       }
     }
+
+    /** 코드 열을 숨기면 첫 추출 열에 스크롤 구분선 부여 */
+    let applyScrollEdgeToNextFlex = isDetailPage && reviewHideCodeStrip
 
     if (hasItems) {
       for (const key of orderedKeys) {
@@ -482,6 +496,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         if (isComplexType) continue
         if (key === '最終金額') {
           const dataBasedWidth = calculateColumnWidth(key, key)
+          const scrollEdge = applyScrollEdgeToNextFlex
+          if (scrollEdge) applyScrollEdgeToNextFlex = false
           cols.push({
             key,
             name: '最終金額',
@@ -489,6 +505,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             minWidth: Math.max(dataBasedWidth, 100),
             resizable: true,
             editable: false,
+            ...(scrollEdge ? { headerCellClass: 'rdg-scroll-zone-start', cellClass: 'rdg-scroll-zone-cell-start' } : {}),
             renderCell: ({ row }) => {
               const v = row[key]
               let n = parseCellNum(v)
@@ -512,6 +529,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         }
         const dataBasedWidth = calculateColumnWidth(key, key)
         const isKuCol = key === '区'
+        const scrollEdgeFlex = applyScrollEdgeToNextFlex
+        if (scrollEdgeFlex) applyScrollEdgeToNextFlex = false
         cols.push({
           key,
           name: key,
@@ -519,6 +538,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           minWidth: Math.max(dataBasedWidth, COL_WIDTH_MIN),
           resizable: true,
           editable: !readOnly,
+          ...(scrollEdgeFlex ? { headerCellClass: 'rdg-scroll-zone-start', cellClass: 'rdg-scroll-zone-cell-start' } : {}),
           renderCell: ({ row }) => {
             const isEditing = !readOnly && editingItemIds.has(row.item_id)
             const value = row[key] ?? ''
@@ -540,7 +560,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
       }
-      // NET은 frozen에 이미 포함됨 (위 검토 탭 frozen 블록)
+      // detail NET 열은 위 블록에서만 정의(숨김 시 생략)
     }
 
     const adjustedCols: Column<GridRow>[] = cols.map((col) => {
@@ -624,5 +644,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     readOnly,
     pageRole,
     formType,
+    reviewHidePriceStrip,
+    reviewHideCodeStrip,
   ])
 }

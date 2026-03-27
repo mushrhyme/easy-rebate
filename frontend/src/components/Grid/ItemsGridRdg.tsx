@@ -72,6 +72,18 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   const [unitPriceModalRow, setUnitPriceModalRow] = useState<GridRow | null>(null) // 단가 후보 모달
   const [retailSaving, setRetailSaving] = useState(false) // 代表スーパー 확정 저장 중
   const [attachmentModalItemId, setAttachmentModalItemId] = useState<number | null>(null) // 첨부 모달: 해당 행 item_id
+  const REVIEW_GRID_HIDE_PRICE_KEY = 'easy-rebate:review-grid-hide-price:v1'
+  const REVIEW_GRID_HIDE_CODE_KEY = 'easy-rebate:review-grid-hide-code:v1'
+  const [reviewHidePriceStrip, setReviewHidePriceStrip] = useState(false) // true면 仕切・本部長・NET 비표시
+  const [reviewHideCodeStrip, setReviewHideCodeStrip] = useState(false) // true면 코드3열 비표시
+  useEffect(() => {
+    try {
+      setReviewHidePriceStrip(localStorage.getItem(REVIEW_GRID_HIDE_PRICE_KEY) === '1')
+      setReviewHideCodeStrip(localStorage.getItem(REVIEW_GRID_HIDE_CODE_KEY) === '1')
+    } catch {
+      /* ignore */
+    }
+  }, [])
   // 컨테이너 너비 측정
   useEffect(() => {
     const updateWidth = () => {
@@ -194,7 +206,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           row[key] = item.item_data[key]
         })
       }
-      // 검토 탭 frozen: 코드·マスタ名(受注先/小売先/マスタ商品名) → item_data 원천만 사용 (타입과 동일)
+      // 검토 탭: 고정=판매/소매/マスタ명·仕切·NET / 코드는 스크롤 — item_data 원천
 
       return row
     })
@@ -728,6 +740,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     readOnly,
     pageRole: pageMetaData?.page_role ?? null,
     formType: data?.form_type ?? _formType ?? null,
+    reviewHidePriceStrip,
+    reviewHideCodeStrip,
   })
 
   /** 비로그인 시 드래그 후 즉시 반영용 (localStorage와 동기) */
@@ -1429,6 +1443,43 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         </div>
       )}
       
+      {/* detail: 폭·열 표시 옵션 — localStorage 유지 */}
+      {!isEmpty && pageMetaData?.page_role === 'detail' && (
+        <div className="review-grid-layout-bar">
+          <label className="review-grid-layout-bar-label" title="固定列の仕切・本部長・NETを非表示にし、名前列の横スペースを確保します（データは行に残り、警告色も維持）。">
+            <input
+              type="checkbox"
+              checked={reviewHidePriceStrip}
+              onChange={(e) => {
+                const next = e.target.checked
+                setReviewHidePriceStrip(next)
+                try {
+                  localStorage.setItem(REVIEW_GRID_HIDE_PRICE_KEY, next ? '1' : '0')
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+            <span>仕切・本部長・NETを隠す</span>
+          </label>
+          <label className="review-grid-layout-bar-label" title="受注先コード・小売先コード・商品コードの3列を非表示。抽出列が左に寄ります。">
+            <input
+              type="checkbox"
+              checked={reviewHideCodeStrip}
+              onChange={(e) => {
+                const next = e.target.checked
+                setReviewHideCodeStrip(next)
+                try {
+                  localStorage.setItem(REVIEW_GRID_HIDE_CODE_KEY, next ? '1' : '0')
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+            <span>コード3列を隠す</span>
+          </label>
+        </div>
+      )}
       {/* React Data Grid - items가 있을 때만 표시 */}
       {!isEmpty && (
         <div className="rdg-container" ref={containerRef}>
