@@ -59,6 +59,50 @@ FORM_DUAL_KEY_MAP = {
 }
 
 
+def _dual_keys_display_order(form_type_norm: str) -> List[str]:
+    """양식별 듀얼 컬럼 키 표시 순서. 예: 1 -> [条件, 条件2, 金額, 金額2, 最終金額]"""
+    m = FORM_DUAL_KEY_MAP.get(form_type_norm)
+    if not m:
+        return []
+    return [
+        m["condition1"],
+        m["condition2"],
+        m["amount1"],
+        m["amount2"],
+        m["final_amount"],
+    ]
+
+
+def merge_item_data_keys_with_form_dual(
+    keys: List[str],
+    form_type: Optional[str],
+    keys_in_db: set,
+) -> List[str]:
+    """
+    documents.form_type 확정 후: 조건2·금액2·최종 계열을 양식별 고정 순으로 끼워 넣음.
+
+    keys: 메타+extra 병합 직후 순서. keys_in_db: 해당 페이지 행들에 실제 존재하는 키(apply_form2 직후).
+    """
+    if not form_type or not keys:
+        return keys
+    ft = str(form_type).strip().lstrip("0") or ""
+    dual_order = _dual_keys_display_order(ft)
+    if not dual_order:
+        return keys
+    dual_set = set(dual_order)
+    dual_present = [k for k in dual_order if k in keys_in_db]
+    if not dual_present:
+        return keys
+    rest = [k for k in keys if k not in dual_set]
+    fi = next((i for i, k in enumerate(keys) if k in dual_set), None)
+    if fi is None:
+        tail = [k for k in dual_present if k not in rest]
+        return rest + tail
+    non_dual_before = [k for k in keys[:fi] if k not in dual_set]
+    insert_pos = len(non_dual_before)
+    return rest[:insert_pos] + dual_present + rest[insert_pos:]
+
+
 def _parse_amount(value: Any) -> float:
     """金額/金額2 값을 실수로 파싱. 전각 숫자·쉼표(NFKC) 후 반각 쉼표 제거."""
     if value is None:
@@ -199,6 +243,40 @@ def _merge_form2_rows_by_condition(items: List[Dict[str, Any]]) -> List[Dict[str
     return merged_items
 
 
+def infer_form_type_from_item(item: Dict[str, Any]) -> Optional[str]:
+    """
+    (백필·분석용) item 키로 양식 1~5 추정. API 조회 응답의 듀얼 키는 documents.form_type 확정 후
+    apply_form2_final_amount_row 만으로 주입한다(행에서 폼 타입을 추정하지 않음).
+    """
+    if not isinstance(item, dict):
+        return None
+    keys = item.keys()
+    # 4번: 未収条件系 (CVS)
+    if "未収条件" in keys or _norm_text(item.get("未収条件")):
+        return "4"
+    # 5번: 個別条件·景品·請求合計
+    if (
+        "個別条件" in keys
+        or "景品数_ケース" in keys
+        or "請求合計額" in keys
+        or "売上数_ケース" in keys
+        or _norm_text(item.get("個別条件"))
+    ):
+        return "5"
+    # 3번: 請求金額 (ベルク等)
+    if "請求金額" in keys or _norm_text(item.get("請求金額")):
+        return "3"
+    # 2번: 計算条件 or JAN+取引数量計
+    if _norm_text(item.get("計算条件（適用人数）")):
+        return "2"
+    if "JANコード" in keys and ("取引数量計" in keys or _norm_text(item.get("取引数量計"))):
+        return "2"
+    # 1번: イオン等 条件+金額 (form01/02 공통 키명이 동일한 경우 기본)
+    if "条件" in keys or "金額" in keys or _norm_text(item.get("条件")) or _norm_text(item.get("金額")):
+        return "1"
+    return None
+
+
 def _fill_missing_amount2_from_qty_and_condition2(item: Dict[str, Any]) -> None:
     """
     금액2 누락 fallback:
@@ -224,8 +302,11 @@ def apply_form2_final_amount_row(item: Dict[str, Any], form_type: Optional[str])
     양식 2번 1행: 最終金額 = 金額 + 金額2（金額2 欠損は 0）。
 
     DB 조회 응답·저장·파싱 후처리에서 공통 사용.
+    documents.form_type 이 없으면 듀얼 키(条件2 등)를 넣지 않는다.
     """
-    if form_type is None or not isinstance(item, dict):
+    if not isinstance(item, dict):
+        return
+    if form_type is None or (isinstance(form_type, str) and not str(form_type).strip()):
         return
     normalized_form_type = str(form_type).lstrip("0")
 
@@ -233,7 +314,7 @@ def apply_form2_final_amount_row(item: Dict[str, Any], form_type: Optional[str])
         _split_dual_values_in_row(item)  # 예: "604,800 139,200" -> 金額/金額2
         _fill_missing_amount2_from_qty_and_condition2(item)  # 예: 840 * 29.00 -> "24360"
 
-    _ensure_dual_keys_and_final(item, form_type)  # 01~05 공통
+    _ensure_dual_keys_and_final(item, form_type)  # 01~05 공통; 条件2·金額2·最終金額 키 보장
 
 
 def normalize_form2_rebate_conditions(

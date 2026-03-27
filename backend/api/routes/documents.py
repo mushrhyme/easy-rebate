@@ -1913,7 +1913,8 @@ async def save_document_answer_json(
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            first_item_keys = None
+            accumulated_item_data_keys: List[str] = []
+            seen_item_keys: set = set()
             for page_obj in pages:
                 page_number = page_obj.get("page_number")
                 if page_number is None:
@@ -1980,8 +1981,10 @@ async def save_document_answer_json(
                         item_dict["タイプ"] = "条件"
                     separated = db._separate_item_fields(item_dict, form_type=form_type)
                     item_data = separated.get("item_data") or {}
-                    if first_item_keys is None and item_data:
-                        first_item_keys = list(item_data.keys())
+                    for _k in item_data.keys():
+                        if _k not in seen_item_keys:
+                            seen_item_keys.add(_k)
+                            accumulated_item_data_keys.append(_k)
                     cursor.execute("""
                         INSERT INTO items_current (
                             pdf_filename, page_number, item_order,
@@ -1993,20 +1996,8 @@ async def save_document_answer_json(
                         pdf_filename, page_number, item_order,
                         json.dumps(item_data, ensure_ascii=False),
                     ))
-            # 이미 문서에 item_data_keys가 있으면 클라이언트 순서로 덮어쓰지 않음 (서버 LLM 저장 순서 유지)
-            if first_item_keys:
-                cursor.execute(
-                    "SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1",
-                    (pdf_filename,),
-                )
-                row = cursor.fetchone()
-                existing_keys = None
-                if row and row[0]:
-                    doc_meta = row[0] if isinstance(row[0], dict) else {}
-                    existing_keys = doc_meta.get("item_data_keys")
-                if existing_keys and isinstance(existing_keys, (list, tuple)) and len(existing_keys) > 0:
-                    first_item_keys = None
-            if first_item_keys:
+            # 정답지 통합 저장: 각 행 item_data 키를 페이지·행 순으로 누적한 순서를 단일 기준으로 반영(재저장 시 열 순 유지)
+            if accumulated_item_data_keys:
                 cursor.execute(
                     "SELECT document_metadata FROM documents_current WHERE pdf_filename = %s LIMIT 1",
                     (pdf_filename,),
@@ -2015,7 +2006,7 @@ async def save_document_answer_json(
                 doc_meta = (row[0] or {}) if row and row[0] is not None else {}
                 if not isinstance(doc_meta, dict):
                     doc_meta = {}
-                doc_meta["item_data_keys"] = first_item_keys
+                doc_meta["item_data_keys"] = accumulated_item_data_keys
                 cursor.execute(
                     "UPDATE documents_current SET document_metadata = %s::json WHERE pdf_filename = %s",
                     (json.dumps(doc_meta, ensure_ascii=False), pdf_filename),

@@ -175,7 +175,7 @@ def _summarize_value(v: Any, depth: int = 0) -> Any:
 
 
 def log_openai_request_payload(payload: Dict[str, Any], context: str = "") -> None:
-    """호출 직전: 타입, 요약 객체, json.dumps 결과(길이·truncate)."""
+    """호출 직전 상세 로그(DEBUG 전용): 요약·json_len·본문 미리보기. 기본 INFO 레벨에서는 출력 안 함."""
     serialized = verify_json_serializable(payload)
     summary = summarize_payload_for_log(payload)
     try:
@@ -184,7 +184,7 @@ def log_openai_request_payload(payload: Dict[str, Any], context: str = "") -> No
         summary_json = str(summary)
     summary_json = _mask_secrets_in_text(summary_json)
     safe_preview = _mask_secrets_in_text(_truncate(serialized))
-    logger.info(
+    logger.debug(
         "[OpenAI] %s | payload_type=%s | summary_json=%s | json_len=%d | json_stringify_preview=%s",
         context,
         type(payload).__name__,
@@ -229,14 +229,15 @@ def chat_completions_create_safe(
     **kwargs: Any,
 ) -> Any:
     """
-    kwargs를 sanitize → JSON 검증 → 로그 → client.chat.completions.create(**kwargs).
+    kwargs를 sanitize → JSON 검증 → (DEBUG 시에만) 요청 상세 로그 → client.chat.completions.create(**kwargs).
 
     재시도(429 등)는 호출부에서 call_with_retry(lambda: chat_completions_create_safe(...))로 감싼다.
     """
     payload: Dict[str, Any] = sanitize_for_openai_json(kwargs)
     assert isinstance(payload, dict)
     verify_json_serializable(payload)
-    log_openai_request_payload(payload, context=context or "chat.completions.create")
+    if logger.isEnabledFor(logging.DEBUG):
+        log_openai_request_payload(payload, context=context or "chat.completions.create")
     try:
         return client.chat.completions.create(**payload)
     except Exception as e:

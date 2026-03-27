@@ -11,7 +11,7 @@ from database.registry import get_db
 from database.db_manager import _similarity_difflib
 from modules.utils.master_display_enrich import enrich_master_fields_from_codes
 from modules.utils.retail_resolve import resolve_retail_dist, extract_office_name_from_issuer
-from modules.utils.form2_rebate_utils import apply_form2_final_amount_row
+from modules.utils.form2_rebate_utils import apply_form2_final_amount_row, merge_item_data_keys_with_form_dual
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
 from backend.unit_price_lookup import resolve_product_and_prices
@@ -22,6 +22,56 @@ router = APIRouter()
 # 프로젝트 루트 (items.py: backend/api/routes/items.py -> parent*4 = project_root)
 _ITEMS_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _UNIT_PRICE_CSV = _ITEMS_PROJECT_ROOT / "database" / "csv" / "unit_price.csv"
+
+
+def _merge_item_data_keys_for_response(
+    doc: Optional[Dict[str, Any]],
+    item_list: List[Any],
+) -> Optional[List[str]]:
+    """
+    검토 탭 컬럼 순서: documents.document_metadata.item_data_keys(파싱·정답지 통합 저장 순)를 우선하고,
+    해당 페이지에만 존재하는 키는 행 순서대로 뒤에 붙인다.
+    메타가 없을 때만 현재 페이지 첫 행 item_data 키 순서에 폴백한다.
+    """
+    if not item_list:
+        return None
+    keys_in_db: set = set()
+    for it in item_list:
+        keys_in_db.update(it.item_data.keys())
+    canonical: Optional[List[str]] = None
+    if doc and isinstance(doc.get("document_metadata"), dict):
+        raw = doc["document_metadata"].get("item_data_keys")
+        if isinstance(raw, list) and len(raw) > 0:
+            canonical = [str(k) for k in raw if isinstance(k, str)]
+    form_type_for_dual: Optional[str] = None
+    if doc and doc.get("form_type"):
+        form_type_for_dual = str(doc["form_type"]).strip() or None
+
+    if canonical:
+        ordered = [k for k in canonical if k in keys_in_db]
+        seen = set(ordered)
+        extra: List[str] = []
+        for it in item_list:
+            for k in it.item_data.keys():
+                if k in keys_in_db and k not in seen:
+                    seen.add(k)
+                    extra.append(k)
+        merged = ordered + extra
+        if form_type_for_dual:
+            merged = merge_item_data_keys_with_form_dual(merged, form_type_for_dual, keys_in_db)
+        return merged
+    first = list(item_list[0].item_data.keys())
+    seen = set(first)
+    extra_tail: List[str] = []
+    for it in item_list:
+        for k in it.item_data.keys():
+            if k not in seen:
+                seen.add(k)
+                extra_tail.append(k)
+    merged_fb = first + extra_tail
+    if form_type_for_dual:
+        merged_fb = merge_item_data_keys_with_form_dual(merged_fb, form_type_for_dual, keys_in_db)
+    return merged_fb
 
 
 def _get_cover_issuer_office_name(db, pdf_filename: str) -> Optional[str]:
@@ -699,7 +749,7 @@ async def get_page_items(
             data_month,
         )
 
-        # item_data_keys: 아래에서 첫 행 item_data 키 순서로 채움 (DB·파싱 순서, RAG/메타로 재정렬하지 않음)
+        # item_data_keys: document_metadata.item_data_keys 우선(파싱·정답지 저장 순), 페이지 전용 키는 뒤에 추가
         item_data_keys: Optional[List[str]] = None
         form_type: Optional[str] = None
         upload_channel: Optional[str] = None
@@ -840,7 +890,9 @@ async def get_page_items(
                 )
             )
         if item_list:
-            item_data_keys = list(item_list[0].item_data.keys())
+            # 행 순서: 파싱 JSON 배열 순 = item_order(동률 시 item_id) — 응답 직전에 한 번 더 고정 (DB/직렬화 이슈 방지)
+            item_list.sort(key=lambda r: (r.item_order, r.item_id))
+            item_data_keys = _merge_item_data_keys_for_response(doc, item_list)
 
         return {
             "items": item_list,

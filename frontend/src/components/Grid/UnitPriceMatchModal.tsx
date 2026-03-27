@@ -1,7 +1,7 @@
 /**
  * マッピングモーダル: 単価 | 代表スーパー。
  * 単価: ①商品（候補表に内容量・規格・参照・類似度・仕切・本部長、検索、確定）。
- * 代表スーパー: 様式01+得意先コード照合 → マスタ類似度と RAG（最大3件）を混在 → 販売ヒント・検索。
+ * 代表スーパー: 得意先コード照合（様式01・03・様式未確定・得意先名なし時）→ マスタ類似度と RAG を混在 → 販売ヒント・検索。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { searchApi } from '@/api/client'
@@ -75,7 +75,7 @@ interface UnitPriceMatchModalProps {
   open: boolean
   onClose: () => void
   row: GridRow | null
-  /** 文書様式（01=様式01・得意先コード照合あり） */
+  /** 文書様式（未確定時・得意先名なし時は得意先コード照合をフォールバック。01・03は従来どおり） */
   formType?: string | null
   onSelectUnitPrice: (match: {
     제품코드?: string | number
@@ -106,6 +106,30 @@ function isFormType01(formType: string | null | undefined): boolean {
   const s = (formType ?? '').trim()
   if (!s) return false
   return s === '01' || s === '1' || /^0*1$/.test(s)
+}
+
+/** 様式03（issuer.office による販売先すり合わせがバックエンドで有効なタイプ） */
+function isFormType03(formType: string | null | undefined): boolean {
+  const s = (formType ?? '').trim()
+  if (!s) return false
+  return s === '03' || s === '3' || /^0*3$/.test(s)
+}
+
+/**
+ * 得意先コード→卸小売(domae) API を呼ぶか。
+ * - 様式未確定: 分類前でもコードでマッピングできるように試行
+ * - 得意先名なし: 名義RAGが使えないためコードのみフォールバック（backend resolve_retail_dist と同趣旨）
+ * - 様式01・03: 従来どおりコード照合の主対象
+ */
+function shouldUseDomaeCustomerCodeLookup(
+  formType: string | null | undefined,
+  hasCustomerName: boolean,
+): boolean {
+  const ft = (formType ?? '').trim()
+  if (!ft) return true
+  if (isFormType01(formType) || isFormType03(formType)) return true
+  if (!hasCustomerName) return true
+  return false
 }
 
 /** 全角数字→半角変換（140 等を正しく出すため 1文字ずつ変換） */
@@ -358,7 +382,7 @@ export function UnitPriceMatchModal({
 
     const hasCode = customerCode.length > 0
     const hasName = customerName.length > 0
-    const useDomaeCode = isFormType01(formType) && hasCode
+    const useDomaeCode = hasCode && shouldUseDomaeCustomerCodeLookup(formType, hasName)
 
     if (!hasCode && !hasName) {
       setByCode({ match: null, skippedReason: null, loading: false, error: null })
@@ -399,11 +423,9 @@ export function UnitPriceMatchModal({
     } else {
       setByCode({
         match: null,
-        skippedReason: hasCode
-          ? isFormType01(formType)
-            ? null
-            : '様式01以外のため、得意先コードによる照合は行いませんでした'
-          : '得意先コードがありません',
+        skippedReason: !hasCode
+          ? '得意先コードがありません'
+          : '得意先名があるため、様式01・03以外では得意先コードのみの照合は行いませんでした',
         loading: false,
         error: null,
       })

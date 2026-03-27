@@ -162,13 +162,21 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     }, [queryClient, pdfFilename, pageNumber]),
   })
 
-  const items = data?.items || []
+  /** API 배열 순서에 의존하지 않고 item_order(동률 시 item_id)로 행 정렬 — 그리드 = 파싱 JSON 배열 순과 일치 */
+  const items = useMemo(() => {
+    const raw = data?.items ?? []
+    return [...raw].sort((a, b) => {
+      const oa = Number(a.item_order) || 0
+      const ob = Number(b.item_order) || 0
+      if (oa !== ob) return oa - ob
+      return (a.item_id ?? 0) - (b.item_id ?? 0)
+    })
+  }, [data?.items])
   const hasItems = items.length > 0 // items 존재 여부
   /** item_order 기준 첫 행 — 구 문서 루트 첨부를 이 행으로만 이행 가능 */
   const firstRowItemId = useMemo(() => {
     if (!items.length) return null
-    const sorted = [...items].sort((a, b) => a.item_order - b.item_order)
-    return sorted[0]?.item_id ?? null
+    return items[0]?.item_id ?? null
   }, [items])
 
   /** 행별 PDF 첨부 유무 — 그리드 왼쪽 세로 강조(글자색과 무관) */
@@ -1535,10 +1543,8 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
                 if (condRaw != null) condNum = condRaw / irisuNum
               }
 
-              // 4번 유형(form_type=04): NET 비교 입력은 반드시 未収条件 + 未収条件2(없으면 0)
-              // 이 타입에는 '条件' 컬럼이 없고, '対象数量又は金額'에는 "60個" 같은 단위가 붙을 수 있어 parseCellNum이 실패할 수 있다.
-              const hasMishuKeys = '未収条件' in row || '未収条件2' in row
-              if (hasMishuKeys) {
+              // 4번(form_type=04)만 未収条件 계열 (01은 条件 기준·키 혼재 시 오경고 방지)
+              if (rowFormTypeNorm === '4') {
                 const misu1 = parseCellNum(row['未収条件'])
                 const misu2 = parseCellNum(row['未収条件2'])
                 condNum = misu1 != null ? misu1 + (misu2 ?? 0) : null

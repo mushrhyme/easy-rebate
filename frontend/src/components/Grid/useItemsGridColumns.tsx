@@ -116,13 +116,13 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           Object.keys(item.item_data).forEach((key) => keysInDb.add(key))
         }
       })
-      // 첫 행 item_data의 키 삽입 순서(파싱·DB 저장 순)를 우선 — API item_data_keys(RAG/메타)는 보조만
+      // API item_data_keys = document_metadata(파싱·정답지 저장 시점 순서) 우선 — 없을 때만 첫 행 키 순 폴백
       const rawFromItem = firstItem.item_data ? Object.keys(firstItem.item_data) : []
       const itemDataKeys =
-        rawFromItem.length > 0
-          ? rawFromItem
-          : itemDataKeysFromApi?.length
-            ? [...itemDataKeysFromApi]
+        itemDataKeysFromApi?.length
+          ? [...itemDataKeysFromApi]
+          : rawFromItem.length > 0
+            ? rawFromItem
             : []
       const normalizeKey = (key: string): string => {
         if ((key === '得意先名' || key === '得意先') && keysInDb.has('得意先')) return '得意先'
@@ -131,7 +131,19 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
       }
       const normalizedItemDataKeys = itemDataKeys.map(normalizeKey)
       const orderedFromApi = normalizedItemDataKeys.filter((k) => keysInDb.has(k))
-      const extraKeys = Array.from(keysInDb).filter((k) => !normalizedItemDataKeys.includes(k))
+      const extraKeys: string[] = []
+      const seenExtra = new Set<string>()
+      items.forEach((item) => {
+        if (!item.item_data) return
+        Object.keys(item.item_data).forEach((k) => {
+          const nk = normalizeKey(k)
+          if (!keysInDb.has(nk)) return
+          if (normalizedItemDataKeys.includes(nk)) return
+          if (seenExtra.has(nk)) return
+          seenExtra.add(nk)
+          extraKeys.push(nk)
+        })
+      })
       const reviewHiddenKeys = new Set([
         'first_review_reviewed_at',
         'first_review_reviewed_by',
@@ -304,6 +316,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
                   <option value="CF10%">CF10%</option>
                   <option value="非課税">非課税</option>
                   <option value="消費税">消費税</option>
+                  <option value="ロットアウト">ロットアウト</option>
                 </select>
               )
             }
@@ -408,9 +421,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
                 return <span>{(shikiriNum - condSum).toLocaleString()}</span>
               }
 
-              // 4번 유형(form_type=04): NET 비교는 반드시 未収条件 + 未収条件2(없으면 0)
-              const hasMishuKeys = orderedKeys.includes('未収条件') || orderedKeys.includes('未収条件2') || ('未収条件' in row)
-              if (hasMishuKeys) {
+              // 4번(form_type=04)만 未収条件+未収条件2 (01~03·05에서 키만 섞이면 NET이 틀어짐)
+              if (formTypeNorm === '4') {
                 const misu1 = parseCellNum(row['未収条件'])
                 const misu2 = parseCellNum(row['未収条件2'])
                 if (misu1 == null) return <span>—</span>

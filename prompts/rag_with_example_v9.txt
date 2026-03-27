@@ -25,6 +25,7 @@ IMPORTANT PRINCIPLES
 - must be inferred using REFERENCE_JSON patterns
 - must NOT rely on literal matching
 - must NOT be null if a matching pattern exists
+- Typical labels include: 条件, 販促費8%, 販促費10%, CF8%, CF10%, 非課税, 消費税, ロットアウト (match TARGET_OCR / document wording exactly)
 
 
 FIELD NAME IMMUTABILITY (CRITICAL)
@@ -66,13 +67,13 @@ Never:
 
 Examples:
 Correct:
-"recipient": { "company_name": "ABC" }
+"recipient": {{ "company_name": "ABC" }}
 
 Wrong:
 "recipient": "ABC"
 
 Wrong:
-"recipient": "{\"company_name\":\"ABC\"}"
+"recipient": "{{\"company_name\":\"ABC\"}}"
 
 
 TYPE ENFORCEMENT RULE (CRITICAL)

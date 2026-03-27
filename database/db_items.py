@@ -666,7 +666,7 @@ class ItemsMixin:
                                 version
                             FROM {items_table}
                             WHERE pdf_filename = %s AND page_number = %s
-                            ORDER BY item_order
+                            ORDER BY item_order NULLS LAST, item_id
                         """, (pdf_filename, page_number))
                     else:
                         cursor.execute(f"""
@@ -685,7 +685,7 @@ class ItemsMixin:
                                 version
                             FROM {items_table}
                             WHERE pdf_filename = %s
-                            ORDER BY page_number, item_order
+                            ORDER BY page_number, item_order NULLS LAST, item_id
                         """, (pdf_filename,))
                     rows = cursor.fetchall()
                 else:
@@ -709,7 +709,7 @@ class ItemsMixin:
                                 version
                             FROM items_current
                             WHERE pdf_filename = %s AND page_number = %s
-                            ORDER BY item_order
+                            ORDER BY item_order NULLS LAST, item_id
                         """, (pdf_filename, page_number))
                         
                         rows = cursor.fetchall()
@@ -731,7 +731,7 @@ class ItemsMixin:
                                     version
                                 FROM items_archive
                                 WHERE pdf_filename = %s AND page_number = %s
-                                ORDER BY item_order
+                                ORDER BY item_order NULLS LAST, item_id
                             """, (pdf_filename, page_number))
                             rows = cursor.fetchall()
                     else:
@@ -768,7 +768,7 @@ class ItemsMixin:
                                 version
                             FROM items_archive
                             WHERE pdf_filename = %s
-                            ORDER BY page_number, item_order
+                            ORDER BY page_number, item_order NULLS LAST, item_id
                         """, (pdf_filename, pdf_filename))
                         rows = cursor.fetchall()
                 
