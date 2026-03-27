@@ -442,8 +442,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           frozen: false,
           resizable: true,
           editable: false,
-          headerCellClass: 'rdg-scroll-zone-start',
-          cellClass: 'rdg-scroll-zone-cell-start',
           renderCell: ({ row }) => {
             const v = row['受注先コード']
             return <span>{v != null && String(v).trim() !== '' ? String(v) : '—'}</span>
@@ -479,9 +477,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
       }
     }
 
-    /** 코드 열을 숨기면 첫 추출 열에 스크롤 구분선 부여 */
-    let applyScrollEdgeToNextFlex = isDetailPage && reviewHideCodeStrip
-
     if (hasItems) {
       for (const key of orderedKeys) {
         if (
@@ -505,8 +500,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         const isFinalAmountKey = amountLayout != null && key === amountLayout.final
         if (isFinalAmountKey) {
           const dataBasedWidth = calculateColumnWidth(key, key)
-          const scrollEdge = applyScrollEdgeToNextFlex
-          if (scrollEdge) applyScrollEdgeToNextFlex = false
           cols.push({
             key,
             name: key,
@@ -514,7 +507,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             minWidth: Math.max(dataBasedWidth, 100),
             resizable: true,
             editable: false,
-            ...(scrollEdge ? { headerCellClass: 'rdg-scroll-zone-start', cellClass: 'rdg-scroll-zone-cell-start' } : {}),
             renderCell: ({ row }) => {
               const v = row[key]
               let n = parseCellNum(v)
@@ -538,8 +530,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         }
         const dataBasedWidth = calculateColumnWidth(key, key)
         const isKuCol = key === '区'
-        const scrollEdgeFlex = applyScrollEdgeToNextFlex
-        if (scrollEdgeFlex) applyScrollEdgeToNextFlex = false
         cols.push({
           key,
           name: key,
@@ -547,7 +537,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           minWidth: Math.max(dataBasedWidth, COL_WIDTH_MIN),
           resizable: true,
           editable: !readOnly,
-          ...(scrollEdgeFlex ? { headerCellClass: 'rdg-scroll-zone-start', cellClass: 'rdg-scroll-zone-cell-start' } : {}),
           renderCell: ({ row }) => {
             const isEditing = !readOnly && editingItemIds.has(row.item_id)
             const value = row[key] ?? ''

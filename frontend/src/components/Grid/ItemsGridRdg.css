@@ -1292,7 +1292,7 @@
   cursor: not-allowed;
 }
 
-/* detail 검토: 고정열 vs 스크롤(マスタ名+청구 추출) 경계 */
+/* detail 검토: 열 표시 옵션 툴바 */
 .review-grid-layout-bar {
   flex-shrink: 0;
   display: flex;
@@ -1301,7 +1301,7 @@
   gap: 10px 20px;
   padding: 6px 10px;
   font-size: 13px;
-  background: linear-gradient(90deg, #faf8ff 0%, #f3f4f6 100%);
+  background: #f3f4f6;
   border-bottom: 1px solid #e5e7eb;
 }
 .review-grid-layout-bar-label {
@@ -1316,18 +1316,5 @@
   width: 16px;
   height: 16px;
   accent-color: #764ba2;
-}
-
-.rdg-header-cell.rdg-scroll-zone-start,
-.rdg .rdg-header-row .rdg-header-cell.rdg-scroll-zone-start {
-  border-left: 3px solid #8b5cf6;
-  padding-left: 10px !important;
-  background: linear-gradient(180deg, #faf5ff 0%, #f5f3ff 100%);
-}
-
-.items-grid-rdg .rdg-cell.rdg-scroll-zone-cell-start,
-.rdg-container .rdg .rdg-cell.rdg-scroll-zone-cell-start {
-  border-left: 3px solid #c4b5fd;
-  background: linear-gradient(90deg, #faf5ff 0%, transparent 28px);
 }
 
