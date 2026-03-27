@@ -53,21 +53,17 @@ def raw_to_table_restored_text(raw: Dict[str, Any]) -> str:
 
     - tables가 있으면: 각 표를 TSV로 (첫 행=헤더, 이후 데이터 행). LLM이 열 이름(ケース/バラ 등)으로 매핑 가능.
     - tables가 없으면: result['text'] 또는 pages에서 단어 이어붙인 텍스트 반환.
+    - tables가 있어도 표지만 쓰면 표지(cover) 문단이 빠져 page_role·RAG가 틀어지므로,
+      전체 페이지 텍스트(raw_to_full_text)를 앞에 붙인 뒤 표 TSV를 이어 붙인다.
     """
     if not raw or not isinstance(raw, dict):
         return ""
 
     tables = raw.get("tables") or []
     if not tables:
-        text = (raw.get("text") or "").strip()
-        if not text and raw.get("pages"):
-            text = "\n".join(
-                " ".join(w.get("text", "") or w.get("content", "") for w in p.get("words") or [])
-                for p in raw["pages"]
-            )
-        return normalize_ocr_text(text or "", use_fullwidth=True)
+        return raw_to_full_text(raw)
 
-    parts = []
+    parts: list[str] = []
     for tbl in tables:
         df = azure_table_to_dataframe(tbl)
         if df.empty:
@@ -75,4 +71,16 @@ def raw_to_table_restored_text(raw: Dict[str, Any]) -> str:
         header = "\t".join(str(df.iloc[0, j]) for j in range(len(df.columns)))
         rows = ["\t".join(str(df.iloc[i, j]) for j in range(len(df.columns))) for i in range(1, len(df))]
         parts.append(header + "\n" + "\n".join(rows))
-    return normalize_ocr_text("\n\n".join(parts) or "", use_fullwidth=True)
+
+    table_block = "\n\n".join(parts)
+    full_text = raw_to_full_text(raw)
+
+    if not table_block.strip():
+        return full_text
+
+    if not full_text.strip():
+        return normalize_ocr_text(table_block, use_fullwidth=True)
+
+    # 표지·宛名 등 비표 영역 + 열 구조가 살아 있는 TSV (중복은 허용, cover 인식 우선)
+    combined = f"{full_text.rstrip()}\n\n{table_block.strip()}"
+    return normalize_ocr_text(combined, use_fullwidth=True)
