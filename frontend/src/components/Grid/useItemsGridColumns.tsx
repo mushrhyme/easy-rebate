@@ -61,6 +61,13 @@ const CELL_PADDING_V = 12
 const ROW_HEIGHT_BUFFER = 8
 const MIN_ROW_HEIGHT = 36
 const MAX_CHARS_PER_LINE = 8
+const FORM_AMOUNT_LAYOUT: Record<string, { a1: string; a2: string; final: string }> = {
+  '1': { a1: '金額', a2: '金額2', final: '最終金額' }, // form01
+  '2': { a1: '金額', a2: '金額2', final: '最終金額' }, // form02
+  '3': { a1: '請求金額', a2: '請求金額2', final: '最終請求金額' }, // form03
+  '4': { a1: '金額', a2: '金額2', final: '最終金額' }, // form04
+  '5': { a1: '請求額', a2: '請求額2', final: '最終請求額' }, // form05
+}
 
 export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
   columns: Column<GridRow>[]
@@ -132,11 +139,11 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         'second_review_reviewed_by',
       ])
       orderedKeys = [...orderedFromApi, ...extraKeys].filter((k) => !reviewHiddenKeys.has(k))
-      // 양식 02: 金額 → 金額2 → 最終金額（金額2 컬럼은 金額 があれば常に表示）
-      if (formTypeNorm === '2' && keysInDb.has('金額')) {
-        const A1 = '金額'
-        const A2 = '金額2'
-        const FN = '最終金額'
+      const amountLayout = FORM_AMOUNT_LAYOUT[formTypeNorm] // {a1,a2,final} | undefined
+      if (amountLayout && keysInDb.has(amountLayout.a1)) {
+        const A1 = amountLayout.a1
+        const A2 = amountLayout.a2
+        const FN = amountLayout.final
         const rest = orderedKeys.filter((k) => k !== A1 && k !== A2 && k !== FN)
         const oldIdx = orderedKeys.indexOf(A1)
         if (oldIdx >= 0) {
@@ -494,13 +501,15 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))
         if (isComplexType) continue
-        if (key === '最終金額') {
+        const amountLayout = FORM_AMOUNT_LAYOUT[formTypeNorm]
+        const isFinalAmountKey = amountLayout != null && key === amountLayout.final
+        if (isFinalAmountKey) {
           const dataBasedWidth = calculateColumnWidth(key, key)
           const scrollEdge = applyScrollEdgeToNextFlex
           if (scrollEdge) applyScrollEdgeToNextFlex = false
           cols.push({
             key,
-            name: '最終金額',
+            name: key,
             width: dataBasedWidth,
             minWidth: Math.max(dataBasedWidth, 100),
             resizable: true,
@@ -509,9 +518,9 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             renderCell: ({ row }) => {
               const v = row[key]
               let n = parseCellNum(v)
-              if (n == null && formTypeNorm === '2') {
-                const r1 = row['金額']
-                const r2 = row['金額2']
+              if (n == null && amountLayout) {
+                const r1 = row[amountLayout.a1]
+                const r2 = row[amountLayout.a2]
                 const hasRaw =
                   (r1 != null && String(r1).trim() !== '') || (r2 != null && String(r2).trim() !== '')
                 const a1 = parseCellNum(r1)

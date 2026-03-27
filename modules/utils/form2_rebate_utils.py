@@ -1,11 +1,9 @@
 """
-양식지 2번 전용 후처리 유틸
+양식지 조건/금액 2컬럼 + 최종합산 후처리 유틸.
 
-- 対象: 양식지 2번 (form_type == "02")
-- 全行: 最終金額 = 金額 + 金額2（金額2 が null/空/欠損は 0。金額・金額2は上書きしない）
-- 旧パイプラインで 金額 に合算されていたデータは、元の分割は復元できない（再取込・手修正が必要）
-
-page_results 구조: RAG 파서와 동일, 각 페이지 {"items": [...]} 형태.
+- 정책: 저장은 null 유지, 계산 시 null/빈값은 0으로 간주
+- 대상: 01/02/03/04/05 (유형별 키 매핑으로 처리)
+- 양식 02는 기존 병합/분리 로직 유지
 """
 
 import unicodedata
@@ -20,6 +18,45 @@ CONDITION2_KEY = "条件2"
 CALC_CONDITION_KEY = "計算条件（適用人数）"
 QUANTITY_CONDITION_TOKEN = "数量条件"
 TOTAL_QTY_KEY = "取引数量計"
+
+
+FORM_DUAL_KEY_MAP = {
+    "1": {
+        "condition1": "条件",
+        "condition2": "条件2",
+        "amount1": "金額",
+        "amount2": "金額2",
+        "final_amount": "最終金額",
+    },
+    "2": {
+        "condition1": "条件",
+        "condition2": "条件2",
+        "amount1": "金額",
+        "amount2": "金額2",
+        "final_amount": "最終金額",
+    },
+    "3": {
+        "condition1": "条件",
+        "condition2": "条件2",
+        "amount1": "請求金額",
+        "amount2": "請求金額2",
+        "final_amount": "最終請求金額",
+    },
+    "4": {
+        "condition1": "未収条件",
+        "condition2": "未収条件2",
+        "amount1": "金額",
+        "amount2": "金額2",
+        "final_amount": "最終金額",
+    },
+    "5": {
+        "condition1": "個別条件",
+        "condition2": "個別条件2",
+        "amount1": "請求額",
+        "amount2": "請求額2",
+        "final_amount": "最終請求額",
+    },
+}
 
 
 def _parse_amount(value: Any) -> float:
@@ -51,6 +88,10 @@ def _norm_text(value: Any) -> str:
     return s
 
 
+def _is_blank_like(value: Any) -> bool:
+    return _norm_text(value) == ""  # 예: None/"null"/"" -> True
+
+
 def _extract_number_tokens(value: Any) -> List[str]:
     """
     문자열에서 숫자 토큰 추출.
@@ -79,6 +120,30 @@ def _split_dual_values_in_row(item: Dict[str, Any]) -> None:
         if len(condition_tokens) >= 2:
             item[CONDITION_KEY] = condition_tokens[0]    # 예: "126.00"
             item[CONDITION2_KEY] = condition_tokens[1]   # 예: "29.00"
+
+
+def _ensure_dual_keys_and_final(item: Dict[str, Any], form_type: Optional[str]) -> None:
+    """유형별 ② 필드 기본값 보정(null) + 최종합산 계산."""
+    if form_type is None or not isinstance(item, dict):
+        return
+    normalized_form_type = str(form_type).lstrip("0")
+    key_map = FORM_DUAL_KEY_MAP.get(normalized_form_type)
+    if not key_map:
+        return
+
+    c2_key = key_map["condition2"]  # str; 예: "条件2"
+    a1_key = key_map["amount1"]     # str; 예: "金額" / "請求金額"
+    a2_key = key_map["amount2"]     # str; 예: "金額2" / "請求金額2"
+    final_key = key_map["final_amount"]  # str; 예: "最終金額"
+
+    if c2_key not in item or _is_blank_like(item.get(c2_key)):
+        item[c2_key] = None  # JSON null 유지
+    if a2_key not in item or _is_blank_like(item.get(a2_key)):
+        item[a2_key] = None  # JSON null 유지
+
+    a1 = _parse_amount(item.get(a1_key))
+    a2 = _parse_amount(item.get(a2_key))
+    item[final_key] = _format_amount(a1 + a2)  # 계산시 null은 0으로 처리
 
 
 def _is_non_quantity_condition_row(item: Dict[str, Any]) -> bool:
@@ -160,19 +225,15 @@ def apply_form2_final_amount_row(item: Dict[str, Any], form_type: Optional[str])
 
     DB 조회 응답·저장·파싱 후처리에서 공통 사용.
     """
-    if form_type is None:
+    if form_type is None or not isinstance(item, dict):
         return
-    if str(form_type).lstrip("0") != "2":
-        return
-    if not isinstance(item, dict):
-        return
+    normalized_form_type = str(form_type).lstrip("0")
 
-    _split_dual_values_in_row(item)  # 예: 金額="604,800 139,200" -> 金額/金額2 분리
-    _fill_missing_amount2_from_qty_and_condition2(item)  # 예: 金額2=None, 条件2=29.00 -> 取引数量計*条件2
+    if normalized_form_type == "2":
+        _split_dual_values_in_row(item)  # 예: "604,800 139,200" -> 金額/金額2
+        _fill_missing_amount2_from_qty_and_condition2(item)  # 예: 840 * 29.00 -> "24360"
 
-    a1 = _parse_amount(item.get(AMOUNT_KEY))
-    a2 = _parse_amount(item.get(AMOUNT2_KEY))
-    item[FINAL_AMOUNT_KEY] = _format_amount(a1 + a2)  # 예: 100.2 + 0.3 -> "100.5"
+    _ensure_dual_keys_and_final(item, form_type)  # 01~05 공통
 
 
 def normalize_form2_rebate_conditions(
@@ -193,7 +254,7 @@ def normalize_form2_rebate_conditions(
         return page_results
 
     normalized_form_type = str(form_type).lstrip("0")
-    if normalized_form_type != "2":
+    if normalized_form_type not in {"1", "2", "3", "4", "5"}:
         return page_results
 
     if not page_results:
@@ -204,9 +265,12 @@ def normalize_form2_rebate_conditions(
         if not isinstance(items, list):
             continue
 
-        # 규칙: '数量条件'이 아닌 행은 직전 행에 병합 (예: 納価条件, 金額条件 등)
-        merged_items = _merge_form2_rows_by_condition(items)
-        page["items"] = merged_items
+        if normalized_form_type == "2":
+            # 규칙: '数量条件'이 아닌 행은 직전 행에 병합 (예: 納価条件, 金額条件 등)
+            merged_items = _merge_form2_rows_by_condition(items)
+            page["items"] = merged_items
+        else:
+            merged_items = items
 
         for item in merged_items:
             if not isinstance(item, dict):
