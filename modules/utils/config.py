@@ -70,7 +70,7 @@ class RAGConfig:
     max_parallel_workers: int = 3  # Azure OCR 1단계 병렬 수 (1=순차, 3~5 권장. 업스테이지와 달리 동시 호출 가능)
     rag_llm_parallel_workers: int = 5  # RAG+LLM 2단계 병렬 워커 수
     ocr_request_delay: float = 2.0  # (미사용) Upstage 등 호출 간격용 예비
-    rag_prompt_file: str = "rag_with_example_v9.txt"
+    rag_prompt_file: str = "rag_with_example_v11.txt"
     gemini_prompt_file: str = "prompt_v5.txt"
 
 
@@ -83,7 +83,6 @@ def get_extraction_method_for_upload_channel(upload_channel: str = None) -> str:
     if upload_channel and rag_config.upload_channel_extraction_method:
         return rag_config.upload_channel_extraction_method.get(upload_channel, "azure")
     return "azure"
-
 
 def folder_name_to_upload_channel(folder_name: str) -> str:
     """

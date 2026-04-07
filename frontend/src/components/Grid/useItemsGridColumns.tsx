@@ -3,11 +3,11 @@
  */
 import { useMemo } from 'react'
 import type { Column } from 'react-data-grid'
-import { CONDITION_AMOUNT_KEYS } from './types'
 import { parseCellNum } from './utils'
 import type { GridRow } from './types'
 import { ReviewCheckboxCell } from './ReviewCheckboxCell'
 import { ActionCellWithMenu } from './ActionCellWithMenu'
+import { calcNetByForm } from './netCalc'
 
 /** API items 요소 형태 (item_data, item_id 등) */
 interface ApiItem {
@@ -324,7 +324,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
           },
         })
 
-        const conditionAmountKey = CONDITION_AMOUNT_KEYS.find((k) => orderedKeys.includes(k)) ?? null // NET 셀 계산에 사용; 열 생략 시에도 row 데이터는 유지
         cols.push({
           key: '受注先',
           name: '受注先',
@@ -405,41 +404,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             resizable: true,
             editable: false,
             renderCell: ({ row }) => {
-              const shikiriNum = parseCellNum(row['仕切'])
-              if (shikiriNum == null) return <span>—</span>
-              const parseYenValue = (v: unknown): number | null => {
-                const normalized = typeof v === 'string' ? v.replace(/[円¥￥]/g, '').trim() : v // string; 예: "1,280円" -> "1,280"
-                return parseCellNum(normalized)
-              }
-
-              // 02/03: NET = 仕切 - (条件 + 条件2)
-              if (formTypeNorm === '2' || formTypeNorm === '3') {
-                const cond1 = parseYenValue(row['条件'])
-                const cond2 = parseYenValue(row['条件2'])
-                if (cond1 == null) return <span>—</span>
-                const condSum = cond1 + (cond2 ?? 0) // number; 예: 126 + 29 = 155
-                return <span>{(shikiriNum - condSum).toLocaleString()}</span>
-              }
-
-              // 4번(form_type=04)만 未収条件+未収条件2 (01~03·05에서 키만 섞이면 NET이 틀어짐)
-              if (formTypeNorm === '4') {
-                const misu1 = parseCellNum(row['未収条件'])
-                const misu2 = parseCellNum(row['未収条件2'])
-                if (misu1 == null) return <span>—</span>
-                const condNum = misu1 + (misu2 ?? 0)
-                return <span>{(shikiriNum - condNum).toLocaleString()}</span>
-              }
-
-              const condNum = conditionAmountKey != null ? parseCellNum(row[conditionAmountKey]) : null
-              if (condNum == null) return <span>—</span>
-
-              const unitRaw = String(row['数量単位'] ?? '').trim()
-              const unitNorm = unitRaw.replace('\uFF23', 'C').replace('\uFF33', 'S').toUpperCase() // 全角ＣＳ→CS
-              const irisuNum = parseCellNum(row['入数'])
-              const condForNet =
-                unitNorm === 'CS' && conditionAmountKey === '条件' && irisuNum != null && irisuNum > 0 ? condNum / irisuNum : condNum
-
-              return <span>{(shikiriNum - condForNet).toLocaleString()}</span>
+              const { net } = calcNetByForm(row, formTypeNorm) // {net:number|null}; 예: {net: 184.5}
+              return <span>{net != null ? net.toLocaleString() : '—'}</span>
             },
           })
         }

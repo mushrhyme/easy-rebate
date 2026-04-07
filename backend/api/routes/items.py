@@ -12,6 +12,7 @@ from database.db_manager import _similarity_difflib
 from modules.utils.master_display_enrich import enrich_master_fields_from_codes
 from modules.utils.retail_resolve import resolve_retail_dist, extract_office_name_from_issuer
 from modules.utils.form2_rebate_utils import apply_form2_final_amount_row, merge_item_data_keys_with_form_dual
+from modules.utils.net_calc_utils import calc_net_by_form
 from backend.api.routes.websocket import manager
 from backend.core.auth import get_current_user
 from backend.unit_price_lookup import resolve_product_and_prices
@@ -718,6 +719,8 @@ class ItemResponse(BaseModel):
     frozen_retail_code: Optional[str] = None   # 소매처코드
     frozen_dist_code: Optional[str] = None     # 판매처코드
     frozen_product_code: Optional[str] = None  # 商品コード(단가리스트 매칭)
+    calculated_net: Optional[float] = None     # number|null; 예: 184.5
+    calculated_net_source: Optional[str] = None  # string|null; 예: "cond" | "tanka" | "mishu"
 
 
 @router.get("/{pdf_filename}/pages/{page_number}")
@@ -875,6 +878,8 @@ async def get_page_items(
             # 양식 02: DB에 最終金額 없어도 조회 시 합산값 채움（그리드 · SAP）
             apply_form2_final_amount_row(item_data, form_type)
 
+            net_calc = calc_net_by_form(item_data, form_type)  # dict; 예: {"net":184.5,"base":155,"source":"cond"}
+
             item_list.append(
                 ItemResponse(
                     item_id=item['item_id'],
@@ -887,6 +892,8 @@ async def get_page_items(
                     frozen_retail_code=frozen_retail_code,
                     frozen_dist_code=frozen_dist_code,
                     frozen_product_code=frozen_product_code,
+                    calculated_net=net_calc.get("net"),
+                    calculated_net_source=net_calc.get("source"),
                 )
             )
         if item_list:

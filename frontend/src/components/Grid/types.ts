@@ -16,7 +16,7 @@ export interface ItemsGridRdgProps {
 }
 
 export interface ItemsGridRdgHandle {
-  save: () => void
+  save: () => Promise<number>
   /** 편집 중인(저장 안 된) 행이 있으면 true. 학습 요청 전 확인용 */
   hasUnsavedEdits: () => boolean
   checkAllFirst: () => Promise<void>

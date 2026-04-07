@@ -17,9 +17,9 @@ import {
   type ItemsGridRdgHandle,
   type BulkCheckState,
   type GridRow,
-  CONDITION_AMOUNT_KEYS,
 } from './types'
 import { parseCellNum } from './utils'
+import { calcNetByForm } from './netCalc'
 import { ComplexFieldDetail } from './ComplexFieldDetail'
 import { UnitPriceMatchModal } from './UnitPriceMatchModal'
 import { AttachmentModal } from './AttachmentModal'
@@ -1100,7 +1100,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   }, [pdfFilename, pageNumber])
 
   /** 편집 중인 모든 행 저장. 편집 중인 행이 없어도 タイプ가 null/빈 행은 전부 '条件'로 보정해 저장 (저장 버튼 / Ctrl+S 공통) */
-  const saveAllEditingRows = useCallback(async () => {
+  const saveAllEditingRows = useCallback(async (): Promise<number> => {
     const editingIds = Array.from(editingItemIdsRef.current.values()).filter(
       (id): id is number => typeof id === 'number'
     )
@@ -1118,14 +1118,14 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
           return next
         })
       }
-      return
+      return succeeded.length
     }
 
     // 편집 중인 행 없음: タイプ가 null/빈 행만 条件로 보정해 저장 (그리드에서 수정 후 저장 시 DB 반영)
     const rowsNeedingType = currentRows.filter(
       (r) => r['タイプ'] == null || String((r['タイプ'] as string) ?? '').trim() === ''
     )
-    if (rowsNeedingType.length === 0 || !sessionId) return
+    if (rowsNeedingType.length === 0 || !sessionId) return 0
     const results = await Promise.allSettled(
       rowsNeedingType.map(async (rowData) => {
         const it = items.find((i: { item_id: number }) => i.item_id === rowData.item_id)
@@ -1163,6 +1163,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     if (succeeded > 0) {
       queryClient.invalidateQueries({ queryKey: ['items', pdfFilename, pageNumber] })
     }
+    return succeeded
   }, [handleSaveAndUnlock, items, sessionId, updateItem, queryClient, pdfFilename, pageNumber])
 
   // Ctrl+S / Cmd+S 로 편집 중인 모든 행 저장
@@ -1193,7 +1194,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   // 부모에서 저장·일괄 체크 호출용 노출 (1회 fetch + 병렬 PATCH로 한 번에 처리)
   useImperativeHandle(ref, () => ({
     save() {
-      void saveAllEditingRows()
+      return saveAllEditingRows()
     },
     hasUnsavedEdits() {
       return editingItemIdsRef.current.size > 0
@@ -1507,51 +1508,13 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
               if (row.first_review_checked || row.second_review_checked) {
                 classes = classes ? `${classes} row-checked` : 'row-checked'
               }
-              // NET < 本部長 이면 행 전체 노란색 음영 (条件金額: 単価|条件|対象数量又は金額 중 첫 유효값)
+              // NET < 本部長 이면 행 전체 노란색 음영 (양식별 NET 공통 규칙 사용)
               const shikiriNum = parseCellNum(row['仕切'])
               const honbuchoNum = parseCellNum(row['本部長'])
-              let condNum = CONDITION_AMOUNT_KEYS.map((k) => parseCellNum(row[k])).find((n) => n != null) ?? null
-              const parseYenValue = (v: unknown): number | null => {
-                const normalized = typeof v === 'string' ? v.replace(/[円¥￥]/g, '').trim() : v // string; 예: "3,700円" -> "3,700"
-                return parseCellNum(normalized)
-              }
               const rowFormTypeNorm = String(data?.form_type ?? _formType ?? '').trim().replace(/^0+/, '')
+              const { net } = calcNetByForm(row, rowFormTypeNorm) // {net:number|null}; 예: {net: 184.5}
 
-              // 02/03: NET = 仕切 - (条件 + 条件2)
-              if (rowFormTypeNorm === '2' || rowFormTypeNorm === '3') {
-                const cond1 = parseYenValue(row['条件'])
-                const cond2 = parseYenValue(row['条件2'])
-                condNum = cond1 != null ? cond1 + (cond2 ?? 0) : null // number|null; 예: 126 + 29
-              }
-              
-              // FINET 01 + 数量単位=CS:
-              // 仕切・本部長은 unit_price.csv 원본(단가리스트) 그대로 유지.
-              // 따라서 NET/비교는 条件 값을 入数으로 나눈 후 단가 기준으로 계산.
-              // (예: NET = 仕切 - (条件 / 入数))
-              const unitRaw = String(row['数量単位'] ?? '').trim()
-              const unitNorm = unitRaw.replace('\uFF23', 'C').replace('\uFF33', 'S').toUpperCase() // 全角ＣＳ→CS
-              const irisuNum = parseCellNum(row['入数'])
-              const isCsTarget = String(data?.form_type ?? _formType ?? '').trim() === '01' &&
-                String(data?.upload_channel ?? '').trim() === 'finet' &&
-                unitNorm === 'CS' &&
-                irisuNum != null &&
-                irisuNum > 0 &&
-                '条件' in row
-              
-              if (isCsTarget) {
-                const condRaw = parseCellNum(row['条件'])
-                if (condRaw != null) condNum = condRaw / irisuNum
-              }
-
-              // 4번(form_type=04)만 未収条件 계열 (01은 条件 기준·키 혼재 시 오경고 방지)
-              if (rowFormTypeNorm === '4') {
-                const misu1 = parseCellNum(row['未収条件'])
-                const misu2 = parseCellNum(row['未収条件2'])
-                condNum = misu1 != null ? misu1 + (misu2 ?? 0) : null
-              }
-
-              if (condNum != null && shikiriNum != null && honbuchoNum != null) {
-                const net = shikiriNum - condNum
+              if (net != null && shikiriNum != null && honbuchoNum != null) {
                 if (net < honbuchoNum) {
                   classes = classes ? `${classes} row-net-warning` : 'row-net-warning'
                 }

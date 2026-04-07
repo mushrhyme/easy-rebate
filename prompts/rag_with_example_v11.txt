@@ -1,0 +1,290 @@
+REFERENCE_OCR (OCR example for structural reference):
+{example_ocr}
+
+REFERENCE_JSON (correct answer structure example):
+{example_answer_str}
+
+TARGET_OCR (actual OCR text to process):
+{ocr_text}
+
+
+MISSION
+
+Extract TARGET_OCR into one JSON object.
+
+The output must replicate the structure AND transformation logic of REFERENCE_JSON.
+
+If TARGET_OCR is identical or structurally equivalent to REFERENCE_OCR,
+the output MUST match REFERENCE_JSON (including row grouping, merging, and field mapping).
+
+
+ABSOLUTE OVERRIDE RULE (CRITICAL)
+
+If TARGET_OCR is identical or structurally equivalent to REFERENCE_OCR:
+- REFERENCE_JSON is the single source of truth
+- output MUST match REFERENCE_JSON exactly
+- ignore OCR row-by-row reconstruction
+- ignore row fidelity constraints
+- ignore independent regrouping logic
+
+This rule overrides all other extraction, grouping, and normalization rules.
+
+
+IMPORTANT PRINCIPLES
+
+- Values should primarily come from TARGET_OCR
+- HOWEVER, REFERENCE_JSON defines:
+  - row grouping logic
+  - field mapping logic
+  - merging logic
+  - transformation patterns
+
+- If a value cannot be directly derived from TARGET_OCR but exists in REFERENCE_JSON transformation pattern,
+  follow REFERENCE_JSON behavior
+
+- EXCEPT classification fields (タイプ, page_role)
+
+タイプ:
+- must be inferred using REFERENCE_JSON patterns
+- must NOT rely on literal matching
+- must NOT be null if a matching pattern exists
+- Typical labels include: 条件, 販促費8%, 販促費10%, CF8%, CF10%, 非課税, 消費税, ロットアウト
+- follow REFERENCE_JSON mapping behavior
+
+
+FIELD NAME IMMUTABILITY (CRITICAL)
+
+All keys must match REFERENCE_JSON EXACTLY.
+
+Do NOT:
+- rename keys
+- translate keys
+- mix languages
+- create variations
+
+If uncertain → use null with exact key
+
+
+STRUCTURE RULES (CRITICAL)
+
+- Output must follow the structure of REFERENCE_JSON
+- All keys and nested objects are mandatory unless explicitly removed by page_role rules
+
+CRITICAL:
+- Never collapse any object into a string
+- Always preserve nested structure
+- Missing values → null (not omission)
+
+
+NATIVE JSON TYPE RULE (CRITICAL)
+
+For every field in REFERENCE_JSON, preserve the same JSON data type.
+
+- If a field is an object → it must remain an object
+- If a field is an array → it must remain an array
+- If a field is a scalar → it must remain a scalar
+
+Never:
+- serialize objects into strings
+- serialize arrays into strings
+- flatten nested objects into plain text
+
+
+TYPE ENFORCEMENT RULE (CRITICAL)
+
+Do not change JSON data types under any circumstance.
+
+
+GENERATION PROCEDURE (CRITICAL)
+
+1. Determine page_role FIRST
+2. Apply page-role-specific structure rules
+3. Clone REFERENCE_JSON structure
+4. Keep all keys identical
+5. Interpret TARGET_OCR using REFERENCE_OCR column structure
+6. Apply REFERENCE_JSON transformation logic
+   - row grouping
+   - row merging
+   - multi-condition mapping
+7. Extract / derive values
+8. Infer タイプ
+
+
+STRUCTURE EXCEPTION RULE (ITEMS) (CRITICAL)
+
+items is controlled ONLY by page_role.
+
+If page_role = "detail":
+- items MUST exist
+- items MUST be an array
+- if no rows exist → "items": []
+
+If page_role = "cover", "summary", or "reply":
+- omit the items key entirely
+
+
+PAGE ROLE RULES
+
+"detail" → repeating row items  
+"summary" → totals / tax sections  
+"cover" → company info 중심  
+"reply" → fallback
+
+
+COVER PAGE RULE (CRITICAL)
+
+If page_role = "cover":
+
+- prioritize extracting:
+  recipient, issuer, target_period, closing_date, totals
+
+- items must NOT exist
+
+- NEVER summarize structured fields into plain text
+
+- preserve full object structure even if partially null
+
+
+COMPANY BLOCK MAPPING RULE (CRITICAL)
+
+Before extracting recipient and issuer, group OCR lines into semantic company blocks.
+
+Recipient:
+- the block associated with the company line followed by "御中"
+
+Issuer:
+- the block associated with "担当部署", "電話", "FAX", or "振込先銀行"
+
+Field assignment must be block-consistent
+
+
+TOTALS STRUCTURE RULE (CRITICAL)
+
+totals must preserve the nested object hierarchy shown in REFERENCE_JSON.
+
+Never flatten totals into a string.
+
+
+ROW INTERPRETATION RULE (CRITICAL)
+
+- Do NOT treat each OCR line as one item by default
+- Row grouping MUST follow REFERENCE_JSON behavior
+- The number of output items MUST follow REFERENCE_JSON when TARGET_OCR matches or is structurally equivalent to REFERENCE_OCR
+
+- Multiple OCR rows MUST be merged into ONE item
+  when REFERENCE_JSON represents them as one item
+
+- Rows with the same JANコード or 商品コード MUST be grouped together first
+- Then map grouped OCR rows into the corresponding REFERENCE_JSON item structure
+
+- When grouped rows contain multiple rebate conditions, map them into:
+  - 計算条件（適用人数）
+  - 条件
+  - 金額
+  - 条件2
+  - 金額2
+
+- This merge behavior is mandatory, not optional
+
+
+ROW VALIDITY RULE
+
+Create item ONLY if a valid product identifier exists
+(JANコード or 商品コード)
+
+Otherwise:
+- attach to related row if part of same group
+
+This rule does NOT apply when ABSOLUTE OVERRIDE RULE is triggered.
+
+
+REFERENCE_JSON ROW RULE (CRITICAL)
+
+REFERENCE_JSON defines the expected row structure and grouping behavior.
+
+
+COLUMN ALIGNMENT RULE
+
+Use REFERENCE_OCR to understand column structure.
+
+In TARGET_OCR:
+- extract by relative column alignment
+- ignore spacing inconsistencies
+
+
+VALUE RULES
+
+If exists → extract  
+If not → null  
+If multiple values in one cell → split using REFERENCE_JSON logic
+
+This rule does NOT apply when ABSOLUTE OVERRIDE RULE is triggered.
+
+
+VALUE FORMAT RULE (CRITICAL)
+
+Format must follow REFERENCE_JSON (not raw OCR):
+
+- remove units if reference excludes them
+- preserve formatting style
+
+
+AMOUNT NORMALIZATION RULE
+
+"1:500" → "1500"
+
+
+OCR SPACE NUMBER RULE
+
+For numeric fields:
+
+"71 00" → "71.00"  
+"1 42 00" → "142.00"
+
+Do NOT apply to ID/code fields
+
+
+NUMBER RULE
+
+Do NOT guess values  
+Prefer OCR or REFERENCE_JSON mapping logic
+
+This rule does NOT apply when ABSOLUTE OVERRIDE RULE is triggered.
+
+
+備考 / 条件備考 RULE
+
+- normalize whitespace → single space  
+- preserve both fields if exist
+
+
+DITTO RULE
+
+〃 ″ " ' // ／ 1/ / → null
+
+
+OCR BLOCK INTERPRETATION RULE
+
+- interpret OCR in semantic blocks
+- not line-by-line extraction
+
+This rule does NOT apply when ABSOLUTE OVERRIDE RULE is triggered.
+
+
+FAIL-SAFE RULE
+
+If uncertain:
+- prioritize REFERENCE_JSON structure
+- then OCR fidelity
+- use null if still unclear
+
+
+JSON OUTPUT RULES
+
+Return exactly ONE JSON object
+
+Do NOT include:
+- explanations
+- comments
+- markdown
+- extra text

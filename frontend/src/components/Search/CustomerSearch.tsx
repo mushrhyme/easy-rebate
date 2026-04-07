@@ -1020,7 +1020,14 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
             <button
               type="button"
               className="nav-action-btn nav-save-btn"
-              onClick={() => gridRef.current?.save?.()}
+              onClick={async () => {
+                const saved = (await gridRef.current?.save?.()) ?? 0 // number; 예: 3(저장된 행 수)
+                if (saved > 0) {
+                  showToast(`保存が完了しました。（${saved}件）`, 'success')
+                } else {
+                  showToast('保存が完了しました。', 'success')
+                }
+              }}
               title="編集中の行を保存（Ctrl+Sと同じ）"
             >
               保存
@@ -1076,13 +1083,13 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                     const sid = localStorage.getItem('sessionId')
                     if (!sid) {
                       showToast(
-                        '세션이 만료되었거나 로그인이 필요합니다. 페이지를 새로고침한 뒤 다시 로그인해 주세요.',
+                        'セッションが無効です。ページを再読み込みして再度ログインしてください。',
                         'error'
                       )
                       return
                     }
                     if (gridRef.current?.hasUnsavedEdits?.()) {
-                      alert('저장하지 않은 행이 있습니다. 저장 후 학습 요청해 주세요.')
+                      alert('未保存の行があります。保存後に学習リクエストを実行してください。')
                       return
                     }
                     try {
@@ -1095,12 +1102,12 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                       queryClient.invalidateQueries({ queryKey: ['documents', 'in-vector-index'] })
                       queryClient.invalidateQueries({ queryKey: ['rag-admin', 'status'] })
                       showToast(
-                        '이 페이지를 정답지로 반영했습니다. 현황 탭 → RAG(ベクターDB) 섹션의 「全体解答」「使用中解答」 수가 증가합니다.',
+                        'このページを学習データとして反映しました。ダッシュボードのRAG（ベクターDB）件数が更新されます。',
                         'success'
                       )
                       if (res.rag_rebuilt) {
                         showToast(
-                          `제품/판매처·소매처 벡터 DB가 생성되었습니다. (제품 ${res.rag_rebuilt.product}건, 판매처·소매처 ${res.rag_rebuilt.retail}건)`,
+                          `製品/取引先ベクターDBを再構築しました。（製品 ${res.rag_rebuilt.product}件、取引先 ${res.rag_rebuilt.retail}件）`,
                           'success'
                         )
                       }
@@ -1108,7 +1115,7 @@ export const CustomerSearch = ({ onNavigateToAnswerKey, documentToOpen, onConsum
                       const msg = e && typeof e === 'object' && 'response' in e
                         ? (e as { response?: { data?: { detail?: string } } }).response?.data?.detail
                         : (e as Error)?.message
-                      showToast(msg ? `학습 요청 실패: ${msg}` : '학습 요청에 실패했습니다.', 'error')
+                      showToast(msg ? `学習リクエストに失敗しました: ${msg}` : '学習リクエストに失敗しました。', 'error')
                     }
                   }}
                   title="該当ページをベクターDBに反映"
