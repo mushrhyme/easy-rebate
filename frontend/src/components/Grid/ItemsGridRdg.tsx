@@ -24,6 +24,7 @@ import { ComplexFieldDetail } from './ComplexFieldDetail'
 import { UnitPriceMatchModal } from './UnitPriceMatchModal'
 import { AttachmentModal } from './AttachmentModal'
 import { useItemsGridColumns } from './useItemsGridColumns'
+import { useFormTypesConfig } from '@/hooks/useFormTypesConfig'
 import {
   ReviewGridColumnOrderStorage,
   applyFlexOrderToColumns,
@@ -44,6 +45,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
 }, ref) {
   const { data, isLoading, error } = useItems(pdfFilename, pageNumber)
   const { data: pageMetaData, isLoading: pageMetaLoading, error: pageMetaError } = usePageMeta(pdfFilename, pageNumber) // page_meta 조회
+  const { config: formTypesConfig } = useFormTypesConfig()
 
   // 디버깅: page_meta 데이터 확인
   useEffect(() => {
@@ -264,6 +266,19 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
   useEffect(() => {
     editingItemIdsRef.current = editingItemIds
   }, [editingItemIds])
+
+  // 브라우저 닫기/새로고침 시 미저장 편집 경고
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (editingItemIdsRef.current.size > 0) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [])
 
   // items가 변경되면 rows 업데이트 (체크박스 상태는 항상 서버 값으로 동기화)
   useEffect(() => {
@@ -750,6 +765,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
     formType: data?.form_type ?? _formType ?? null,
     reviewHidePriceStrip,
     reviewHideCodeStrip,
+    formTypesConfig,
   })
 
   /** 비로그인 시 드래그 후 즉시 반영용 (localStorage와 동기) */
@@ -1397,6 +1413,7 @@ export const ItemsGridRdg = forwardRef<ItemsGridRdgHandle, ItemsGridRdgProps>(fu
         onSelectUnitPrice={handleUnitPriceSelect}
         onSelectRetail={handleRetailSelect}
         retailSaving={retailSaving}
+        formTypesConfig={formTypesConfig}
       />
       {attachmentModalItemId !== null && (
         <AttachmentModal

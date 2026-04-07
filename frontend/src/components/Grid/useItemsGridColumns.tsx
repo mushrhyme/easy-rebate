@@ -1,5 +1,6 @@
 /**
- * 그리드 컬럼 정의 + 행 높이 계산. ItemsGridRdg에서 분리.
+ * 그리드 컬럼 ���의 + 행 높이 계산. ItemsGridRdg에서 분리.
+ * 양식별 설정은 config/form_types.json 기반 (FormTypesConfig).
  */
 import { useMemo } from 'react'
 import type { Column } from 'react-data-grid'
@@ -8,6 +9,8 @@ import type { GridRow } from './types'
 import { ReviewCheckboxCell } from './ReviewCheckboxCell'
 import { ActionCellWithMenu } from './ActionCellWithMenu'
 import { calcNetByForm } from './netCalc'
+import type { FormTypesConfig } from '@/api/client'
+import { getAmountLayout } from '@/hooks/useFormTypesConfig'
 
 /** API items 요소 형태 (item_data, item_id 등) */
 interface ApiItem {
@@ -48,6 +51,8 @@ export interface UseItemsGridColumnsParams {
   reviewHidePriceStrip?: boolean
   /** detail: true면 코드 3열 비표시(접기) — 첫 추출 열에 스크롤 경계 스타일 */
   reviewHideCodeStrip?: boolean
+  /** config/form_types.json 기반 양식 설정 */
+  formTypesConfig?: FormTypesConfig | null
 }
 
 const CHAR_PX = 11
@@ -61,13 +66,7 @@ const CELL_PADDING_V = 12
 const ROW_HEIGHT_BUFFER = 8
 const MIN_ROW_HEIGHT = 36
 const MAX_CHARS_PER_LINE = 8
-const FORM_AMOUNT_LAYOUT: Record<string, { a1: string; a2: string; final: string }> = {
-  '1': { a1: '金額', a2: '金額2', final: '最終金額' }, // form01
-  '2': { a1: '金額', a2: '金額2', final: '最終金額' }, // form02
-  '3': { a1: '請求金額', a2: '請求金額2', final: '最終請求金額' }, // form03
-  '4': { a1: '金額', a2: '金額2', final: '最終金額' }, // form04
-  '5': { a1: '請求額', a2: '請求額2', final: '最終請求額' }, // form05
-}
+// FORM_AMOUNT_LAYOUT → config/form_types.json 기반으로 동적 로드 (getAmountLayout 사용)
 
 export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
   columns: Column<GridRow>[]
@@ -98,6 +97,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     formType = null,
     reviewHidePriceStrip = false,
     reviewHideCodeStrip = false,
+    formTypesConfig = null,
   } = params
 
   const hasItems = items.length > 0
@@ -106,7 +106,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
   const fz = (w: number, compactDelta = 6): number => Math.max(52, w - compactDelta)
 
   return useMemo(() => {
-    const formTypeNorm = String(formType ?? '').trim().replace(/^0+/, '')
     let orderedKeys: string[] = []
     if (hasItems) {
       const firstItem = items[0]
@@ -151,7 +150,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         'second_review_reviewed_by',
       ])
       orderedKeys = [...orderedFromApi, ...extraKeys].filter((k) => !reviewHiddenKeys.has(k))
-      const amountLayout = FORM_AMOUNT_LAYOUT[formTypeNorm] // {a1,a2,final} | undefined
+      const amountLayout = getAmountLayout(formTypesConfig, formType) // {a1,a2,final} | null
       if (amountLayout && keysInDb.has(amountLayout.a1)) {
         const A1 = amountLayout.a1
         const A2 = amountLayout.a2
@@ -404,6 +403,7 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             resizable: true,
             editable: false,
             renderCell: ({ row }) => {
+              const formTypeNorm = String(formType ?? '').trim().replace(/^0+/, '') // string; 예: "03" -> "3"
               const { net } = calcNetByForm(row, formTypeNorm) // {net:number|null}; 예: {net: 184.5}
               return <span>{net != null ? net.toLocaleString() : '—'}</span>
             },
@@ -474,8 +474,8 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
         const isComplexType =
           firstValue != null && (typeof firstValue === 'object' || Array.isArray(firstValue))
         if (isComplexType) continue
-        const amountLayout = FORM_AMOUNT_LAYOUT[formTypeNorm]
-        const isFinalAmountKey = amountLayout != null && key === amountLayout.final
+        const amtLayout = getAmountLayout(formTypesConfig, formType)
+        const isFinalAmountKey = amtLayout != null && key === amtLayout.final
         if (isFinalAmountKey) {
           const dataBasedWidth = calculateColumnWidth(key, key)
           cols.push({
@@ -488,9 +488,9 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
             renderCell: ({ row }) => {
               const v = row[key]
               let n = parseCellNum(v)
-              if (n == null && amountLayout) {
-                const r1 = row[amountLayout.a1]
-                const r2 = row[amountLayout.a2]
+              if (n == null && amtLayout) {
+                const r1 = row[amtLayout.a1]
+                const r2 = row[amtLayout.a2]
                 const hasRaw =
                   (r1 != null && String(r1).trim() !== '') || (r2 != null && String(r2).trim() !== '')
                 const a1 = parseCellNum(r1)
@@ -622,5 +622,6 @@ export function useItemsGridColumns(params: UseItemsGridColumnsParams): {
     formType,
     reviewHidePriceStrip,
     reviewHideCodeStrip,
+    formTypesConfig,
   ])
 }

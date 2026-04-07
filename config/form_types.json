@@ -1,0 +1,143 @@
+{
+  "01": {
+    "label": "条件① (FINET)",
+    "fields": {
+      "condition1": "条件",
+      "condition2": "条件2",
+      "amount1": "金額",
+      "amount2": "金額2",
+      "final_amount": "最終金額"
+    },
+    "net_calculation": {
+      "type": "dual_condition_sum",
+      "formula": "仕切 - (condition1 + condition2)",
+      "cs_divide_by_irisu": true,
+      "note": "CS일 때: 仕切 - ((条件 + 条件2) / 入数)"
+    },
+    "decimal_conversion": null,
+    "row_merging": null,
+    "sap_quantity": {
+      "type": "conditional",
+      "rules": [
+        { "if_field": "数量単位", "if_eq": "個", "then_field": "数量" },
+        { "if_field": "数量単位", "if_eq": "CS", "then_expr": "入数*数量" }
+      ]
+    },
+    "sap_extra_columns": {},
+    "use_customer_lookup": true,
+    "inference_keys": ["条件", "金額"],
+    "inference_priority": 5,
+    "is_default_fallback": true
+  },
+  "02": {
+    "label": "条件② (야마에)",
+    "fields": {
+      "condition1": "条件",
+      "condition2": "条件2",
+      "amount1": "金額",
+      "amount2": "金額2",
+      "final_amount": "最終金額"
+    },
+    "net_calculation": {
+      "type": "dual_condition_sum",
+      "formula": "仕切 - (condition1 + condition2)"
+    },
+    "decimal_conversion": null,
+    "row_merging": {
+      "enabled": true,
+      "merge_field": "計算条件（適用人数）",
+      "skip_token": "数量条件"
+    },
+    "sap_quantity": {
+      "type": "field",
+      "field": "取引数量計"
+    },
+    "sap_extra_columns": {},
+    "use_customer_lookup": false,
+    "inference_keys": ["計算条件（適用人数）"],
+    "inference_alt_keys": ["JANコード", "取引数量計"],
+    "inference_priority": 4
+  },
+  "03": {
+    "label": "条件③ (아사히)",
+    "fields": {
+      "condition1": "条件",
+      "condition2": "条件2",
+      "amount1": "請求金額",
+      "amount2": "請求金額2",
+      "final_amount": "最終請求金額"
+    },
+    "net_calculation": {
+      "type": "dual_condition_sum",
+      "formula": "仕切 - (condition1 + condition2)",
+      "fallback_field": "単価",
+      "fallback_formula": "仕切 - 単価 (条件이 없을 때)"
+    },
+    "decimal_conversion": {
+      "field": "未収条件",
+      "formula": "value / 100",
+      "guard_keys": ["条件％", "ケース", "バラ"]
+    },
+    "row_merging": null,
+    "sap_quantity": {
+      "type": "field",
+      "field": "バラ"
+    },
+    "sap_extra_columns": {
+      "P": "ケース",
+      "R": "バラ"
+    },
+    "use_customer_lookup": true,
+    "inference_keys": ["請求金額"],
+    "inference_priority": 3
+  },
+  "04": {
+    "label": "条件④ (악세스)",
+    "fields": {
+      "condition1": "未収条件",
+      "condition2": "未収条件2",
+      "amount1": "金額",
+      "amount2": "金額2",
+      "final_amount": "最終金額"
+    },
+    "net_calculation": {
+      "type": "dual_condition_sum",
+      "formula": "仕切 - (condition1 + condition2)"
+    },
+    "decimal_conversion": {
+      "field": "未収条件",
+      "formula": "value / 100",
+      "guard_keys": ["対象数量又は金額", "未収条件2", "入出荷支店"]
+    },
+    "row_merging": null,
+    "sap_quantity": {
+      "type": "field",
+      "field": "対象数量又は金額"
+    },
+    "sap_extra_columns": {},
+    "use_customer_lookup": false,
+    "inference_keys": ["未収条件"],
+    "inference_priority": 1
+  },
+  "05": {
+    "label": "条件⑤ (와쿠가와)",
+    "fields": {
+      "condition1": "個別条件",
+      "condition2": "個別条件2",
+      "amount1": "請求額",
+      "amount2": "請求額2",
+      "final_amount": "最終請求額"
+    },
+    "net_calculation": {
+      "type": "dual_condition_sum",
+      "formula": "仕切 - (condition1 + condition2)"
+    },
+    "decimal_conversion": null,
+    "row_merging": null,
+    "sap_quantity": null,
+    "sap_extra_columns": {},
+    "use_customer_lookup": false,
+    "inference_keys": ["個別条件", "景品数_ケース", "請求合計額", "売上数_ケース"],
+    "inference_priority": 2
+  }
+}

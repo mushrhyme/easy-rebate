@@ -4,7 +4,8 @@
  * 代表スーパー: 得意先コード照合（様式01・03・様式未確定・得意先名なし時）→ マスタ類似度と RAG を混在 → 販売ヒント・検索。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { searchApi } from '@/api/client'
+import { searchApi, type FormTypesConfig } from '@/api/client'
+import { getFormConfig } from '@/hooks/useFormTypesConfig'
 import type { GridRow } from './types'
 
 /** 代表スーパー最終入力（小売・販売コード分離。表示名は dist と得意先名） */
@@ -87,6 +88,8 @@ interface UnitPriceMatchModalProps {
   onSelectRetail: (match: RetailSelectPayload) => void | Promise<void>
   /** 代表スーパー確定保存中 */
   retailSaving?: boolean
+  /** config/form_types.json 양식 설정 */
+  formTypesConfig?: FormTypesConfig | null
 }
 
 function getCustomerName(row: GridRow | null): string {
@@ -101,33 +104,22 @@ function getCustomerCode(row: GridRow | null): string {
   return v != null ? String(v).trim() : ''
 }
 
-/** 様式01: 得意先コードと卸小売マスタ照合の対象 */
-function isFormType01(formType: string | null | undefined): boolean {
-  const s = (formType ?? '').trim()
-  if (!s) return false
-  return s === '01' || s === '1' || /^0*1$/.test(s)
-}
-
-/** 様式03（issuer.office による販売先すり合わせがバックエンドで有効なタイプ） */
-function isFormType03(formType: string | null | undefined): boolean {
-  const s = (formType ?? '').trim()
-  if (!s) return false
-  return s === '03' || s === '3' || /^0*3$/.test(s)
-}
-
 /**
  * 得意先コード→卸小売(domae) API を呼ぶか。
+ * config/form_types.json의 use_customer_lookup 기반.
  * - 様式未確定: 分類前でもコードでマッピングできるように試行
- * - 得意先名なし: 名義RAGが使えないためコードのみフォールバック（backend resolve_retail_dist と同趣旨）
- * - 様式01・03: 従来どおりコード照合の主対象
+ * - 得意先名なし: 名義RAGが使えないためコードのみフォールバック
+ * - use_customer_lookup=true: コード照合の主対象
  */
 function shouldUseDomaeCustomerCodeLookup(
   formType: string | null | undefined,
   hasCustomerName: boolean,
+  formTypesConfig?: FormTypesConfig | null,
 ): boolean {
   const ft = (formType ?? '').trim()
   if (!ft) return true
-  if (isFormType01(formType) || isFormType03(formType)) return true
+  const fc = getFormConfig(formTypesConfig ?? null, ft)
+  if (fc?.use_customer_lookup) return true
   if (!hasCustomerName) return true
   return false
 }
@@ -180,6 +172,7 @@ export function UnitPriceMatchModal({
   onSelectUnitPrice,
   onSelectRetail,
   retailSaving = false,
+  formTypesConfig = null,
 }: UnitPriceMatchModalProps) {
   const [activeTab, setActiveTab] = useState<TabId>('unit_price')
 
@@ -382,7 +375,7 @@ export function UnitPriceMatchModal({
 
     const hasCode = customerCode.length > 0
     const hasName = customerName.length > 0
-    const useDomaeCode = hasCode && shouldUseDomaeCustomerCodeLookup(formType, hasName)
+    const useDomaeCode = hasCode && shouldUseDomaeCustomerCodeLookup(formType, hasName, formTypesConfig)
 
     if (!hasCode && !hasName) {
       setByCode({ match: null, skippedReason: null, loading: false, error: null })

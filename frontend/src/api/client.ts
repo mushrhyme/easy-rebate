@@ -53,7 +53,44 @@ export const formTypesApi = {
     })
     return response.data
   },
+
+  /** 양식별 필드·계산·SAP 매핑 설정 (config/form_types.json) */
+  getConfig: async (): Promise<FormTypesConfig> => {
+    const response = await client.get('/api/form-types/config')
+    return response.data
+  },
 }
+
+// ── form_types.json 타입 정의 ──
+export interface FormTypeFieldsConfig {
+  condition1: string
+  condition2: string
+  amount1: string
+  amount2: string
+  final_amount: string
+}
+
+export interface NetCalculationConfig {
+  type: 'default' | 'dual_condition_sum'
+  formula?: string
+  note?: string
+}
+
+export interface FormTypeConfig {
+  label: string
+  fields: FormTypeFieldsConfig
+  net_calculation: NetCalculationConfig
+  decimal_conversion: { field: string; formula: string; guard_keys: string[] } | null
+  row_merging: { enabled: boolean; merge_field: string; skip_token: string } | null
+  sap_quantity: { type: string; field?: string; rules?: Array<Record<string, string>> } | null
+  sap_extra_columns: Record<string, string>
+  use_customer_lookup?: boolean
+  inference_keys: string[]
+  inference_priority: number
+  is_default_fallback?: boolean
+}
+
+export type FormTypesConfig = Record<string, FormTypeConfig>
 
 /** 사용자 UI 설정 (검토 그리드 컬럼 순서 등) — 세션 헤더로 본인 행만 조회/저장 */
 export const userSettingsApi = {

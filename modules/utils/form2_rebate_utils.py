@@ -4,11 +4,47 @@
 - 정책: 저장은 null 유지, 계산 시 null/빈값은 0으로 간주
 - 대상: 01/02/03/04/05 (유형별 키 매핑으로 처리)
 - 양식 02는 기존 병합/분리 로직 유지
+- 양식별 필드 매핑은 config/form_types.json에서 로드
 """
 
+import json
 import unicodedata
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# ── config/form_types.json 로드 ──────────────────────────────
+_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "form_types.json"
+_form_types_config: Dict[str, Any] = {}
+
+
+def _load_form_types_config() -> Dict[str, Any]:
+    """config/form_types.json을 읽어 캐싱. 서버 기동 시 1회만 로드."""
+    global _form_types_config
+    if _form_types_config:
+        return _form_types_config
+    with open(_CONFIG_PATH, encoding="utf-8") as f:
+        _form_types_config = json.load(f)
+    return _form_types_config
+
+
+def get_form_types_config() -> Dict[str, Any]:
+    """외부에서 form_types config 전체를 참조할 때 사용."""
+    return _load_form_types_config()
+
+
+def _build_form_dual_key_map() -> Dict[str, Dict[str, str]]:
+    """config/form_types.json의 fields 섹션으로 FORM_DUAL_KEY_MAP 동적 생성."""
+    cfg = _load_form_types_config()
+    result: Dict[str, Dict[str, str]] = {}
+    for form_code, form_cfg in cfg.items():
+        norm = str(form_code).lstrip("0") or form_code
+        result[norm] = dict(form_cfg["fields"])
+    return result
+
+
+# 기존 코드 호환용 상수 (JSON에서 동적 로드)
+FORM_DUAL_KEY_MAP = _build_form_dual_key_map()
 
 AMOUNT_KEY = "金額"
 AMOUNT2_KEY = "金額2"
@@ -18,45 +54,6 @@ CONDITION2_KEY = "条件2"
 CALC_CONDITION_KEY = "計算条件（適用人数）"
 QUANTITY_CONDITION_TOKEN = "数量条件"
 TOTAL_QTY_KEY = "取引数量計"
-
-
-FORM_DUAL_KEY_MAP = {
-    "1": {
-        "condition1": "条件",
-        "condition2": "条件2",
-        "amount1": "金額",
-        "amount2": "金額2",
-        "final_amount": "最終金額",
-    },
-    "2": {
-        "condition1": "条件",
-        "condition2": "条件2",
-        "amount1": "金額",
-        "amount2": "金額2",
-        "final_amount": "最終金額",
-    },
-    "3": {
-        "condition1": "条件",
-        "condition2": "条件2",
-        "amount1": "請求金額",
-        "amount2": "請求金額2",
-        "final_amount": "最終請求金額",
-    },
-    "4": {
-        "condition1": "未収条件",
-        "condition2": "未収条件2",
-        "amount1": "金額",
-        "amount2": "金額2",
-        "final_amount": "最終金額",
-    },
-    "5": {
-        "condition1": "個別条件",
-        "condition2": "個別条件2",
-        "amount1": "請求額",
-        "amount2": "請求額2",
-        "final_amount": "最終請求額",
-    },
-}
 
 
 def _dual_keys_display_order(form_type_norm: str) -> List[str]:
@@ -245,35 +242,41 @@ def _merge_form2_rows_by_condition(items: List[Dict[str, Any]]) -> List[Dict[str
 
 def infer_form_type_from_item(item: Dict[str, Any]) -> Optional[str]:
     """
-    (백필·분석용) item 키로 양식 1~5 추정. API 조회 응답의 듀얼 키는 documents.form_type 확정 후
-    apply_form2_final_amount_row 만으로 주입한다(행에서 폼 타입을 추정하지 않음).
+    (백필·분석용) item 키로 양식 1~5 추정. config/form_types.json의
+    inference_keys / inference_alt_keys / inference_priority 기반으로 동적 추론.
+
+    priority 값이 낮을수록 우선 매칭. is_default_fallback=true인 양식은 최후 폴백.
     """
     if not isinstance(item, dict):
         return None
-    keys = item.keys()
-    # 4번: 未収条件系 (CVS)
-    if "未収条件" in keys or _norm_text(item.get("未収条件")):
-        return "4"
-    # 5번: 個別条件·景品·請求合計
-    if (
-        "個別条件" in keys
-        or "景品数_ケース" in keys
-        or "請求合計額" in keys
-        or "売上数_ケース" in keys
-        or _norm_text(item.get("個別条件"))
-    ):
-        return "5"
-    # 3번: 請求金額 (ベルク等)
-    if "請求金額" in keys or _norm_text(item.get("請求金額")):
-        return "3"
-    # 2번: 計算条件 or JAN+取引数量計
-    if _norm_text(item.get("計算条件（適用人数）")):
-        return "2"
-    if "JANコード" in keys and ("取引数量計" in keys or _norm_text(item.get("取引数量計"))):
-        return "2"
-    # 1번: イオン等 条件+金額 (form01/02 공통 키명이 동일한 경우 기본)
-    if "条件" in keys or "金額" in keys or _norm_text(item.get("条件")) or _norm_text(item.get("金額")):
-        return "1"
+    keys = set(item.keys())
+    cfg = _load_form_types_config()
+
+    # priority 오름차순 정렬 (낮을수록 우선)
+    sorted_forms = sorted(cfg.items(), key=lambda x: x[1].get("inference_priority", 99))
+
+    default_fallback = None
+    for form_code, form_cfg in sorted_forms:
+        if form_cfg.get("is_default_fallback"):
+            default_fallback = str(form_code).lstrip("0")
+            continue
+
+        inference_keys = form_cfg.get("inference_keys", [])
+        # 메인 키 중 하나라도 item에 존재하거나 값이 있으면 매칭
+        if any(k in keys or _norm_text(item.get(k)) for k in inference_keys):
+            return str(form_code).lstrip("0")
+
+        # alt_keys: 모든 키가 동시에 존재해야 매칭
+        alt_keys = form_cfg.get("inference_alt_keys", [])
+        if alt_keys and all(k in keys or _norm_text(item.get(k)) for k in alt_keys):
+            return str(form_code).lstrip("0")
+
+    # 폴백: default 양식 (01)
+    if default_fallback:
+        fallback_cfg = cfg.get(f"0{default_fallback}", cfg.get(default_fallback, {}))
+        fallback_keys = fallback_cfg.get("inference_keys", [])
+        if any(k in keys or _norm_text(item.get(k)) for k in fallback_keys):
+            return default_fallback
     return None
 
 

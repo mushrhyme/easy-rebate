@@ -4,10 +4,13 @@
 - 적용 시점: answer-json 저장 시, create-items-from-answer, save_document_data, sync_img_pages
 - 규칙: 1000 → "10.00", 370 → "3.70" (값/100, 소수 둘째자리)
 - item_dict in-place 수정
+- decimal_conversion 설정은 config/form_types.json에서 로드
 """
 
 import re
 from typing import Any, Dict, Optional, Tuple
+
+from modules.utils.form2_rebate_utils import get_form_types_config
 
 
 _DEC_SEPARATORS = r"[.\uFF0E\u00B7]"  # . / ．(전각) / ·(중간점)
@@ -30,16 +33,18 @@ def _normalize_form_type(form_type: Optional[str]) -> str:
 def _looks_like_form03_04_item(item_dict: Dict[str, Any], normalized_form_type: str) -> bool:
     """
     item_dict 스키마 기반 안전 가드.
-    - form 03 예시 키: 条件％, ケース, バラ
-    - form 04 예시 키: 対象数量又は金額, 未収条件2, 入出荷支店
+    config/form_types.json의 decimal_conversion.guard_keys로 판별.
     """
-    if "未収条件" not in item_dict:  # {'未収条件': '370'} 형태가 없으면 변환 대상 아님
+    cfg = get_form_types_config()
+    form_cfg = cfg.get(normalized_form_type, {})
+    dec_cfg = form_cfg.get("decimal_conversion")
+    if not dec_cfg:
         return False
-    if normalized_form_type == "03":
-        return any(k in item_dict for k in ("条件％", "ケース", "バラ"))
-    if normalized_form_type == "04":
-        return any(k in item_dict for k in ("対象数量又は金額", "未収条件2", "入出荷支店"))
-    return False
+    target_field = dec_cfg.get("field", "未収条件")
+    if target_field not in item_dict:
+        return False
+    guard_keys = dec_cfg.get("guard_keys", [])
+    return any(k in item_dict for k in guard_keys)
 
 
 def _parse_num_token_and_has_decimal(v: Any) -> Tuple[Optional[float], bool]:
@@ -89,17 +94,20 @@ def apply_form04_mishu_decimal(
     form_type: Optional[str],
 ) -> None:
     """
-    3·4번 양식일 때 未収条件를 뒤에서 2째 자리 소수점 형식으로 변환 (in-place).
+    decimal_conversion이 설정된 양식일 때 대상 필드를 소수점 형식으로 변환 (in-place).
     예: "1000" → "10.00", "370" → "3.70"
-    - form_type: "03", "3", "04", "4" 또는 int 3, 4
-    - '未収条件' 값의 숫자 토큰에 소수점(., ．, ·)이 있으면 이미 정규화된 값으로 간주하고 /100 변환을 생략
+    - config/form_types.json의 decimal_conversion 설정 기반
+    - 대상 필드 값의 숫자 토큰에 소수점(., ．, ·)이 있으면 이미 정규화된 값으로 간주하고 /100 변환을 생략
     """
     ft = _normalize_form_type(form_type)
-    if ft not in ("03", "04"):
+    cfg = get_form_types_config()
+    form_cfg = cfg.get(ft, {})
+    dec_cfg = form_cfg.get("decimal_conversion")
+    if not dec_cfg:
         return
     if not _looks_like_form03_04_item(item_dict, ft):
         return
-    key = "未収条件"
+    key = dec_cfg.get("field", "未収条件")
     v = item_dict.get(key)
     num, has_decimal = _parse_num_token_and_has_decimal(v)
     if num is None:

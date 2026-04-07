@@ -1,5 +1,6 @@
 """
 양식지 타입(form_type) 목록 API - DB에서 동적 조회 / 신규 양식 추가
+config/form_types.json 기반 양식 설정 제공
 """
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 
 from database.registry import get_db
 from modules.utils.config import get_project_root
+from modules.utils.form2_rebate_utils import get_form_types_config
 
 router = APIRouter()
 
@@ -81,6 +83,12 @@ async def get_form_types(db=Depends(get_db)):
     """양식지 타입 목록 조회 (DB 기반)."""
     form_types = await db.run_sync(_get_form_types_sync, db)
     return {"form_types": form_types}
+
+
+@router.get("/config", response_model=dict)
+async def get_form_types_config_endpoint():
+    """양식별 필드·계산·SAP 매핑 설정 반환 (config/form_types.json)."""
+    return get_form_types_config()
 
 
 # form 01 기준 기본 매핑 (신규 양식 생성 시 복사). 거래처는 코드에서 항상 得意先로 통일하므로 customer 행 없음

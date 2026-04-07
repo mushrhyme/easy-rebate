@@ -776,7 +776,8 @@ async def download_sap_excel(
         excel_file = create_sap_excel(items, template_file, data_year=year, data_month=month)
 
         from datetime import datetime
-        filename = f"SAP_Upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        ym = f"{year}{month:02d}_" if year and month else ""
+        filename = f"SAP_Upload_{ym}{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         if current_user:
             activity_log(current_user.get("username"), "SAP 엑셀 다운로드")
         return StreamingResponse(
