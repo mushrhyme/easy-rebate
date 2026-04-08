@@ -1228,6 +1228,8 @@ export interface LoginResponse {
   display_name_ja?: string
   session_id?: string
   must_change_password?: boolean
+  /** 로그인 직후 관리자 화면 탭 표시용 (validate-session의 user.is_admin과 동일) */
+  is_admin?: boolean
 }
 
 /** 사용자 생성 (관리자용). users 테이블 키값 전체 입력 가능 */

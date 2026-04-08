@@ -128,6 +128,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           display_name: data.display_name!,
           display_name_ja: data.display_name_ja,
           is_active: true,
+          is_admin: data.is_admin === true || data.username === 'admin',
           login_count: 0,
           must_change_password: mustChange,
         })

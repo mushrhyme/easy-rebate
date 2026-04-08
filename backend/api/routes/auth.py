@@ -31,6 +31,8 @@ class LoginResponse(BaseModel):
     display_name_ja: Optional[str] = None
     session_id: Optional[str] = None
     must_change_password: bool = False
+    # 프론트에서 관리자 탭(管理者画面) 표시용 — validate-session과 동일하게 전달
+    is_admin: bool = False
 
 
 class UserInfo(BaseModel):
@@ -144,6 +146,7 @@ async def login(
             display_name_ja=user.get('display_name_ja'),
             session_id=session_id,
             must_change_password=force_change,
+            is_admin=_is_admin(user),
         )
 
     except HTTPException:
