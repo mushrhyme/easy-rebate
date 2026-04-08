@@ -4,6 +4,8 @@
 
 실행: python -m database.upload_rag_tables
       python -m database.upload_rag_tables --from-dir ./my_export
+테이블 없음 오류 시: psql ... -f database/migrate_rag_pgvector.sql
+  (또는 이 스크립트가 시작 시 rag_page_embeddings를 자동 생성)
 """
 
 import argparse
@@ -16,6 +18,61 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from database.registry import get_db
+
+
+def ensure_rag_pgvector_schema(db) -> None:
+    """
+    예전 init_database로만 만든 DB에는 rag_page_embeddings / vector 확장이 없을 수 있음.
+    Git 최신 스키마와 동일하게 idempotent 생성 (upload 전 1회 호출).
+    """
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception as e:
+            err = str(e).lower()
+            if "vector" in err or "extension" in err:
+                raise RuntimeError(
+                    "PostgreSQL에 pgvector 확장을 로드할 수 없습니다. "
+                    "서버에 pgvector를 설치한 뒤 다시 시도하세요 "
+                    "(예: macOS+brew: brew install pgvector, PostgreSQL 버전과 맞춤). "
+                    f"원본 오류: {e}"
+                ) from e
+            raise
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rag_page_embeddings (
+                id SERIAL PRIMARY KEY,
+                pdf_filename VARCHAR(500) NOT NULL,
+                page_number INTEGER NOT NULL,
+                ocr_text TEXT NOT NULL,
+                embedding vector(384) NOT NULL,
+                answer_json JSON NOT NULL,
+                form_type VARCHAR(10),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(pdf_filename, page_number)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_form_type "
+            "ON rag_page_embeddings(form_type)"
+        )
+        cursor.execute(
+            """
+            SELECT 1 FROM pg_indexes
+            WHERE tablename = 'rag_page_embeddings'
+              AND indexname = 'idx_rag_page_embeddings_hnsw'
+            """
+        )
+        if not cursor.fetchone():
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rag_page_embeddings_hnsw
+                ON rag_page_embeddings USING hnsw (embedding vector_cosine_ops)
+                """
+            )
+        conn.commit()
 
 
 def _list_to_vector_str(arr: list) -> str:
@@ -124,6 +181,7 @@ def main():
         sys.exit(1)
 
     db = get_db()
+    ensure_rag_pgvector_schema(db)
 
     # 1) rag_page_embeddings
     print("Loading rag_page_embeddings.json...")
